@@ -25,7 +25,7 @@ BADGING=$($AAPT dump badging "$RELEASE_SOURCE")
 printf '%s\n' "$BADGING" | grep -q "package: name='io.github.zhyuzh3d.hermit'"
 printf '%s\n' "$BADGING" | grep -q "versionName='$VERSION'"
 VERSION_CODE=$(printf '%s\n' "$BADGING" | sed -n "s/^package:.*versionCode='\([^']*\)'.*/\1/p" | head -n 1)
-CERT_SHA256=$($APKSIGNER verify --print-certs "$RELEASE_SOURCE" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n 1 | tr '[:lower:]' '[:upper:]')
+CERT_SHA256=$($APKSIGNER verify --print-certs "$RELEASE_SOURCE" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -n 1 | tr '[:lower:]' '[:upper:]')
 test -n "$VERSION_CODE"
 test -n "$CERT_SHA256"
 
