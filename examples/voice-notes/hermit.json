@@ -1,0 +1,7 @@
+{
+  "schema": 1,
+  "name": "Hermit 语音笔记",
+  "entry": "index.html",
+  "routing": "hash",
+  "version": { "code": 1, "name": "1.0.0" }
+}

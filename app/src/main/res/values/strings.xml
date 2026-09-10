@@ -1,0 +1,12 @@
+<resources>
+    <string name="app_name">Hermit</string>
+    <string name="incompatible_title">当前 WebView 无法安全运行页面应用</string>
+    <string name="incompatible_message">请更新 Android System WebView 后重试。应用库数据仍保留在设备上。</string>
+    <string name="retry">重试</string>
+    <string name="open_settings">系统设置</string>
+    <string name="native_recovery_title">原生恢复工具</string>
+    <string name="native_recovery_message">即使当前 WebView 不兼容，仍可导出 Hermit 管理的代码、记录与附件；不会导出 Cookie、WebStorage 或授权。</string>
+    <string name="export_backup_for">导出备份 · %1$s</string>
+    <string name="restore_new_instance">从备份恢复为新实例</string>
+    <string name="open_webview_settings">打开 WebView 实现设置</string>
+</resources>

@@ -1,0 +1,15 @@
+.gradle/
+.idea/
+local.properties
+**/build/
+node_modules/
+dist/
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+*.token
+artifacts/*
+!artifacts/.gitkeep
+docs/validation/generated/

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hermit.invalid/schema/backup-v1.json",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "createdAt", "app", "recordCount", "fileCount", "codeFileCount", "entries", "excludes"],
+  "properties": {
+    "schema": { "const": 1 },
+    "createdAt": { "type": "integer", "minimum": 0 },
+    "app": {
+      "type": "object",
+      "required": ["name", "mode", "startUrl", "sourceAdapter", "sourceSpec"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "mode": { "enum": ["online", "local"] },
+        "startUrl": { "type": "string" },
+        "sourceAdapter": { "type": "string" },
+        "sourceSpec": { "type": "object" }
+      }
+    },
+    "recordCount": { "type": "integer", "minimum": 0 },
+    "fileCount": { "type": "integer", "minimum": 0 },
+    "codeFileCount": { "type": "integer", "minimum": 0 },
+    "entries": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object", "required": ["sha256", "size"],
+        "properties": { "sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }, "size": { "type": "integer", "minimum": 0 } }
+      }
+    },
+    "excludes": { "type": "array", "items": { "type": "string" } }
+  }
+}

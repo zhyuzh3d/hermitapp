@@ -1,0 +1,11 @@
+{
+  "name": "hermitapp-web",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "check": "node --check app/src/main/assets/bridge/hermit-v1.js && node --check app/src/main/assets/store/store.js && node tools/validate-contracts.mjs",
+    "test": "node --test tools/contracts.test.mjs",
+    "build": "node tools/build-web.mjs"
+  },
+  "engines": { "node": ">=22" }
+}

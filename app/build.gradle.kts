@@ -1,0 +1,97 @@
+plugins {
+    id("com.android.application")
+}
+
+android {
+    namespace = "io.github.zhyuzh3d.hermit"
+    compileSdk = 37
+
+    defaultConfig {
+        applicationId = "io.github.zhyuzh3d.hermit"
+        minSdk = 31
+        targetSdk = 37
+        versionCode = providers.gradleProperty("hermitVersionCode").orNull?.toInt() ?: 2
+        versionName = providers.gradleProperty("hermitVersionName").orNull ?: "1.0.0"
+
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        vectorDrawables.useSupportLibrary = true
+    }
+
+    signingConfigs {
+        val keyStorePath = providers.environmentVariable("HERMIT_KEYSTORE_PATH").orNull
+        val storePasswordValue = providers.environmentVariable("HERMIT_STORE_PASSWORD").orNull
+        val keyPasswordValue = providers.environmentVariable("HERMIT_KEY_PASSWORD").orNull
+        if (keyStorePath != null && storePasswordValue != null && keyPasswordValue != null) {
+            create("hermitRelease") {
+                storeFile = file(keyStorePath)
+                storePassword = storePasswordValue
+                keyAlias = providers.environmentVariable("HERMIT_KEY_ALIAS").orNull ?: "hermit-v1"
+                keyPassword = keyPasswordValue
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
+                enableV4Signing = true
+            }
+        }
+    }
+
+    buildTypes {
+        debug {
+            applicationIdSuffix = ".debug"
+            versionNameSuffix = "-debug"
+            isMinifyEnabled = false
+            buildConfigField("boolean", "WEBVIEW_DEBUGGING", "true")
+        }
+        release {
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
+            buildConfigField("boolean", "WEBVIEW_DEBUGGING", "false")
+            signingConfig = signingConfigs.findByName("hermitRelease")
+        }
+    }
+
+    buildFeatures {
+        buildConfig = true
+    }
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    packaging {
+        resources.excludes += setOf(
+            "META-INF/AL2.0",
+            "META-INF/LGPL2.1",
+            "META-INF/LICENSE.md",
+            "META-INF/NOTICE.md"
+        )
+    }
+}
+
+dependencyLocking {
+    lockAllConfigurations()
+}
+
+dependencies {
+    implementation("androidx.activity:activity-ktx:1.12.2")
+    implementation("androidx.lifecycle:lifecycle-process:2.9.4")
+    implementation("androidx.documentfile:documentfile:1.1.0")
+    implementation("androidx.webkit:webkit:1.17.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
+    implementation("com.squareup.okhttp3:okhttp:5.3.0")
+    implementation("org.nanohttpd:nanohttpd:2.3.1")
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")
+    testImplementation("com.squareup.okhttp3:mockwebserver:5.3.0")
+
+    androidTestImplementation("androidx.test:runner:1.7.0")
+    androidTestImplementation("androidx.test:core-ktx:1.7.0")
+    androidTestImplementation("androidx.test.ext:junit:1.3.0")
+    androidTestImplementation("androidx.test.espresso:espresso-core:3.7.0")
+}

@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://hermit.invalid/schema/hermit-v1.json",
+  "title": "Hermit local application manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema"],
+  "properties": {
+    "schema": { "const": 1 },
+    "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "entry": { "$ref": "#/$defs/path" },
+    "routing": { "enum": ["hash", "history"] },
+    "version": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "code": { "type": "integer", "minimum": 0 },
+        "name": { "type": "string", "maxLength": 80 }
+      }
+    }
+  },
+  "$defs": {
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!__hermit/)[^\\\\\\u0000]+$"
+    }
+  }
+}

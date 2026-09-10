@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>Hermit 应用库</title>
+  <link rel="stylesheet" href="store.css">
+</head>
+<body>
+  <header>
+    <div>
+      <p class="eyebrow">PERSONAL WEB APP RUNTIME</p>
+      <h1>Hermit</h1>
+      <p class="subtitle">把你的页面，变成可长期使用的手机工具。</p>
+    </div>
+    <div class="actions"><button id="licensesButton">许可</button><button id="diagnosticsButton">诊断</button><button id="addButton" class="primary">添加应用</button></div>
+  </header>
+  <main>
+    <section id="notice" class="notice hidden" role="status"></section>
+    <section id="addPanel" class="panel hidden" aria-labelledby="addTitle">
+      <div class="panel-head">
+        <div><p class="eyebrow">NEW WEB APP</p><h2 id="addTitle">添加页面应用</h2></div>
+        <button id="closeAdd" class="icon" aria-label="关闭">×</button>
+      </div>
+      <label>在线地址<input id="url" type="url" inputmode="url" placeholder="https://example.com 或 http://192.168.1.20:8080"></label>
+      <label>名称（可选）<input id="name" maxlength="80" placeholder="页面标题"></label>
+      <div class="actions">
+        <button id="installOnline" class="primary">添加在线应用</button>
+        <button id="importZip">导入 ZIP 副本</button>
+        <button id="importDirectory">导入目录快照</button>
+        <button id="restoreBackup">恢复备份</button>
+      </div>
+      <p class="hint">本地副本会完整复制到 Hermit；原文件或目录删除后仍可使用。根目录需包含 index.html。恢复不会继承登录态和授权。</p>
+      <details>
+        <summary>远程包与 GitHub</summary>
+        <label>HTTPS ZIP 地址<input id="packageUrl" type="url" inputmode="url" placeholder="https://example.com/app.zip"></label>
+        <button id="installPackage">安装远程包</button>
+        <div class="split">
+          <label>GitHub 所有者<input id="githubOwner" autocomplete="off"></label>
+          <label>仓库<input id="githubRepo" autocomplete="off"></label>
+          <label>分支/标签/commit<input id="githubRef" value="main" autocomplete="off"></label>
+          <label>子目录（可选）<input id="githubPath" autocomplete="off"></label>
+        </div>
+        <button id="installGithub">从 GitHub 安装</button>
+      </details>
+    </section>
+    <section>
+      <div class="section-title"><h2>应用</h2><span id="count"></span></div>
+      <label>搜索应用<input id="searchApps" type="search" placeholder="名称、地址或来源"></label>
+      <div id="empty" class="empty hidden">
+        <div class="empty-icon">H</div>
+        <h3>还没有页面应用</h3>
+        <p>添加在线地址，或导入一个已经构建好的静态 ZIP。</p>
+      </div>
+      <p id="noResults" class="empty hidden">没有匹配的页面应用。</p>
+      <div id="apps" class="grid"></div>
+    </section>
+  </main>
+  <template id="appTemplate">
+    <article class="app-card">
+      <button class="launch">
+        <span class="app-icon">H</span>
+        <span class="app-copy"><strong class="app-name"></strong><small class="app-source"></small></span>
+        <span class="arrow">→</span>
+      </button>
+      <div class="card-actions">
+        <button class="pin">桌面图标</button>
+        <button class="manage">管理</button>
+        <button class="update">更新</button>
+        <button class="develop">开发连接</button>
+        <button class="develop-lan">局域网部署</button>
+        <button class="backup">备份</button>
+        <button class="remove danger">删除</button>
+      </div>
+    </article>
+  </template>
+  <section id="managePanel" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="manageTitle">
+    <div class="modal-card">
+      <div class="panel-head"><div><p class="eyebrow">APP SETTINGS</p><h2 id="manageTitle">管理应用</h2></div><button id="closeManage" class="icon" aria-label="关闭">×</button></div>
+      <label>名称<input id="editName" maxlength="80"></label>
+      <label id="editUrlLabel">在线地址<input id="editUrl" type="url" inputmode="url"></label>
+      <div class="actions"><button id="saveApp" class="primary">保存</button><button id="restoreAppData">从备份替换数据</button></div>
+      <p class="hint">替换数据会保留当前地址/代码和应用身份，但原记录与附件会被替换，并重置该页面应用的能力授权。</p>
+      <div class="detail-block"><h3>代码版本</h3><div id="releases" class="stack muted">在线应用没有本地版本。</div></div>
+      <div class="detail-block"><h3>页面授权</h3><div id="grants" class="stack muted">尚未持久授权。</div></div>
+    </div>
+  </section>
+  <section id="deployPanel" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="deployTitle">
+    <div class="modal-card">
+      <div class="panel-head"><div><p class="eyebrow">DEVELOPER DEPLOY</p><h2 id="deployTitle">短期开发连接</h2></div><button id="closeDeploy" class="icon" aria-label="关闭">×</button></div>
+      <p>连接仅绑定当前本地应用，Hermit 进入后台或闲置 15 分钟后自动关闭。令牌不要提交到代码仓库。</p>
+      <pre id="deployConfig"></pre>
+      <div class="actions"><button id="copyDeploy">复制配置</button><button id="stopDeploy" class="danger">停止连接</button></div>
+    </div>
+  </section>
+  <section id="diagnosticsPanel" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="diagnosticsTitle">
+    <div class="modal-card">
+      <div class="panel-head"><div><p class="eyebrow">RUNTIME DIAGNOSTICS</p><h2 id="diagnosticsTitle">运行诊断</h2></div><button id="closeDiagnostics" class="icon" aria-label="关闭">×</button></div>
+      <p class="hint">报告不包含设备序列号、页面数据、开发令牌或用户文件内容。</p>
+      <pre id="diagnosticsOutput"></pre>
+      <div class="actions"><button id="copyDiagnostics">复制报告</button></div>
+    </div>
+  </section>
+  <section id="licensesPanel" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="licensesTitle">
+    <div class="modal-card">
+      <div class="panel-head"><div><p class="eyebrow">OPEN SOURCE NOTICES</p><h2 id="licensesTitle">第三方软件许可</h2></div><button id="closeLicenses" class="icon" aria-label="关闭">×</button></div>
+      <pre id="licensesOutput"></pre>
+    </div>
+  </section>
+  <script src="store.js"></script>
+</body>
+</html>

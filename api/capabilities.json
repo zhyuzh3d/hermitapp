@@ -1,0 +1,29 @@
+{
+  "apiMajor": 1,
+  "apiMinor": 0,
+  "roles": ["store", "web_app"],
+  "public": {
+    "runtime": ["info", "capabilities"],
+    "app": ["info", "reload", "ready", "checkUpdate"],
+    "permissions": ["status", "request"],
+    "data": ["get", "put", "delete", "scan", "batch"],
+    "files": ["import", "writeText", "readText", "list", "export", "delete", "share"],
+    "tts": ["voices", "speak", "stop", "export"],
+    "speech": ["availability", "start", "stop", "cancel"],
+    "location": ["getCurrent", "watch", "clearWatch"],
+    "camera": ["capturePhoto"],
+    "share": ["text", "file"],
+    "clipboard": ["write", "read"],
+    "haptics": ["vibrate", "impact"],
+    "network": ["status", "request"]
+  },
+  "storeOnly": {
+    "host.apps": ["list", "installOnline", "importZip", "importDirectory", "installPackageUrl", "installGitHub", "updateFromSource", "update", "releases", "rollback", "launch", "pin", "remove"],
+    "host.permissions": ["list", "revoke"],
+    "host.backup": ["export", "restore", "restoreData"],
+    "host.deploy": ["start", "stop", "status"],
+    "host.operations": ["get"],
+    "host.diagnostics": ["info"],
+    "host.licenses": ["info"]
+  }
+}
