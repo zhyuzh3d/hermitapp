@@ -5,6 +5,8 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 VERSION=${1:-1.0.0}
 OUT=$ROOT/artifacts/v$VERSION
 SDK_DIR=${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}
+export JAVA_HOME=${JAVA_HOME:-/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home}
+export PATH="$JAVA_HOME/bin:$PATH"
 AAPT=$SDK_DIR/build-tools/37.0.0/aapt
 APKSIGNER=$SDK_DIR/build-tools/37.0.0/apksigner
 RELEASE_SOURCE=$ROOT/app/build/outputs/apk/release/app-release.apk
