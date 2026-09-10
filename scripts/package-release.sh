@@ -67,7 +67,7 @@ const manifest = {
 };
 fs.writeFileSync(path.join(e.OUT, 'release-manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
 
-const lock = fs.readFileSync(path.join(e.ROOT, 'gradle.lockfile'), 'utf8');
+const lock = fs.readFileSync(path.join(e.ROOT, 'app', 'gradle.lockfile'), 'utf8');
 const components = [];
 for (const line of lock.split(/\r?\n/)) {
   if (!line.includes('releaseRuntimeClasspath') || line.startsWith('#') || line.startsWith('empty=')) continue;
