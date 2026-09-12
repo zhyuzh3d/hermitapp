@@ -3,6 +3,7 @@ package io.github.zhyuzh3d.hermit.capability
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.os.Build
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
@@ -18,7 +19,7 @@ class SpeechController(private val context: Context) {
 
     fun availability(): JSONObject = JSONObject()
         .put("available", SpeechRecognizer.isRecognitionAvailable(context))
-        .put("onDeviceAvailable", SpeechRecognizer.isOnDeviceRecognitionAvailable(context))
+        .put("onDeviceAvailable", onDeviceAvailable())
 
     fun start(params: JSONObject, emit: (String, JSONObject) -> Unit): JSONObject {
         if (!SpeechRecognizer.isRecognitionAvailable(context)) {
@@ -27,12 +28,15 @@ class SpeechController(private val context: Context) {
         if (recognizer != null) throw HermitException(ErrorCodes.CONFLICT, "已有语音识别任务")
         val id = UUID.randomUUID().toString()
         val requestedOnDevice = params.optBoolean("onDevice", false)
-        val useOnDevice = requestedOnDevice && SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
+        val useOnDevice = requestedOnDevice && onDeviceAvailable()
         if (requestedOnDevice && !useOnDevice) {
             throw HermitException(ErrorCodes.UNSUPPORTED, "设备没有可用的离线语音识别服务")
         }
-        val created = if (useOnDevice) SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
-            else SpeechRecognizer.createSpeechRecognizer(context)
+        val created = if (useOnDevice) {
+            SpeechRecognizer.createOnDeviceSpeechRecognizer(context)
+        } else {
+            SpeechRecognizer.createSpeechRecognizer(context)
+        }
         recognizer = created
         subscriptionId = id
         created.setRecognitionListener(object : RecognitionListener {
@@ -100,6 +104,8 @@ class SpeechController(private val context: Context) {
     }
 
     private fun idMatches(id: String?) = id == null || id == subscriptionId
+    private fun onDeviceAvailable(): Boolean =
+        Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && SpeechRecognizer.isOnDeviceRecognitionAvailable(context)
     private fun errorName(error: Int): String = when (error) {
         SpeechRecognizer.ERROR_AUDIO -> "audio"
         SpeechRecognizer.ERROR_CLIENT -> "client"

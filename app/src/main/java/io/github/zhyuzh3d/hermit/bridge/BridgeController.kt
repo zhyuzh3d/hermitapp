@@ -5,6 +5,7 @@ import android.annotation.SuppressLint
 import android.webkit.WebView
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import io.github.zhyuzh3d.hermit.model.ErrorCodes
 import io.github.zhyuzh3d.hermit.model.HermitException
 import io.github.zhyuzh3d.hermit.runtime.RuntimeSession
@@ -23,7 +24,7 @@ class BridgeController(
     private val session: RuntimeSession,
     private val host: BridgeHost,
     private val injectedSdk: String,
-) {
+) : PageBridge {
     private data class PendingDocument(
         val documentId: String,
         val challenge: String,
@@ -40,7 +41,7 @@ class BridgeController(
     private val activeRequests = HashSet<String>()
     private val random = SecureRandom()
 
-    fun install() {
+    override fun install() {
         WebViewCompat.addWebMessageListener(webView, TRANSPORT_NAME, setOf(session.origin)) { _, message, sourceOrigin, isMainFrame, replyProxy ->
             val text = message.data ?: return@addWebMessageListener
             if (text.toByteArray().size > MAX_MESSAGE_BYTES) return@addWebMessageListener
@@ -54,10 +55,12 @@ class BridgeController(
             }
             handle(text, replyProxy)
         }
-        WebViewCompat.addDocumentStartJavaScript(webView, injectedSdk, setOf(session.origin))
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+            WebViewCompat.addDocumentStartJavaScript(webView, injectedSdk, setOf(session.origin))
+        }
     }
 
-    fun navigationStarted() {
+    override fun navigationStarted() {
         documentScope.cancel()
         documentScope = newDocumentScope()
         activeRequests.clear()
@@ -68,25 +71,25 @@ class BridgeController(
         activeProxy = null
     }
 
-    fun navigationCommitted() {
+    override fun navigationCommitted() {
         committed = true
         activateIfReady()
     }
 
-    fun recoverAfterUncommittedNavigation(): Boolean {
+    override fun recoverAfterUncommittedNavigation(): Boolean {
         committed = true
         activateIfReady()
         return activeProxy == null && pending == null && session.alive
     }
 
-    fun close() {
+    override fun close() {
         documentScope.cancel()
         session.close()
         pending = null
         activeProxy = null
     }
 
-    fun emit(name: String, data: Any?) {
+    override fun emit(name: String, data: Any?) {
         val proxy = activeProxy ?: return
         if (!session.alive) return
         safePost(proxy, JSONObject()

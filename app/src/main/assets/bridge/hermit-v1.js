@@ -111,12 +111,14 @@
     get: (_, name) => (...args) => request(prefix + "." + String(name), args.length === 1 && typeof args[0] === "object" ? args[0] : { args })
   });
   const api = {
+    icons: window.HermitIcons,
     call: request,
     runtime: namespace("runtime"),
     app: namespace("app"),
     permissions: namespace("permissions"),
     data: namespace("data"),
     files: namespace("files"),
+    audio: namespace("audio"),
     tts: namespace("tts"),
     speech: namespace("speech"),
     location: namespace("location"),
@@ -128,10 +130,14 @@
     host: {
       apps: namespace("host.apps"),
       deploy: namespace("host.deploy"),
+      agent: namespace("host.agent"),
+      support: namespace("host.support"),
+      about: namespace("host.about"),
       operations: namespace("host.operations"),
       backup: namespace("host.backup"),
       permissions: namespace("host.permissions"),
       diagnostics: namespace("host.diagnostics"),
+      shell: namespace("host.shell"),
       licenses: namespace("host.licenses")
     },
     on(name, listener) {

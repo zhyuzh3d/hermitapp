@@ -117,6 +117,35 @@ class ActivitySmokeTest {
         }
     }
 
+    @Test fun onlinePageUsesSameOriginOfflineIconsWithoutRequestingThemFromServer() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val app = context.applicationContext as HermitApplication
+        val iconRequests = java.util.concurrent.atomic.AtomicInteger()
+        val server = object : fi.iki.elonen.NanoHTTPD("127.0.0.1", 0) {
+            override fun serve(request: IHTTPSession): Response {
+                if (request.uri.startsWith("/__hermit/")) iconRequests.incrementAndGet()
+                return newFixedLengthResponse("<!doctype html><meta charset=utf-8><title>Online icon fixture</title><i class='fa-solid fa-heart'></i>").apply {
+                    addHeader("Content-Security-Policy", "default-src 'self'; style-src 'self'; font-src 'self'")
+                }
+            }
+        }
+        server.start()
+        val instance = io.github.zhyuzh3d.hermit.model.WebAppInstance.newOnlineLive("Online icon fixture", "http://127.0.0.1:${server.listeningPort}/")
+        app.registry.insertInstance(instance)
+        try {
+            ActivityScenario.launch<MainActivity>(Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_APP_ID, instance.appId)).use { scenario ->
+                assertTrue(waitUntilReady(scenario))
+                val result = evaluateAsync(scenario, "hermit.icons.load().then(()=>document.fonts.load('900 16px \\\"Font Awesome 7 Free\\\"')).then(fonts=>fonts.length>0)")
+                assertEquals("true", result)
+                assertEquals(0, iconRequests.get())
+            }
+        } finally {
+            server.stop()
+            app.registry.deleteInstance(instance.appId)
+            app.registry.finishDelete(instance.appId)
+        }
+    }
+
     private fun waitUntilReady(scenario: ActivityScenario<MainActivity>): Boolean {
         repeat(20) {
             val value = evaluate(scenario, "String(!!(window.hermit&&window.hermit.isReady))")
@@ -124,6 +153,141 @@ class ActivitySmokeTest {
             android.os.SystemClock.sleep(200)
         }
         return false
+    }
+
+    @Test fun storeIconsSearchAndModalBackWorkWithoutFrontendFrameworks() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        ActivityScenario.launch<MainActivity>(Intent(context, MainActivity::class.java)).use { scenario ->
+            assertTrue(waitUntilReady(scenario))
+            val font = evaluateAsync(scenario, "hermit.icons.load().then(()=>document.fonts.load('900 16px \\\"Font Awesome 7 Free\\\"')).then(fonts=>({loaded:fonts.length>0,family:getComputedStyle(document.querySelector('.fa-plus')).fontFamily}))")
+            assertTrue("Font result: $font", font?.contains("\"loaded\":true") == true)
+            assertTrue(font?.contains("Font Awesome 7 Free") == true)
+            assertFalse(evaluate(scenario, "getComputedStyle(document.querySelector('.fa-plus'),'::before').content") in setOf("none", "normal", "\"\""))
+            evaluate(scenario, "document.querySelector('#addButton').click(); 'opened'")
+            assertEquals("true", evaluate(scenario, "String(document.querySelector('#shell').inert && !document.querySelector('#addPanel').classList.contains('hidden'))"))
+            scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+            repeat(10) { if (evaluate(scenario, "String(document.querySelector('#addPanel').classList.contains('hidden'))") != "true") android.os.SystemClock.sleep(100) }
+            assertEquals("false", evaluate(scenario, "String(document.querySelector('#shell').inert)"))
+            evaluate(scenario, "document.querySelector('[data-view=icons]').click(); 'icons'")
+            repeat(20) { if (evaluate(scenario, "String(!!window.hermitIconCatalog)") != "true") android.os.SystemClock.sleep(100) }
+            assertEquals("2883", evaluate(scenario, "String(window.hermitIconCatalog.icons.length)"))
+            evaluate(scenario, "const q=document.querySelector('#searchIcons'); q.value='相机'; q.dispatchEvent(new Event('input')); 'searched'")
+            assertEquals("true", evaluate(scenario, "String(document.querySelectorAll('.catalog-icon').length>0 && [...document.querySelectorAll('.catalog-icon')].some(x=>x.textContent.includes('camera')))"))
+            evaluate(scenario, "document.querySelector('[data-view=settings]').click();document.querySelector('[data-theme-choice=dark]').click(); 'dark'")
+            assertEquals("dark", evaluate(scenario, "document.documentElement.dataset.theme"))
+            evaluate(scenario, "document.querySelector('[data-theme-choice=system]').click(); 'reset'")
+        }
+    }
+
+    @Test fun nativeHtmlLocalPageGetsAllFontStylesWithoutLinkOrBuild() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val app = context.applicationContext as HermitApplication
+        val installed = app.installer.installZip(ByteArrayInputStream(appZip("Icons", 1)), "Icon fixture")
+        try {
+            assertEquals("Icon fixture", app.registry.getInstance(installed.appId)?.name)
+            ActivityScenario.launch<MainActivity>(Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_APP_ID, installed.appId)).use { scenario ->
+                assertTrue(waitUntilReady(scenario))
+                val result = evaluateAsync(scenario, "hermit.icons.load().then(()=>Promise.all([document.fonts.load('900 16px \\\"Font Awesome 7 Free\\\"'),document.fonts.load('400 16px \\\"Font Awesome 7 Free\\\"'),document.fonts.load('400 16px \\\"Font Awesome 7 Brands\\\"')])).then(xs=>xs.map(x=>x.length>0))")
+                assertEquals("[true,true,true]", result)
+                val styles = evaluate(scenario, "const icon=hermit.icons.create('heart',{style:'regular',label:'喜欢'});document.body.append(icon);JSON.stringify({family:getComputedStyle(icon).fontFamily,label:icon.getAttribute('aria-label')})")
+                assertTrue(styles?.contains("Font Awesome 7 Free") == true)
+                assertTrue(styles?.contains("喜欢") == true)
+            }
+            // Cancel a deletion in the Store and prove the instance/data identity survives.
+            ActivityScenario.launch<MainActivity>(Intent(context, MainActivity::class.java)).use { scenario ->
+                assertTrue(waitUntilReady(scenario))
+                repeat(20) { if (evaluate(scenario, "String(document.querySelectorAll('.manage').length)") == "0") android.os.SystemClock.sleep(100) }
+                evaluate(scenario, "[...document.querySelectorAll('.app-card')].find(x=>x.textContent.includes('Icon fixture')).querySelector('.manage').click(); 'manage'")
+                evaluate(scenario, "document.querySelector('#removeApp').click(); 'confirm'")
+                assertEquals("false", evaluate(scenario, "String(document.querySelector('#confirmPanel').classList.contains('hidden'))"))
+                evaluate(scenario, "document.querySelector('#cancelConfirm').click(); 'cancelled'")
+                assertTrue(app.registry.getInstance(installed.appId) != null)
+                assertEquals("true", evaluate(scenario, "String(document.querySelector('#confirmPanel').classList.contains('hidden'))"))
+            }
+        } finally {
+            app.registry.deleteInstance(installed.appId)
+            app.installer.deleteAppFiles(installed.appId)
+            app.registry.finishDelete(installed.appId)
+        }
+    }
+
+    @Test fun developmentTabShowsAndRotatesOnlyTheCurrentPassword() {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val app = context.applicationContext as HermitApplication
+        ActivityScenario.launch<MainActivity>(Intent(context, MainActivity::class.java)).use { scenario ->
+            assertTrue(waitUntilReady(scenario))
+            evaluate(scenario, "document.querySelector('[data-view=development]').click();'opened'")
+            for (i in 0 until 20) {
+                if (evaluate(scenario, "String(!document.querySelector('#developmentView').classList.contains('hidden'))") == "true") break
+                android.os.SystemClock.sleep(100)
+            }
+            assertEquals("true", evaluate(scenario, "String(/^[0-9]{6}$/.test(document.querySelector('#agentPassword').textContent))"))
+            val previous = app.agentServer.passwordForUi()
+            evaluate(scenario, "document.querySelector('#resetAgentPassword').click();'confirm'")
+            assertEquals("false", evaluate(scenario, "String(document.querySelector('#confirmPanel').classList.contains('hidden'))"))
+            evaluate(scenario, "document.querySelector('#cancelConfirm').click();'cancel'")
+            assertTrue(previous == app.agentServer.passwordForUi())
+            evaluate(scenario, "document.querySelector('#resetAgentPassword').click();document.querySelector('#acceptConfirm').click();'rotate'")
+            for (i in 0 until 20) { if (previous != app.agentServer.passwordForUi()) break; android.os.SystemClock.sleep(100) }
+            assertTrue(previous != app.agentServer.passwordForUi())
+            assertEquals("true", evaluateAsync(scenario, "hermit.host.agent.status().then(s=>s.password===document.querySelector('#agentPassword').textContent)"))
+        }
+    }
+
+    @Test fun favoritesAndFiveTabNavigationStayAlignedAndConsistent() {
+        val app = ApplicationProvider.getApplicationContext<HermitApplication>()
+        val instance = io.github.zhyuzh3d.hermit.model.WebAppInstance.newOnlineLive("Favorite fixture", "https://example.com")
+        app.registry.insertInstance(instance)
+        try {
+            ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java)).use { scenario ->
+                assertTrue(waitUntilReady(scenario))
+                repeat(20) {
+                    if (evaluate(scenario, "String(!!document.querySelector(\"[data-app-id='${instance.appId}']\"))") == "true") return@repeat
+                    android.os.SystemClock.sleep(100)
+                }
+                assertEquals("true", evaluate(scenario, "String(document.querySelector(\"[data-app-id='${instance.appId}']\").classList.contains('hidden'))"))
+                evaluate(scenario, "document.querySelector('.bottom-nav [data-view=all]').click();'all'")
+                assertEquals("false", evaluate(scenario, "String(document.querySelector(\"[data-app-id='${instance.appId}']\").classList.contains('hidden'))"))
+                evaluate(scenario, "document.querySelector(\"[data-app-id='${instance.appId}'] .favorite\").click();'favorite'")
+                repeat(20) { if (app.registry.getInstance(instance.appId)?.favorite != true) android.os.SystemClock.sleep(100) }
+                assertTrue(app.registry.getInstance(instance.appId)?.favorite == true)
+                evaluate(scenario, "document.querySelector('.bottom-nav [data-view=favorites]').click();'favorites'")
+                assertEquals("false", evaluate(scenario, "String(document.querySelector(\"[data-app-id='${instance.appId}']\").classList.contains('hidden'))"))
+                val geometry = evaluate(scenario, "JSON.stringify((()=>{const n=[...document.querySelectorAll('.bottom-nav button')];return {count:n.length,widths:n.map(x=>Math.round(x.getBoundingClientRect().width)),offsets:n.map(x=>{const a=x.getBoundingClientRect(),b=x.querySelector('.nav-icon').getBoundingClientRect();return Math.round((a.left+a.width/2)-(b.left+b.width/2))})}})())")
+                assertTrue(geometry?.contains("\"count\":5") == true)
+                assertTrue(geometry?.contains("\"offsets\":[0,0,0,0,0]") == true)
+                assertEquals("\"10knet·zhyuzh3d\"", evaluateAsync(scenario, "hermit.host.about.info({}).then(x=>x.author)"))
+                evaluate(scenario, "window.hermitSupportUnavailable('offline test');'fallback'")
+                assertEquals("offline test", evaluate(scenario, "document.querySelector('#supportError').textContent"))
+            }
+        } finally {
+            app.registry.deleteInstance(instance.appId)
+            app.registry.finishDelete(instance.appId)
+        }
+    }
+
+    @Test fun switchingDeveloperModesAndPasswordResetCloseLegacyListener() {
+        val app = ApplicationProvider.getApplicationContext<HermitApplication>()
+        val installed = runBlocking { app.installer.installZip(ByteArrayInputStream(appZip("Mode switch", 1)), "Mode switch") }
+        try {
+            ActivityScenario.launch<MainActivity>(Intent(app, MainActivity::class.java)).use { scenario ->
+                assertTrue(waitUntilReady(scenario))
+                val address = app.agentServer.addresses().firstOrNull()
+                org.junit.Assume.assumeTrue(address != null)
+                app.developmentServer.start(installed.appId, "adb")
+                assertEquals("true", evaluateAsync(scenario, "hermit.host.agent.start({address:${JSONObject.quote(address)}}).then(x=>x.active)"))
+                assertFalse(app.developmentServer.status().optBoolean("active"))
+                assertTrue(app.agentServer.status().optBoolean("active"))
+                evaluateAsync(scenario, "hermit.host.deploy.start({appId:${JSONObject.quote(installed.appId)},mode:'adb'}).then(()=>true)")
+                assertFalse(app.agentServer.status().optBoolean("active"))
+                assertTrue(app.developmentServer.status().optBoolean("active"))
+                assertEquals("true", evaluateAsync(scenario, "hermit.host.agent.resetPassword().then(()=>true)"))
+                assertFalse(app.developmentServer.status().optBoolean("active"))
+            }
+        } finally {
+            app.agentServer.stop("Test finished"); app.developmentServer.stop("Test finished")
+            app.registry.deleteInstance(installed.appId); app.installer.deleteAppFiles(installed.appId); app.registry.finishDelete(installed.appId)
+        }
     }
 
     private fun evaluate(scenario: ActivityScenario<MainActivity>, script: String): String? {

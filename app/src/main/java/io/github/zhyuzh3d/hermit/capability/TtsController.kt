@@ -1,6 +1,7 @@
 package io.github.zhyuzh3d.hermit.capability
 
 import android.content.Context
+import android.content.Intent
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
 import io.github.zhyuzh3d.hermit.model.ErrorCodes
@@ -23,8 +24,15 @@ class TtsController(context: Context) {
     private val callbacks = ConcurrentHashMap<String, (String, JSONObject) -> Unit>()
     private val completions = ConcurrentHashMap<String, CompletableDeferred<Boolean>>()
 
+    @Suppress("DEPRECATION")
+    fun isAvailable(): Boolean = appContext.packageManager.queryIntentServices(
+        Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE),
+        0,
+    ).isNotEmpty()
+
     private suspend fun getEngine(): TextToSpeech = engine ?: mutex.withLock {
         engine ?: run {
+            if (!isAvailable()) throw HermitException(ErrorCodes.UNSUPPORTED, "系统没有可用的朗读服务")
             val ready = CompletableDeferred<Int>()
             val created = TextToSpeech(appContext) { status -> ready.complete(status) }
             val status = try {

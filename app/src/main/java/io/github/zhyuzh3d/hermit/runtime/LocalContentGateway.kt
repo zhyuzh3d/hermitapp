@@ -16,6 +16,7 @@ class LocalContentGateway private constructor(
     private val root: File?,
     private val assetPrefix: String?,
     private val historyFallback: Boolean,
+    private val injectRuntime: Boolean,
 ) {
     fun intercept(request: WebResourceRequest): WebResourceResponse? {
         val uri = request.url
@@ -28,7 +29,7 @@ class LocalContentGateway private constructor(
         if (!safe) {
             return response(400, "Bad Request", "text/plain", emptyMap(), empty())
         }
-        return if (root != null) fileResponse(request, path) else assetResponse(path)
+        return if (root != null) fileResponse(request, path) else assetResponse(request, path)
     }
 
     private fun fileResponse(request: WebResourceRequest, path: String): WebResourceResponse {
@@ -56,17 +57,31 @@ class LocalContentGateway private constructor(
                 "Content-Length" to length.toString(),
             ), stream)
         }
+        if (injectRuntime && request.isForMainFrame && mime(path) == "text/html" && file.length() <= MAX_INJECTABLE_HTML_BYTES) {
+            val bytes = inject(file.readText(Charsets.UTF_8)).toByteArray(Charsets.UTF_8)
+            return response(200, "OK", "text/html", headers() + mapOf(
+                "Content-Length" to bytes.size.toString(),
+                "Accept-Ranges" to "none",
+            ), if (request.method == "HEAD") empty() else ByteArrayInputStream(bytes))
+        }
         return response(200, "OK", mime(path), headers() + mapOf(
             "Content-Length" to file.length().toString(),
             "Accept-Ranges" to "bytes",
         ), FileInputStream(file))
     }
 
-    private fun assetResponse(path: String): WebResourceResponse {
+    private fun assetResponse(request: WebResourceRequest, path: String): WebResourceResponse {
         val fullPath = "$assetPrefix/$path"
         return try {
-            val stream = context.assets.open(fullPath)
-            response(200, "OK", mime(path), headers(), stream)
+            if (injectRuntime && request.isForMainFrame && mime(path) == "text/html") {
+                val bytes = context.assets.open(fullPath).bufferedReader(Charsets.UTF_8).use { inject(it.readText()) }
+                    .toByteArray(Charsets.UTF_8)
+                response(200, "OK", "text/html", headers() + ("Content-Length" to bytes.size.toString()),
+                    if (request.method == "HEAD") empty() else ByteArrayInputStream(bytes))
+            } else {
+                val stream = if (request.method == "HEAD") empty() else context.assets.open(fullPath)
+                response(200, "OK", mime(path), headers(), stream)
+            }
         } catch (_: Throwable) {
             response(404, "Not Found", "text/plain", headers(), empty())
         }
@@ -106,6 +121,16 @@ class LocalContentGateway private constructor(
         return start to end
     }
 
+    private fun inject(html: String): String {
+        if (html.contains(RUNTIME_PATH)) return html
+        val tag = "<script src=\"$RUNTIME_PATH\"></script>"
+        val head = Regex("<head(?:\\s[^>]*)?>", RegexOption.IGNORE_CASE).find(html)
+        if (head != null) return html.substring(0, head.range.last + 1) + tag + html.substring(head.range.last + 1)
+        val doctype = Regex("<!doctype[^>]*>", RegexOption.IGNORE_CASE).find(html)
+        val offset = doctype?.range?.last?.plus(1) ?: 0
+        return html.substring(0, offset) + tag + html.substring(offset)
+    }
+
     private fun mime(path: String): String = when (path.substringAfterLast('.', "").lowercase()) {
         "html", "htm" -> "text/html"
         "js", "mjs" -> "text/javascript"
@@ -131,8 +156,12 @@ class LocalContentGateway private constructor(
     private fun empty() = ByteArrayInputStream(ByteArray(0))
 
     companion object {
-        fun forStore(context: Context) = LocalContentGateway(context, "store.hermit.invalid", null, "store", false)
-        fun forRelease(context: Context, host: String, root: File, historyFallback: Boolean) = LocalContentGateway(context, host, root, null, historyFallback)
+        const val RUNTIME_PATH = "/__hermit/bridge/runtime-v1.js"
+        private const val MAX_INJECTABLE_HTML_BYTES = 2L * 1024 * 1024
+        fun forStore(context: Context, injectRuntime: Boolean = false) =
+            LocalContentGateway(context, "store.hermit.invalid", null, "store", false, injectRuntime)
+        fun forRelease(context: Context, host: String, root: File, historyFallback: Boolean, injectRuntime: Boolean = false) =
+            LocalContentGateway(context, host, root, null, historyFallback, injectRuntime)
     }
 }
 

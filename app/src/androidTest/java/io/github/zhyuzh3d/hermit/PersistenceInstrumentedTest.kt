@@ -7,6 +7,8 @@ import io.github.zhyuzh3d.hermit.data.RecordsStore
 import io.github.zhyuzh3d.hermit.backup.BackupCoordinator
 import io.github.zhyuzh3d.hermit.install.InstallCoordinator
 import io.github.zhyuzh3d.hermit.model.ErrorCodes
+import io.github.zhyuzh3d.hermit.model.HappRuntimeMode
+import io.github.zhyuzh3d.hermit.model.HappSource
 import io.github.zhyuzh3d.hermit.model.HermitException
 import kotlinx.coroutines.runBlocking
 import org.json.JSONArray
@@ -95,16 +97,16 @@ class PersistenceInstrumentedTest {
 
     @Test fun onlineOriginChangeRotatesTrustAndWebProfileButPathChangeDoesNot() {
         val app = context.applicationContext as HermitApplication
-        val instance = WebAppInstance.newOnline("Online fixture", "https://example.test/one")
+        val instance = WebAppInstance.newOnlineLive("Online fixture", "https://example.test/one")
         app.registry.insertInstance(instance)
         createdApps += instance.appId
 
-        app.registry.updateInstance(instance.appId, instance.name, "https://example.test/two", "https://example.test", null)
+        app.registry.updateInstance(instance.appId, instance.name, "https://example.test/two", null)
         val sameOrigin = app.registry.getInstance(instance.appId)!!
         assertEquals(instance.trustRevision, sameOrigin.trustRevision)
         assertEquals(instance.webProfileName, sameOrigin.webProfileName)
 
-        app.registry.updateInstance(instance.appId, instance.name, "https://other.test/", "https://other.test", null)
+        app.registry.updateInstance(instance.appId, instance.name, "https://other.test/", null)
         val changed = app.registry.getInstance(instance.appId)!!
         assertEquals(instance.trustRevision + 1, changed.trustRevision)
         assertFalse(instance.webProfileName == changed.webProfileName)
@@ -112,6 +114,83 @@ class PersistenceInstrumentedTest {
 
         app.installer.recoverStorage()
         assertNotNull(app.registry.getInstance(instance.appId))
+    }
+
+    @Test fun happSourceAndRuntimeModeAreIndependent() = runBlocking {
+        val app = context.applicationContext as HermitApplication
+        val local = app.installer.installZip(ByteArrayInputStream(zipOf(mapOf("index.html" to "local"))), "Local happ")
+        createdApps += local.appId
+        val localInstance = app.registry.getInstance(local.appId)!!
+        assertEquals(HappSource.LOCAL, localInstance.source)
+        assertEquals(HappRuntimeMode.LOCAL, localInstance.runtimeMode)
+        assertFalse(localInstance.toJson().getBoolean("liveAvailable"))
+        assertThrows(IllegalStateException::class.java) {
+            app.registry.setRuntimeMode(local.appId, HappRuntimeMode.LIVE)
+        }
+
+        val onlineLocal = app.installer.installZip(
+            ByteArrayInputStream(zipOf(mapOf("index.html" to "cached"))),
+            "Online packaged happ",
+            provenance = "online-manifest",
+            source = HappSource.ONLINE,
+            liveUrl = "https://example.test/app/",
+        )
+        createdApps += onlineLocal.appId
+        val packaged = app.registry.getInstance(onlineLocal.appId)!!
+        assertEquals(HappSource.ONLINE, packaged.source)
+        assertEquals(HappRuntimeMode.LOCAL, packaged.runtimeMode)
+        assertTrue(packaged.toJson().getBoolean("localAvailable"))
+        assertTrue(packaged.toJson().getBoolean("liveAvailable"))
+
+        val live = app.registry.setRuntimeMode(onlineLocal.appId, HappRuntimeMode.LIVE)
+        assertEquals(HappRuntimeMode.LIVE, live.runtimeMode)
+        assertEquals("https://example.test/app/", live.startUrl)
+        assertTrue(live.trustRevision > packaged.trustRevision)
+
+        val localAgain = app.registry.setRuntimeMode(onlineLocal.appId, HappRuntimeMode.LOCAL)
+        assertEquals(HappRuntimeMode.LOCAL, localAgain.runtimeMode)
+        assertTrue(localAgain.startUrl.endsWith("/index.html"))
+        assertTrue(localAgain.startUrl.contains(".apps.hermit.invalid"))
+    }
+
+    @Test fun onlineUrlUsesSameOriginManifestAndDefaultsToLocalRuntime() = runBlocking {
+        val app = context.applicationContext as HermitApplication
+        val archive = zipOf(mapOf(
+            "index.html" to "<!doctype html><title>Downloaded happ</title>",
+            "hermit.json" to "{\"schema\":1,\"name\":\"Downloaded happ\",\"version\":{\"name\":\"2.0.0\"}}",
+        ))
+        val sha = MessageDigest.getInstance("SHA-256").digest(archive).joinToString("") { "%02x".format(it) }
+        val server = object : fi.iki.elonen.NanoHTTPD("127.0.0.1", 0) {
+            override fun serve(session: IHTTPSession): Response = when (session.uri) {
+                "/hermit-install.json" -> newFixedLengthResponse(
+                    Response.Status.OK,
+                    "application/json",
+                    "{\"schema\":1,\"package\":\"happ.zip\",\"sha256\":\"$sha\"}",
+                )
+                "/happ.zip" -> newFixedLengthResponse(
+                    Response.Status.OK,
+                    "application/zip",
+                    ByteArrayInputStream(archive),
+                    archive.size.toLong(),
+                )
+                else -> newFixedLengthResponse(Response.Status.OK, "text/html", "live")
+            }
+        }
+        server.start()
+        try {
+            val pageUrl = "http://127.0.0.1:${server.listeningPort}/page"
+            val installed = app.remoteInstaller.installOnline(pageUrl, null)
+            createdApps += installed.appId
+            val instance = app.registry.getInstance(installed.appId)!!
+            assertEquals("local", installed.strategy)
+            assertEquals(HappSource.ONLINE, instance.source)
+            assertEquals(HappRuntimeMode.LOCAL, instance.runtimeMode)
+            assertEquals(pageUrl, instance.liveUrl)
+            assertNotNull(instance.activeReleaseId)
+            assertEquals("2.0.0", app.registry.getRelease(instance.activeReleaseId!!)!!.versionName)
+        } finally {
+            server.stop()
+        }
     }
 
     @Test fun systemPermissionObservationsPersistLatestKnownState() {

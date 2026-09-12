@@ -1,13 +1,13 @@
 # HermitApp 产品与技术设计
 
-版本：1.0.0 · 实施基线版
-日期：2026-09-11
+版本：1.7.0 · happ 来源与运行方式解耦版
+日期：2026-09-12
 状态：v1 实施合同；实现与验收状态以执行记录和发布报告为准
 配套计划：[HermitApp v1 开发计划](../plans/hermitapp-v1-development-plan.md)
 
 ## 1. 产品定位与决策依据
 
-Hermit 是个人 Android 页面应用工作台：把用户自己制作、维护或信任的网页，变成能从桌面打开、长期保存数据、使用手机能力并持续更新的小工具。一个 Hermit APK 承载多个 Web App，业务页面更新不必重新编译或安装 APK。
+HermitApp 是个人 Android 页面应用工作台：把用户自己制作、维护或信任的网页，变成能从桌面打开、长期保存数据、使用手机能力并持续更新的 happ。一个 APK 承载多个 happ，业务页面更新不必重新编译或安装 APK；“Hermit 项目”则同时包括 HermitApp、HermitWeb 与后续项目目录。
 
 主要服务两类人：用 AI 或前端工具制作个人应用的创作者，以及使用自托管服务、家庭设备控制页和这些个人应用的使用者。首要价值是让一个页面工具从“能打开”变成“能长期使用和维护”；任意网站兼容是入口能力，不承诺所有网站都能获得与原生应用相同的行为。
 
@@ -17,14 +17,21 @@ Hermit 是个人 Android 页面应用工作台：把用户自己制作、维护�
 
 | 项目 | 决策 |
 | --- | --- |
-| 术语 | Hermit / hermitapp / 容器 / shell 均指整个 APK；app / Web App / 页面应用均指其中运行的页面 |
+| 术语 | HermitApp / HermitAPK / APK 指 Android 宿主；HermitWeb / Web 指官网与 HermitUI；HermitUI / UI / Shell / 原生 happ / 官方 app 指具备宿主管理权限的官方 happ；happ / WebApp / 上下文明确的 app 指宿主加载的页面应用 |
+| 页面开发原则 | 纯原生 HTML + JavaScript + CSS 直接编写，无框架、无构建前置依赖；应用库、示例、教程与验收使用相同模式 |
+| 第三方工具边界 | 不为 React/Vue 等框架或 Vite/Webpack 等工具增加专属支持；已生成的静态产物可按普通页面添加，不检测或拒绝其框架来源 |
+| 公共图标 | 完整 Font Awesome Free 7.3.1 离线字体/CSS；不包含 Pro；页面直接使用 HTML 图标类名，无需 npm/CDN |
 | Android 身份 | release 的 applicationId 与 namespace 均为 `io.github.zhyuzh3d.hermit` |
+| 主导航 | 收藏、全部、开发、设置、支持五个等宽入口；收藏是应用属性，不复制实例 |
 | 桌面入口 | Hermit 主图标进入内置应用库；Web App 快捷方式携带稳定 appId |
+| 扫码添加 | 收藏与全部均使用 APK 内置离线解码器识别 URL；不依赖 Google Play 服务或运行时下载；识别后只预填表单，仍需用户确认 |
 | 授权 | 系统对 Hermit 的授权，与 Hermit 对每个 Web App 的授权共同决定可用能力 |
 | 本地目录 | 导入到 Hermit 管理的快照，不依赖原目录继续存在；支持外部 curl 等工具更新 |
 | 交付方式 | 开发阶段是内部连续执行顺序，最终交付产品级签名 APK、源码与验证证据 |
 
-Android 最低安装基线为 Android 12 / API 31，compileSdk / targetSdk 为 37。该基线覆盖发布时约五年内的系统版本，并避免为已退出主流支持周期的系统承担额外安全与兼容成本。能安装 APK 不等于该设备的 WebView 能运行所有 Web App；运行能力仍需逐项检查。
+Android 最低安装基线为 Android 10 / API 29，compileSdk / targetSdk 为 37。“APK 可安装”“页面能运行”“页面具备完整隔离”是三个不同等级。Android 10/11 的系统差异与 WebView feature 使用显式分支处理；只要 provider 可创建，页面可用性优先，不再因缺少新 WebKit feature 整体阻断，但必须如实暴露兼容等级。
+
+国内设备和网络是正式产品基线。安装、启动、应用库、本地页面、二维码、数据、备份和局域网开发不依赖 Google Play 服务、Firebase、海外 CDN、海外账号、在线许可、远程配置或运行时下载。Font Awesome、二维码解码器等依赖随 APK 固化并离线运行。官方联网功能必须使用国内可访问端点并有本地失败态；GitHub 等海外来源只作可选适配器，不能成为创建、更新或开发页面的唯一方式。用户自己配置的在线页面与 API 是否可达由用户选择，不算 Hermit 的隐式运行依赖。
 
 ### 1.2 首要使用场景
 
@@ -32,16 +39,16 @@ Android 最低安装基线为 Android 12 / API 31，compileSdk / targetSdk 为 3
 | --- | --- | --- |
 | AI 生成个人工具 | 把记事、清单、朗读、语音录入等静态产物放进手机 | 不要求 PWA 或额外构建；自包含代码可离线运行；数据不随代码更新消失 |
 | 自托管与家庭设备 | 把域名、HTTP 私网 IP、带端口控制台放到桌面 | 地址可编辑，连接失败可恢复；原生能力按需授权 |
-| 持续开发 | 修改电脑上的 dist，推送到手机并立即查看 | 同一 appId 连续部署；无需重装 APK、重建图标或重新授予已有权限 |
+| 持续开发 | 直接修改电脑上的 HTML/JS/CSS 目录，推送到手机并立即查看 | 无前端编译；同一 appId 连续部署；无需重装 APK、重建图标或重新授予已有权限 |
 | 长期维护 | 升级页面、回到旧版、备份、换机、更新 Hermit | 代码、业务数据、浏览登录态的保留和恢复边界清楚 |
 
 “本地副本”只说明代码在手机，不意味着远程 API、CDN、字体或登录服务离线可用。Hermit 不递归镜像网站；参考应用和离线模板必须自包含。
 
 ### 1.3 范围与成功标准
 
-v1 完成上述四条场景的闭环，包括在线与本地安装、公开 GitHub 来源、桌面入口、按应用授权、持久数据、必要原生能力、开发部署、更新、备份和恢复。应用库不建设公共应用市场、账号体系、收费体系或云同步。
+v1 完成上述四条场景的闭环，包括在线与本地安装、通用 HTTPS 包、可选公开 GitHub 来源、桌面入口、按应用授权、持久数据、必要原生能力、开发部署、更新、备份和恢复。应用库不建设公共应用市场、账号体系、收费体系或云同步。
 
-不在 v1 建设浏览器标签页、手机端 npm/Git 构建、独立 APK 生成、多窗口、后台录音定位、任意 Intent/系统插件执行、蓝牙/NFC/无障碍服务。扫码、私有仓库、差分包、云发布和动态原生插件留作扩展；粘贴、文件选择及 Android 分享接收覆盖首发输入。
+不在 v1 建设浏览器标签页、手机端 npm/Git 构建、独立 APK 生成、多窗口、后台录音定位、任意 Intent/系统插件执行、蓝牙/NFC/无障碍服务。私有仓库、差分包、云发布和动态原生插件留作扩展；扫码只识别 HTTP(S) URL，不允许二维码直接执行或静默安装。
 
 成功以“桌面工具可以稳定使用和更新”验收，不以 API 数量验收。四条参考用户任务、负面隔离测试、故障恢复、APK 覆盖升级必须通过；构建成功或生成 debug APK 不代表产品完成。
 
@@ -53,17 +60,27 @@ v1 完成上述四条场景的闭环，包括在线与本地安装、公开 GitH
 
 普通运行页面占据内容区，无常驻地址栏或悬浮管理按钮。系统栏、键盘和安全区域正确避让；错误时显示 Hermit 控制的恢复界面，提供重试、回应用库和查看原因。用户随时可通过 Hermit 主图标返回应用库。
 
-应用库使用 APK 内置的 HTML/CSS/TypeScript 编译产物；授权对话框、系统选择器、WebView 不兼容/数据库损坏恢复页使用原生 UI。恢复入口不能依赖已经失效的 WebView 或 Bridge。
+应用库使用 APK 内置的原生 HTML、JavaScript、CSS 源文件直接运行，不引入框架或前端构建步骤；授权对话框、系统选择器、WebView 不兼容/数据库损坏恢复页使用 Android 原生 UI。恢复入口不能依赖已经失效的 WebView 或 Bridge。
+
+v1.3 采用黑白与中性灰主题，蓝、紫、橙、绿功能图标用于区分动作；卡片、搜索、底栏与状态层使用低对比半透明材质、细边框、内高光和克制阴影，在深浅主题中保持可读性。主导航固定为“收藏、全部、开发、设置、支持”五个等宽入口，图标容器与按钮中心线一致。收藏与全部复用同一应用列表和添加流程：收藏只过滤 `favorite=true`，卡片爱心即时切换；从收藏入口添加默认收藏，从全部入口添加默认不收藏。两页均提供二维码入口，扫码结果只预填在线网址表单，用户检查后确认。
+
+开发页集中控制全局智能体开发服务，开关状态、局域网地址、六位密码、改密和最近操作位于同一页面；服务开启时开发 Tab 显示绿色状态点，状态由 Native 服务真值轮询驱动。设置页只承载 Hermit 自身配置和软件信息，包括主题、备份恢复、图标库、运行诊断、开源许可、真实版本、应用标识、作者 `10knet·zhyuzh3d` 与 GitHub 仓库。支持 Tab 先由 Native 使用短超时请求检测 `https://hermit.10knet.com/pages/donate.html`，成功后在无 Bridge、拒绝权限请求的独立 Web Profile 中打开；失败或主文档出现 HTTP/网络错误时返回本地可重试页面。站外链接交系统处理，支持页面不能获得 Store 管理接口。
+
+弹窗应管理焦点、背景不可交互和滚动锁定。应用库返回键先关闭顶层弹窗，再回到应用库或清空筛选；危险动作单独确认，取消不改变数据。进行中的操作防止重复点击，错误提示可手动关闭，新增成功清除旧搜索条件以显示新应用。
 
 ### 2.2 添加与身份维护
 
-用户选择“在线地址”或“本地副本”，也可直接粘贴输入，由解析器给出明确候选。在线地址保存原 scheme；裸域名默认 HTTPS，裸私网地址可建议 HTTP，最终地址始终可见。普通 URL 不会因为根目录恰好有安装描述文件就被静默改成本地包。
+用户选择“从网址”或“从文件夹”，也可直接粘贴输入，由解析器给出明确候选。手机本地文件或目录导入的是本地 happ；HTTP(S)、HTTPS 包和 GitHub 等 URL 来源的是线上 happ。来源不会因是否下载到手机而改变。
 
-本地副本接受 ZIP、SAF 目录、HTTPS 包地址和公开 GitHub 静态目录。无 manifest 时推断名称与入口；候选不唯一时列出目录供选择，不遍历任意源码目录碰运气。v1 的应用库卡片和桌面快捷方式统一使用 Hermit 品牌图标，避免在没有完整图标净化、裁切与密度生成链路时处理不可信图片；实例自定义图标作为后续兼容功能。手机不执行构建命令。
+添加页面 URL 时，HermitApp 尝试读取该 Origin 根目录的 `/hermit-install.json`。存在有效同源 ZIP 配置时先下载、校验并采用本地运行；清单不存在或暂时不可达时保存 URL 并采用线上实时运行；清单存在但格式或包校验失败时明确报错，不能静默忽略。裸域名默认 HTTPS，显式 scheme 必须保留；用户明确添加的局域网 HTTP(S) 地址仍属于 URL/线上来源，并单独经过局域网与明文风险确认。
+
+本地 happ 接受 ZIP 和 SAF 目录。HTTPS 包地址与公开 GitHub 静态目录是只能本地运行的线上来源，除非来源另行提供页面 URL。无包内 `hermit.json` 时推断名称与入口；不遍历任意源码目录猜测构建目录。手机不执行构建命令，ZIP 是传输归档，不是编译产物要求。
 
 确认后先完成安装，再可选添加桌面图标。安装成功与 Launcher 接受固定图标是两个结果；用户拒绝或 Launcher 不支持时，仍可从应用库打开。快捷方式只记录 appId，不记录 URL 或物理目录。[Android ShortcutManager](https://developer.android.com/reference/android/content/pm/ShortcutManager)
 
-同一来源可安装多个实例，分别拥有身份、授权和数据。修改展示名、在线入口的同 Origin 路径或更新代码不改变 appId。修改在线 Origin 是信任关系变更：展示前后地址，清除敏感授权，换用新的 Web Profile，保留 Hermit 管理的业务数据；不自动复制旧站点 Cookie。在线与本地形态之间的转换首版通过新建实例和显式数据导入完成。
+本地导入的名称优先级为：用户明确填写的名称 → 包内 manifest 名称 → 来源默认名（如 GitHub 仓库名）→ 本地应用。代码更新不改已有实例名称。
+
+同一来源可安装多个实例，分别拥有 Hermit 身份、授权和原生数据；它们的网页站点数据则遵守标准同源规则。修改展示名、在线入口的同 Origin 路径或更新代码不改变 appId。修改在线 Origin 或切换本地/实时运行是信任关系变化：提升 trustRevision、清除敏感授权并保留 Hermit 管理的业务数据。
 
 ### 2.3 启动、导航和返回
 
@@ -77,33 +94,29 @@ v1 完成上述四条场景的闭环，包括在线与本地安装、公开 GitH
 
 ### 2.4 更新、删除和故障恢复
 
-在线应用显示“重新加载”，没有可回滚的本地代码版本。缓存遵循网站与 WebView；开发时可绕过 HTTP 缓存，但不能宣称清除了 Service Worker 或登录态。
-
-本地应用显示当前版本、来源和上一保留版本。下载与校验不打断正在使用的旧版；普通更新默认下次打开生效，用户可选择立即重开。开发会话可预先开启“部署后立即重开”。新包失败时保留旧版和数据，并显示可重试错误。
+是否可回滚由 `activeReleaseId` 决定，而不是由来源决定。有本地代码的 happ 显示当前版本和上一保留版本；采用线上实时运行时仍保留本地版本，切回本地即可使用。没有本地代码的线上 happ 只提供重新加载。下载与校验不打断正在使用的版本，新包失败时保留旧版和数据。
 
 v1 删除统一为“删除此应用及本机数据”，先提供备份入口，不实现模糊的“删身份但保留目录”回收站。逻辑删除立即禁用启动、授权、部署和快捷方式；后台完成代码、数据、Web Profile 清理，保留最小删除任务直至完成。Launcher 残留图标可能需用户自行移除。
 
 ## 3. 统一领域模型
 
-只保留两个运行形态，来源适配器只负责把输入转换为其中之一：
+来源与运行方式是两个正交维度，不能再压入一个 `mode`：
 
 ```text
-URL ───────────────────────────────→ OnlineSpec
-ZIP / SAF目录 / HTTPS包 / GitHub / curl → BundleCandidate
-                                           ↓
-                                    同一个安装事务
-                                           ↓
-                              WebAppInstance + CodeRelease
+本地文件 / SAF目录 ───────────────→ source=local ─→ runtimeMode=local
+页面URL + 安装清单 ───────────────→ source=online ─→ 默认 runtimeMode=local
+页面URL（无本地包）───────────────→ source=online ─→ runtimeMode=live
+HTTPS包 / GitHub ─────────────────→ source=online ─→ runtimeMode=local
 ```
 
 `WebAppInstance` 是长期身份；`CodeRelease` 是不可变本地代码；`RuntimeSession` 是一次运行；`Operation` 是一次可追踪操作。不要再用一个含糊的“Profile”同时指业务身份和 WebView 存储。
 
 | 对象 | 关键字段 | 唯一职责 |
 | --- | --- | --- |
-| WebAppInstance | appId、name、mode、entry、trustRevision、webProfileName、activeReleaseId | 身份、运行配置、当前代码指针 |
+| WebAppInstance | appId、name、source、runtimeMode、liveUrl、trustRevision、activeReleaseId、favorite、iconDataUrl | 身份、来源、当前运行方式、收藏状态、图标与当前代码指针；旧 `mode` 与 `webProfileName` 仅作迁移兼容 |
 | SourceBinding | appId、adapter、spec、updatePolicy | 用户认可的上游来源和更新方式 |
 | CodeRelease | releaseId、appId、treeHash、entryPath、版本、provenance、sourceRevision | 一次完整且不可变的本地代码 |
-| RuntimeSession | sessionId、appId、role、webProfileName、releaseId、dataGeneration、documentEpoch | 当前运行上下文；由 Native 创建 |
+| RuntimeSession | sessionId、appId、role、releaseId、dataGeneration、documentEpoch | 当前运行上下文；由 Native 创建；WebView 使用共享默认 Profile |
 | CapabilityGrant | appId、trustRevision、capability、resourceScope、decision | Hermit 层的持久授权意图 |
 | Operation | operationId、appId、kind、state、idempotencyKey、result | 安装、更新、备份、删除、部署的状态和恢复 |
 | FileHandle | opaqueId、appId、logicalFileId、access、expiry | 对受控文件的引用 |
@@ -115,7 +128,9 @@ appId 采用 Native 生成的 UUID，发布方声明的 ID 只作元数据，不
 
 ## 4. 技术路线与模块边界
 
-采用 Kotlin + Coroutines + Android Framework/AndroidX Activity + System WebView + AndroidX WebKit。网络统一用 OkHttp，系统注册库和应用数据使用系统 SQLite，文件使用 SAF。原生只有一个 Android 模块，通过包和接口分离责任；不为预计的规模建立多进程服务、复杂依赖注入或跨平台抽象。
+页面层的首要约束是原生优先、产物中立。官方实现和示例只用 Web 标准 HTML/JS/CSS；不增加框架工程脚手架、框架插件、专属路由/HMR、Node 开发服务器或源码自动构建。第三方最终静态产物走现有通用安装与 WebView 规则，不做框架品牌检测。通用浏览器能力不等于框架专属适配。宿主 APK 的 Gradle 构建、仓库检查与上游资源同步工具不会成为页面开发前置条件。完整作者合同见 [WebApp 编写指南](webapp-authoring.md)。
+
+采用 Kotlin + Coroutines + Android Framework/AndroidX Activity + System WebView + AndroidX WebKit。网络统一用 OkHttp，系统注册库和应用数据使用系统 SQLite，文件使用 SAF。二维码使用 CameraX 取景和随 APK 打包的 ZXing 本地解码，不调用 Google Play 服务。原生只有一个 Android 模块，通过包和接口分离责任；不为预计的规模建立多进程服务、复杂依赖注入或跨平台抽象。
 
 选择依据是总实现与维护成本，而非依赖数量最少。协程使页面退出、超时、系统授权和网络取消可以遵守统一生命周期，减少 Java 手工回调状态；OkHttp 统一下载、请求取消、超时与测试替身。依赖仍需锁定、审计和按用途隔离。[Android 协程实践](https://developer.android.com/kotlin/coroutines/coroutines-best-practices)、[OkHttp 官方说明](https://github.com/square/okhttp)
 
@@ -124,7 +139,7 @@ appId 采用 Native 生成的 UUID，发布方声明的 ID 只作元数据，不
 | Kotlin + 精简自有 WebView 宿主 | 采用；运行身份、来源和权限确为产品核心，直接表达这些模型 |
 | 保留 Java 并手写异步/HTTP 基础设施 | 不采用为默认路线；省掉语言依赖却增加取消、竞态和网络实现成本 |
 | Capacitor / Cordova 整体接入 | 不采用；插件生态有价值，但单业务包配置不能直接解决动态多实例身份与授权，仍需重做核心宿主 |
-| GeckoView / 内置 Chromium | 不采用；首发没有必须脱离 System WebView 的需求，增加引擎分发与维护负担 |
+| 自带独立网页引擎 | 保留为中长期验证；当前先用 System WebView 的三级兼容运行覆盖旧国产设备，若实际网页兼容性仍不足，再评估 GeckoView 单引擎迁移 |
 | Compose / Flutter / React Native | 不采用为主 UI；产品 UI 本来以页面为主，少量原生系统界面用 Views 即可 |
 | Room / ORM、NDK SQLite、动态插件加载 | 首版不引入；受控而少量的表用显式迁移，扩展 Native 能力随 APK 编译发布 |
 
@@ -145,7 +160,7 @@ Capacitor 官方仍把 `server.url` 描述为开发 live reload 用途。这里�
           Android / SQLite / Files
 ```
 
-入口不直接读写业务表或目录。应用库管理调用与 Deploy 都调用相同 Application Services，但持有不同权限：开发连接仅能更新当前获准目标，不能复用应用库的管理员身份。
+入口不直接读写业务表或目录。应用库管理调用、单应用 Deploy 与全应用 Agent Development 共用安装和注册服务，但凭据边界不同：原单应用 Deploy 仅更新指定目标；智能体开发模式使用一个持久六位密码，授权所有已开放开发工具和全部应用，不配对或识别电脑。二者都不继承任意 Store RPC 调用权，不绕过系统/逐页面能力权限，也不开放业务数据或登录态导出。
 
 建议代码包为 `model/`、`registry/`、`install/`、`runtime/`、`bridge/`、`capability/`、`data/`、`deploy/`、`ui/`。纯解析、状态机、验证规则不依赖 Activity，便于普通 JVM 测试；禁止为了分层给每个类创建无意义的接口。
 
@@ -155,12 +170,13 @@ Capacitor 官方仍把 `server.url` 描述为开发 live reload 用途。这里�
 | --- | --- |
 | release applicationId / namespace | `io.github.zhyuzh3d.hermit` |
 | debug applicationId | `io.github.zhyuzh3d.hermit.debug`，可与 release 并存，不参与正式升级链 |
-| minSdk / compileSdk / targetSdk | 31 / 37 / 37 |
+| minSdk / compileSdk / targetSdk | 29 / 37 / 37 |
 | JDK / AGP / Gradle | JDK 17 / AGP 9.1.1 / Gradle 9.3.1 |
 | AndroidX WebKit | 1.17.0，实际能力仍逐项检测 |
+| 扫码 | CameraX 1.5.3 + ZXing Core 3.5.4；全部随 APK 分发，无 GMS/网络/模型下载 |
 | Kotlin | 优先使用 AGP 内置 Kotlin 支持；与 serialization 编译插件版本匹配 |
 | JSON / HTTP | kotlinx.serialization / OkHttp，精确版本在 S0 构建验证后锁定 |
-| Store / SDK | TypeScript + DOM/CSS，开发时 esbuild 打包；APK 内无 Node runtime |
+| Store / SDK | 原生 HTML + JavaScript + CSS 源文件直接随 APK 分发；无前端编译或打包器；.d.ts 仅作可选类型提示 |
 
 AGP 官方列出的 9.1.1 兼容 API 37、Gradle 9.3.1、JDK 17；AndroidX WebKit 当前稳定版为 1.17.0。以上是经资料核对的候选构建组合，尚未在本机完成构建验证。Build Tools 及其他依赖在 S0 固定到实际可获取且兼容的精确版本，不使用 `+` 或浮动最新版。[AGP 兼容表](https://developer.android.com/build/releases/agp-9-1-0-release-notes)、[WebKit 发布记录](https://developer.android.com/jetpack/androidx/releases/webkit)
 
@@ -168,7 +184,7 @@ AGP 官方列出的 9.1.1 兼容 API 37、Gradle 9.3.1、JDK 17；AndroidX WebKi
 
 ### 5.1 一个描述格式
 
-以可选的 `hermit.json` 统一应用元信息和本地版本信息，不再并行维护 hermit-install 与 hermit-version 两套相似协议。在线 URL 无须此文件；本地无文件也可按默认入口安装。
+包内可选 `hermit.json` 只描述已下载代码的入口、路由和版本。线上 Origin 根目录可选的 `/hermit-install.json` 只描述同源 ZIP 的相对路径和可选 SHA-256；两者职责不同，不得互相替代。本地包没有 `hermit.json` 也可按默认入口安装。
 
 以下为 ZIP 内的最小应用描述：
 
@@ -182,9 +198,9 @@ AGP 官方列出的 9.1.1 兼容 API 37、Gradle 9.3.1、JDK 17；AndroidX WebKi
 }
 ```
 
-包根就是可运行 Web 根，打包工具在电脑上处理 dist 子目录；导入目录可在确认时选择子目录，不在 Runtime 中保留 webRoot 的二次映射。
+包根就是可运行 Web 根，原生 HTML/JS/CSS 目录直接导入或归档为 ZIP，无需生成 dist。第三方工具产物需要作者自行选择已生成的静态 Web 根，Hermit 不自动构建或猜测输出目录，不在 Runtime 中保留 webRoot 的二次映射。
 
-v1 的 HTTPS 来源直接指向完整 ZIP，不再维护一套与包内 `hermit.json` 重叠的远程描述协议。更新时重新下载同一 SourceBinding，由 TLS、64 MiB 流量限制、ZIP 校验和内容 treeHash 共同约束；相同文件树不会制造重复 release。需要发布级摘要或签名分发时，应在后续版本引入独立且经过威胁建模的发布清单，不能把一个可被同一服务器同时替换的摘要包装成发布者签名。
+`hermit-install.json` schema 1 仅接受 `schema/package/sha256`。`package` 必须是同 Origin 相对路径；自动发现不跨 Origin、不跟随重定向，响应与 ZIP 均有大小限制。SHA-256 校验完整性，但同一服务器可同时替换清单和 ZIP，因此不等同发布者签名。HTTPS 包直链与 GitHub 更新继续按各自 SourceBinding 重新获取；相同文件树不制造重复 release。
 
 `entry` 使用本地路径校验器：禁止绝对路径、反斜杠、路径穿越和保留命名空间。v1 manifest 采用严格 schema，只接受 `schema/name/entry/routing/version`；未知字段拒绝并给出可恢复错误。能力是否可用由运行时 `runtime.capabilities()` 探测，授权只在实际敏感调用或显式 `permissions.request()` 时发生，manifest 不能自行取得能力。
 
@@ -194,10 +210,10 @@ v1 的 HTTPS 来源直接指向完整 ZIP，不再维护一套与包内 `hermit.
 
 | 输入 | 处理方式 | 更新语义 |
 | --- | --- | --- |
-| 在线 HTTP(S) 地址 | 保存规范化 OnlineSpec；有限获取标题/图标，不执行探测页面脚本 | 重新加载；同 Origin 修改路径可保留授权 |
-| SAF ZIP / 目录 | 完整复制到 staging；遍历有数量/大小边界 | 再次选择导入，不依赖旧 URI grant |
-| HTTPS ZIP | 公网地址校验后受限流式下载，再进入统一包校验 | 用户显式触发重新下载；以内容树识别相同版本，不把自报 version 当安全边界 |
-| GitHub 公开仓库 | 解析 repo/ref/path，先锁 commit，再下载该 commit 的 ZIP archive 并抽取目标目录 | 比较锁定来源的 commit；不在下载过程中跟随变化的 branch |
+| 在线 HTTP(S) 页面 | 保存页面 URL，探测同 Origin `/hermit-install.json`；有包则产生本地 release，无包则实时运行 | 清单包更新或实时重新加载；设置可在可用方式间切换 |
+| SAF ZIP / 目录 | 本地来源；完整复制到 staging；遍历有数量/大小边界 | 再次选择导入，不依赖旧 URI grant |
+| HTTPS ZIP | 线上来源；公网地址校验后受限流式下载；没有页面 URL 时只能本地运行 | 用户显式触发重新下载；以内容树识别相同版本，不把自报 version 当安全边界 |
+| GitHub 公开仓库 | 线上来源；解析 repo/ref/path，锁定 commit 后下载；没有页面 URL 时只能本地运行 | 比较锁定来源的 commit；不在下载过程中跟随变化的 branch |
 | curl 部署 | 向已有本地实例提交完整快照 | 同一事务；不要求开发时反复递增业务版本号 |
 
 GitHub 首版只保留 archive 一条下载路径。目录不明确时要求显式指定 ref 与 path；包含斜杠的 ref 不能靠截断 URL 猜测。静态入口缺失、LFS 指针、submodule、限额、仓库过大均给出具体错误及“在电脑打包后导入”的路径。下载全仓库 ZIP 的体积上限按传输量计算，即使只提取一个目录也不能绕过限额。
@@ -236,11 +252,20 @@ LocalContentGateway 在 RuntimeSession 创建时绑定固定 releaseId，所有 
 
 ## 6. WebView、内容加载与兼容
 
-### 6.1 隔离合同
+### 6.1 三级运行合同
 
-正式 Runtime 必需 `MULTI_PROFILE`、`WEB_MESSAGE_LISTENER`、`DOCUMENT_START_SCRIPT`。每个 WebAppInstance 与应用库拥有独立 Web Profile，使用 Profile 自己的 Cookie/存储服务，禁止用默认 Profile 的全局 CookieManager 替代。不支持时进入原生兼容说明页，可导出已有 Hermit 数据、打开系统 WebView 更新入口，但不运行共享 Profile 的替代模式。
+Runtime 启动时检测实际 WebView provider，而不按 Android 版本或品牌猜测。三级模式共用同一 `PageBridge`、会话、权限和 Host API 合同：
 
-这一选择减少一套难以验证的权限和数据语义，也意味着部分旧设备不能运行 v1。API 31 是最低安装条件，实际支持范围仍以设备与 WebView feature 测试结果为准，不能仅靠 Android 大版本推断。
+| 模式 | 条件 | 行为与边界 |
+| --- | --- | --- |
+| `shared-web-message` | 可用 `WEB_MESSAGE_LISTENER` | 使用共享默认 Profile；网页数据严格按 Origin 共享/隔离；消息通道校验 Origin 与主 frame；可用时在文档起始注入 SDK |
+| `shared-legacy-bridge` | provider 存在但无 `WEB_MESSAGE_LISTENER` | 同样按 Origin 共享站点数据；使用固定 `JavascriptInterface`，接口会暴露给页面中的 frame，不能证明消息来自主 frame |
+
+两种模式都由 Native 固定 appId、Session、documentId、epoch、并发上限和逐应用授权，Hermit 管理的记录与逻辑文件继续按 appId 隔离。共享 Profile 是产品的数据协作策略，不是兼容降级；安全消息能力才是 provider 差异。传统桥接不能恢复缺失的 frame 校验，因此不应把恶意页面、第三方脚本或 iframe 当作互不信任代码放在同一实例中。应用库以文字按钮说明实际模式，`runtime.info()` 与诊断返回机器可读事实。只有 provider 缺失、WebView 无法创建或渲染进程反复失败时才进入原生恢复页。
+
+“同源”必须精确定义为协议、主机和端口相同。`https://example.com/a/` 与 `https://example.com/b/` 同源，文件夹路径不是隔离边界；`https://a.example.com/` 与 `https://b.example.com/` 默认不是同源，即使它们同属一个主域。Cookie 可由服务端通过 Domain 属性扩大到父域，但 localStorage/IndexedDB 不会因此跨子域共享。Local App 目前仍使用每个 appId 独立的内部虚拟主机，所以不同本地 App 不会自动共享网页存储；若未来需要多个本地页面组成一组，应增加显式 `storageGroup`，不能靠模糊的“同一文件夹”猜测身份。
+
+本地页面的兼容 SDK 由 `LocalContentGateway` 插入到主文档 `<head>` 前部，并从保留的同 Origin 路径提供；在线页面无法改写服务端 HTML时，在 `onPageFinished` 后注入，因此作者必须监听 `hermitready`，不能假设解析首行时 API 已存在。注入限制为主文档和 2 MiB 以内 HTML；过大或非 HTML 文档使用完成后注入。旧内核所需的宿主 Store 与 SDK 保持无构建的保守 JavaScript 语法基线，并为关键 DOM API提供小型本地降级。
 
 Profile 删除要在下次进程启动、该 Profile 尚未加载前处理。仅销毁 WebView 不足以保证能调用 deleteProfile：已在当前进程通过 getProfile/getOrCreateProfile 加载的 Profile 也受到限制。逻辑删除立即生效，物理清理完成情况另记；不宣称安全擦除磁盘。[ProfileStore](https://developer.android.com/reference/androidx/webkit/ProfileStore)
 
@@ -260,9 +285,23 @@ Profile 删除要在下次进程启动、该 Profile 尚未加载前处理。仅
 
 ### 6.3 在线内容与系统接口
 
+v1.1 新增公共离线图标网关 `SharedAssetGateway`，在当前应用精确 Origin 下提供 `/__hermit/icons/fontawesome/css/all.min.css`、四个 WOFF2 字体文件及许可文本。它位于页面资源网关之前，仅允许固定白名单和 GET/HEAD；未知保留路径返回 404，不映射用户路径，不暴露私有文件。在线和本地页面使用同一接口，CSS 相对字体路径保持同源。
+
+document-start 脚本提供 `hermit.icons` / `window.HermitIcons`，在 DOM 就绪后自动挂载字体样式，作者可直接写标准 `fa-solid` / `fa-regular` / `fa-brands` 类名。显式 link 引用也可用。资源不随页面版本复制，无网络/CDN依赖，不扩大 Bridge 授权范围。在线站点自己的 CSP、Service Worker 仍可限制资源加载；不替站点弱化 CSP 或绕过已有 Service Worker，站点作者需允许该同源样式与字体并为保留路径使用网络转发。图标字体/CSS/目录版本随 APK 固定更新，默认 no-store 防止覆盖升级后读取旧字形。
+
 在线内容保留网站缓存、Service Worker 和普通浏览网络行为，不承诺可靠离线、后台执行或完全兼容特定站点登录。TLS 错误直接失败，用户可修改地址或证书部署，不提供全局“忽略 SSL”。
 
 关闭 file/content URL 任意访问、universal file access 和 mixed content；允许声明过的 HTTP 在线入口，应用详情始终标识明文来源。第三方 Cookie 默认关闭，可按实例开启；release 关闭 WebView debugging。
+
+### 6.4 自带引擎迁移门禁
+
+“Hermit 自带标准 WebView”不能通过把 Android System WebView APK 塞进应用实现。零售设备的 WebView Provider 受系统配置、签名和更新服务控制，普通应用不能可靠替换；Chromium 的系统集成文档也明确把该路径限定给设备厂商或自定义 ROM。[Chromium WebView 系统集成说明](https://chromium.googlesource.com/chromium/src/+/HEAD/android_webview/docs/aosp-system-integration.md)
+
+可行的自带方案是把 GeckoView 作为应用库嵌入。它不依赖设备的 WebView Provider，具备独立 Session 与 contextId，可从 Android 10 起建立统一渲染基线；但这不是替换一个 View 类，而是重写页面会话、导航、消息桥、本地内容、下载、权限、崩溃恢复和测试夹具。当前三级兼容模式先解决“旧 provider 不能打开 Hermit”的直接问题；只有设备矩阵证明渲染/网页 API 本身仍大量不兼容，才承担这项迁移。[GeckoView 官方嵌入指南](https://firefox-source-docs.mozilla.org/mobile/android/geckoview/consumer/geckoview-quick-start.html) · [GeckoSessionSettings](https://mozilla.github.io/geckoview/javadoc/mozilla-central/org/mozilla/geckoview/GeckoSessionSettings.html)
+
+不采用双引擎长期方案：它会让 Cookie、CSP、Service Worker、Bridge、媒体和页面兼容性产生两套行为，验证成本高于其包体收益。迁移以单独工程门禁推进；通过后 GeckoView 成为唯一页面 Runtime，系统 WebView 仅保留到旧版分支。无 GMS 是硬门禁：显式排除和验证 GeckoView 元数据中的 Play Services FIDO 依赖，WebAuthn/FIDO 在无可替代实现前报告不支持；所有引擎二进制随 APK/App Bundle 交付，不允许运行时从境外下载。
+
+包体采用 arm64-v8a 主 APK 与应用商店 ABI split，另行决定是否提供 32 位包，不发布包含全部 ABI 的超大通用 APK作为默认下载。引擎升级跟随 Hermit 正式版本，至少按浏览器安全发布节奏维护；若做不到持续更新，就不能用“内置内核”换取表面兼容。迁移执行门禁见 [自带网页引擎迁移计划](../plans/hermit-embedded-engine-migration.md)。
 
 原生相机/麦克风、Web geolocation 等敏感入口不能绕过 PermissionBroker。v1 对 WebChromeClient 的 getUserMedia、地理位置等授权请求统一明确拒绝，能力通过主文档 Hermit API 提供；未知资源种类也拒绝。原因是这些回调未提供与 Bridge 等价的主 Frame 身份合同。文件输入允许调用系统选择器，但结果只归属发起会话，并遵循文件导入边界。标准网页摄像头/麦克风站点可能因此需要适配，必须写入兼容说明。
 
@@ -270,7 +309,7 @@ Profile 删除要在下次进程启动、该 Profile 尚未加载前处理。仅
 
 ### 7.1 身份、文档与信任
 
-消息桥注册在首次加载前，使用 exact Origin 的 WebMessageListener 和 document-start SDK，公开 `window.hermit`。Native 校验 WebView 实例、role、appId、Profile、sourceOrigin、isMainFrame、sessionId、documentEpoch 和参数。网页传入 appId 不能选择执行身份，host 方法只属于 Native 创建的 Store 会话。
+隔离模式在首次加载前注册 exact Origin 的 WebMessageListener 和 document-start SDK，公开 `window.hermit`。兼容消息模式保留 WebMessageListener，在本地主文档或加载完成时补注入 SDK；传统桥接模式改用 `JavascriptInterface` 和 `evaluateJavascript` 往返。三种模式都由 Native 固定 WebView 实例、role、appId、sessionId、documentEpoch 和参数，网页传入 appId 不能选择执行身份，host 方法只属于 Native 创建的 Store 会话；只有隔离/兼容消息模式能够验证 sourceOrigin 与 isMainFrame，只有支持 Profile 的设备能提供独立网页资料空间。
 
 一次 WebView 会话可以经历多个 HTML 文档，其下建立独立 DocumentSession。SDK 每个文档生成随机 documentId，先发送 hello 并暂存 API 调用；hello 本身不激活权限。Native 确认主导航已提交且不为错误页后，经该文档的 replyProxy 发出一次性 challenge，收到匹配 ack 才绑定 documentId、epoch 和代理并放行。完整文档导航开始即撤销旧绑定，副作用执行前与结果返回前再次检查；204、下载或取消等未提交导航须恢复原文档的握手，不能永久卡住。
 
@@ -278,9 +317,9 @@ Profile 删除要在下次进程启动、该 Profile 尚未加载前处理。仅
 
 优先使用支持时的 NavigationListener 区分导航、提交与同文档变化；旧 provider 采用 WebViewClient + 文档握手，导航未完成时关闭敏感调用并取消待决授权，重新握手后恢复。此处必须通过乱序、重定向、BFCache、同 Origin 换页测试；无法保持合同的 provider 不能列入支持矩阵。NavigationListener 是可选优化，不能因为依赖库含有方法就认为 provider 实现了它。[NavigationListener](https://developer.android.com/reference/androidx/webkit/NavigationListener)
 
-异步回复只使用发起消息的 replyProxy，并附带原 epoch；即使框架在页面离开后丢弃回复，Native 也必须取消可取消任务、丢弃失效结果，不向当前页面重新寻址发送。[WebMessageListener](https://developer.android.com/reference/androidx/webkit/WebViewCompat.WebMessageListener)
+WebMessage 模式的异步回复只使用发起消息的 replyProxy，并附带原 epoch；传统桥接模式因没有 replyProxy，只能通过当前 WebView 的固定接收函数寻址，但同样在发送前复核 documentId 与 epoch。页面离开后 Native 必须取消可取消任务、丢弃失效结果。[WebMessageListener](https://developer.android.com/reference/androidx/webkit/WebViewCompat.WebMessageListener)
 
-Origin 是信任单位，不是 URL 路径。直接来自 iframe 的桥消息拒绝；同 Origin iframe 能通过 DOM 访问父窗口时，仍与父页面共享信任，不能宣称 main-frame 检查隔离了这种脚本。XSS 和同 Origin 脚本具有当前页面权限；Native 桥不提供“可信页面里的不可信 JS”沙箱。
+在 WebMessage 模式中，Origin 是信任单位，不是 URL 路径；直接来自 iframe 的桥消息拒绝，同 Origin iframe 能通过 DOM 访问父窗口时仍与父页面共享信任。传统桥接模式无法可靠识别消息 frame，任何子 frame 都可能看到接口，因此整个文档树必须视为同一信任域。XSS 和页面加载的第三方脚本具有当前页面权限；Native 桥不提供“可信页面里的不可信 JS”沙箱。
 
 ### 7.2 一个调用模型
 
@@ -390,16 +429,20 @@ v1 将网页可调用的任意 SQL 收敛为 `hermit.data` 的键控 JSON 记录
 | permissions | status、request | 统一 PermissionBroker |
 | data | get、put、delete、scan、batch | 持久化、CAS、分页、原子批量 |
 | files | 选择导入、文本创建/读取、删除、列举、导出、分享 | 逻辑 ID 隔离；大文件只走原生导入/导出/分享 |
+| audio | startRecording、stopRecording、cancelRecording、play、stopPlayback | 原始麦克风录音与逻辑文件播放；不依赖语音服务；单录音/单播放；退出前台立即释放 |
 | tts | 引擎/声音查询、speak、stop、导出音频 | 引擎可能联网；会话退出停止输出，导出用 FileHandle |
 | speech | availability、start、stop、cancel | 单活跃识别、partial/final 事件；明确 on-device 可用性，不伪称离线 |
 | location | getCurrent、watch、clearWatch | 前台、精度/超时/最大缓存年龄明确，后台停止 watch |
 | camera | capturePhoto | 系统 Camera Intent + FileProvider，取消清临时文件 |
+| shell QR | CameraX 预览 + ZXing 本地二维码解码 | 属于应用库功能；单独请求 Hermit 相机权限，不把相机能力授权给页面，不联网 |
 | share | text、file | 系统 chooser，回调不能证明对方已读取或发布 |
 | clipboard | write、read | 读取受前台/系统与逐实例限制 |
 | haptics | vibrate、impact | 有限时长，频率限制 |
 | network | status、request | 受控 Native HTTP，普通页面优先标准 fetch |
 
-麦克风、系统文件选择器、拍照等排他资源同时只允许一个操作，其余返回忙碌或进入有界队列。Adapter 不独立建立权限和线程体系，而是使用统一调度、生命周期和错误模型。
+麦克风、系统文件选择器、拍照和扫码等排他资源同时只允许一个操作，其余返回忙碌或进入有界队列。原始录音是 Hermit 本地基础能力，单次默认上限五分钟、绝对上限 30 分钟，停止后原子导入当前实例的逻辑文件；取消、切应用或退出前台时释放录音器并删除临时文件。扬声器既可由 `audio.play` 播放逻辑文件，也可由标准 `<audio>` / Web Audio 播放页面资源，后者继续遵守用户手势策略。
+
+Android 10/11 不调用 API 31 才提供的 on-device SpeechRecognizer；定位在 Android 10 使用单次更新兼容路径。普通语音识别与 TTS 均按已安装系统服务探测，没有服务就报告 `supported=false` 并在调用时返回 `UNSUPPORTED`。稳定 API 名称不会随设备消失，页面依据 `runtime.capabilities` 以及 `audio.features.microphoneRecording/speakerPlayback` 选择能力或降级。Adapter 不独立建立权限和线程体系，而是使用统一调度、生命周期和错误模型。
 
 ### 9.4 Native HTTP
 
@@ -412,6 +455,20 @@ Native network.request 使用独立配置的 OkHttp client：关闭自动重定�
 原生网络请求可有外部副作用，重试默认仅对明确可重试、幂等操作；POST 等不能因页面没收到响应而自动重发。默认返回小 JSON/text，大响应返回当前实例的文件 handle。安装器与 Web App 网络共用代码库，但不能共用授权身份。
 
 ## 10. Developer Deploy
+
+### 10.0 智能体开发模式（1.2 新增，以用户最新确认的单密码模型为准）
+
+在 Store 的“开发”Tab 中显式开启局域网 HTTP 服务，默认端口 8766。入口显示基址、MCP 地址和一个随机六位数字密码。密码首次生成后保存在宿主私有偏好，应用升级/服务重启不变；“修改密码”重新生成不同值并立即生效。每个 HTTP 请求发送 `Authorization: Bearer <password>`，只接受当前唯一密码；多台电脑可共享，不设配对、客户端名单、独立令牌或应用白名单。只能全局改密撤销旧访问，不能单独撤销某一台电脑。
+
+标准 MCP Streamable HTTP（无状态 JSON 响应，无 SSE）提供工具、资源和提示词发现。根地址和 `/.well-known/hermit-agent` 是接入入口，`/skills/hermit-device/SKILL.md` 和 MCP guide/resource 提供随 APK 同步更新的实时指导。客户端的 MCP 注册和 Skill 安装必须由客户端执行；本地 Skill 只保留动态拉取规则，不固定功能清单或保存密码。HTTP/stdio Python 标准库助手兼容不方便直接注册 HTTP MCP 的客户端，不增加页面框架或构建依赖。
+
+暴露能力限于现有全部应用的元信息、代码文件、版本、新建本地页面、快照更新、打开/刷新及代码回滚，不开放任意 Android shell、运行时 JS 执行、业务数据库、Cookie 或系统权限强授。增量补丁和 ZIP 发布共用 InstallCoordinator 的 staging/校验/CAS/激活事务；代码提交和排队 UI 动作重新校验密码。改密先完成则旧请求不能提交，已提交的事务不撤销。多电脑身份不限，但并发更新仍受 expectedReleaseId 冲突保护与有界写入并发限制。
+
+服务仅在 Hermit 前台存活（其中的 WebApp 也算前台），保持亮屏；后台/停止/进程退出/空闲 30 分钟停服，密码不失效。采用 Host/Origin 防护、错误尝试限速、请求大小限制和有界线程池。六位密码只有一百万种组合，HTTP 也不加密，因此明确仅用于可信局域网，不做公网安全承诺。旧端口 8765 的单应用 ADB/TLS 模式保留兼容，不与此服务混用凭据。完整交付与验收见 `plans/hermitapp-agent-development-plan.md`。
+
+两个手机开发入口互斥：开启智能体模式即停止单应用部署，开启旧部署即停止智能体模式；修改智能体密码也停止旧部署监听，避免遗留 token 绕过当前密码。导出备份和替换应用数据期间停止智能体服务。
+
+### 10.1 原单应用 Deploy（兼容路径，以下 token/TLS 设置仅适用于 8765）
 
 Developer Deploy 是“更新已有本地实例”的窄接口，不是远程 shell 或管理员接口。用户先在应用库创建/选择实例，开启短期开发会话并明确是否部署后自动重开；外部工具只需 appId，无需知道手机私有目录。
 
@@ -438,11 +495,11 @@ token 至少 256 bit 熵，只存内存、单目标、空闲 15 分钟失效；�
 # 以下为将来产品接口示例；token 从本地受限配置读取，不放入项目或日志。
 adb forward tcp:8765 tcp:8765
 curl --config "$HERMIT_CURL_CONFIG" \
-  --request PUT --upload-file dist.zip \
+  --request PUT --upload-file page.zip \
   --header "Content-Type: application/zip" \
   --header "Idempotency-Key: dev-build-104" \
   --header "X-Hermit-Expected-Release: release-103" \
-  --header "X-Hermit-Content-SHA256: <dist.zip 的实际 SHA-256>" \
+  --header "X-Hermit-Content-SHA256: <page.zip 的实际 SHA-256>" \
   http://127.0.0.1:8765/v1/apps/<appId>/release
 ```
 
@@ -509,7 +566,7 @@ UI 线程只负责 WebView、系统 UI 和轻量消息验证；协程调度器�
 
 ## 13. 扩展方式与质量合同
 
-扩展只沿三条边界进行：SourceAdapter 增加输入来源；CapabilityDescriptor + Adapter 增加手机能力；Artifact materialize 增加传输策略。它们共享实例、授权、Operation、资源限制和诊断，不新增并行身份系统。原生扩展必须随签名 APK 发布，页面包不加载 dex、so 或任意反射类。
+扩展只沿三条边界进行：SourceAdapter 增加输入来源；CapabilityDescriptor + Adapter 增加手机能力；Artifact materialize 增加传输策略。它们共享实例、授权、Operation、资源限制和诊断，不新增并行身份系统。原生扩展必须随签名 APK 发布，页面包不加载 dex、so 或任意反射类。任何新核心能力先证明在无 GMS、无海外网络和离线状态下能进入可用或明确降级终态；不能把“等待服务下载”当作本地能力。
 
 新增云端账号、后台任务、多进程或全网络隔离时，需要对应的真实场景和单独架构决策。现阶段的“可扩展”指有稳定合同和替换点，不表示预先构建一个动态插件平台。
 
@@ -521,6 +578,7 @@ UI 线程只负责 WebView、系统 UI 和轻量消息验证；协程调度器�
 | 授权 | 系统 grant 不自动变为全部 Web App 的敏感 grant |
 | 数据 | 更新代码不清理业务数据；回滚代码不谎称回滚数据 |
 | 隔离 | 不支持 Web Profile 隔离时不提供共享回退运行 |
+| 国内可用性 | 核心链路不依赖 GMS、海外 CDN/账号/接口或运行时模块下载；海外来源仅可选 |
 | 结果 | 每个有效调用有终态；提交成功与页面显示成功分别记录 |
 | 恢复 | 失败可诊断、可重试；不以清空数据伪造恢复成功 |
 | 交付 | APK、签名、测试、设备和限制有可核验记录 |
@@ -535,7 +593,7 @@ v1 用户界面以中文为主，文本资源集中可本地化；空状态、�
 | --- | --- | --- |
 | 各来源与 sourceType 混成多套流程 | 两种运行形态 + 一个本地安装事务 | 来源可扩展；GitHub 首版 archive 会下载非目标内容 |
 | Java/少依赖被当成不可改合同 | Kotlin 协程 + 适量成熟库 | 减少手工状态与网络代码；增加明确锁定的依赖 |
-| Web Profile 不支持就共享运行 | Runtime feature 硬门槛 | 隔离语义一致；牺牲部分旧 provider 兼容 |
+| Web Profile 或新 Bridge feature 缺失 | 三级 Runtime 自动降级并显式标识 | Android 10/11 旧 provider 可直接运行；兼容模式牺牲网页数据与 Bridge 安全隔离 |
 | Local 与 SW 各管理一套缓存 | Local 禁 SW，网关管理离线代码 | 更新可预测；SW 专用应用须适配 |
 | 任意 SQL 加黑名单 | Native SQLite 支撑受限记录事务 API | 无 SQL 越界入口；首版无通用 SQL/全文查询 |
 | Store 关闭即停止开发服务 | Hermit 前台开发会话 | 连续推送与预览可用；后台仍不接受部署 |

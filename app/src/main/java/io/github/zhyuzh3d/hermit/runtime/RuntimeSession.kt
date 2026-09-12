@@ -8,7 +8,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import java.util.UUID
 
-enum class RuntimeRole { STORE, WEB_APP }
+enum class RuntimeRole { STORE, WEB_APP, SUPPORT }
 
 class RuntimeSession(
     val role: RuntimeRole,

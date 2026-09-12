@@ -100,6 +100,7 @@ class PermissionBroker(
 
     companion object {
         val SPEECH_PERMISSIONS = listOf(Manifest.permission.RECORD_AUDIO)
+        val MICROPHONE_PERMISSIONS = listOf(Manifest.permission.RECORD_AUDIO)
         val COARSE_LOCATION = listOf(Manifest.permission.ACCESS_COARSE_LOCATION)
         val FINE_LOCATION = listOf(Manifest.permission.ACCESS_COARSE_LOCATION, Manifest.permission.ACCESS_FINE_LOCATION)
     }

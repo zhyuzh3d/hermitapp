@@ -2,7 +2,7 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-VERSION=${1:-1.0.0}
+VERSION=${1:-1.7.0}
 OUT=$ROOT/artifacts/v$VERSION
 SDK_DIR=${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}
 export JAVA_HOME=${JAVA_HOME:-/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home}
@@ -33,6 +33,7 @@ mkdir -p "$OUT"
 cp "$RELEASE_SOURCE" "$OUT/hermit-v$VERSION-release.apk"
 cp "$DEBUG_SOURCE" "$OUT/hermit-v$VERSION-debug.apk"
 cp "$ROOT/app/src/main/assets/third-party-notices.txt" "$OUT/dependency-licenses.txt"
+cp "$ROOT/app/src/main/assets/shared/fontawesome/LICENSE.txt" "$OUT/fontawesome-license.txt"
 cp "$ROOT/docs/validation/validation-report.md" "$OUT/validation-report.md"
 cp "$ROOT/docs/validation/known-limitations.md" "$OUT/known-limitations.md"
 
@@ -59,7 +60,7 @@ const manifest = {
   applicationId: 'io.github.zhyuzh3d.hermit',
   versionName: e.VERSION,
   versionCode: Number(e.VERSION_CODE),
-  sdk: { min: 31, target: 37, compile: 37 },
+  sdk: { min: 29, target: 37, compile: 37 },
   toolchain: { jdk: '17.0.14', gradle: '9.3.1', agp: '9.1.1', buildTools: '37.0.0' },
   signingCertificateSha256: e.CERT_SHA256,
   artifacts: [
@@ -83,6 +84,14 @@ for (const line of lock.split(/\r?\n/)) {
     purl: `pkg:maven/${group}/${name}@${version}`,
   });
 }
+const webPackage = JSON.parse(fs.readFileSync(path.join(e.ROOT, 'package.json'), 'utf8'));
+const iconVersion = webPackage.dependencies['@fortawesome/fontawesome-free'];
+components.push({
+  type: 'library', group: '@fortawesome', name: 'fontawesome-free', version: iconVersion,
+  'bom-ref': `pkg:npm/%40fortawesome/fontawesome-free@${iconVersion}`,
+  purl: `pkg:npm/%40fortawesome/fontawesome-free@${iconVersion}`,
+  licenses: [{ license: { id: 'CC-BY-4.0' } }, { license: { id: 'OFL-1.1' } }, { license: { id: 'MIT' } }],
+});
 components.sort((a, b) => a['bom-ref'].localeCompare(b['bom-ref']));
 const sbom = {
   bomFormat: 'CycloneDX', specVersion: '1.5', version: 1,
@@ -98,7 +107,7 @@ NODE
 
 (
   cd "$OUT"
-  shasum -a 256 "hermit-v$VERSION-release.apk" "hermit-v$VERSION-debug.apk" release-manifest.json sbom.json dependency-licenses.txt validation-report.md known-limitations.md > SHA256SUMS
+  shasum -a 256 "hermit-v$VERSION-release.apk" "hermit-v$VERSION-debug.apk" release-manifest.json sbom.json dependency-licenses.txt fontawesome-license.txt validation-report.md known-limitations.md > SHA256SUMS
 )
 
 echo "Packaged $OUT"

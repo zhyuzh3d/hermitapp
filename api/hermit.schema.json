@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://hermit.invalid/schema/hermit-v1.json",
-  "title": "Hermit local application manifest",
+  "title": "Hermit happ package manifest",
   "type": "object",
   "additionalProperties": false,
   "required": ["schema"],

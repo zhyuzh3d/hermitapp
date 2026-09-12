@@ -1,10 +1,12 @@
 # HermitApp v1 可执行开发计划
 
-版本：1.1 · 日期：2026-09-11
-对应设计：[产品与技术设计 v1.0.0](../docs/hermitapp-product-technical-design.md)
+版本：1.2 · 日期：2026-09-11
+对应设计：[产品与技术设计 v1.1.0](../docs/hermitapp-product-technical-design.md)
 当前状态：计划已进入执行；逐阶段实证状态见 [v1 执行记录](hermitapp-v1-execution-log.md)，不能用本计划中的目标文字替代验证结果。
 
 ## 1. 执行目标与完成定义
+
+持续执行的关键原则：WebApp、内置应用库、官方示例和主要验收夹具使用纯原生 HTML + JavaScript + CSS，源文件直接运行，不要求前端构建。不得增加 React/Vue 等框架或 Vite/Webpack 等工具的额外支持、脚手架、插件、专属 HMR/路由/构建适配。已生成的第三方静态产物仍可按通用规则添加；不因来源使用框架而拒绝。Node 仅服务宿主维护与检查，.d.ts 仅服务编辑器提示，均不是 WebApp 作者的前提。详见 [关键指导](../AGENTS.md) 与 [作者指南](../docs/webapp-authoring.md)。本原则覆盖后续全部阶段与历史计划中含糊的“Web 构建”措辞。
 
 本计划交付一个可日常使用的 Android 页面应用工作台，release applicationId 为 `io.github.zhyuzh3d.hermit`。用户能添加在线地址或本地副本、固定桌面入口、使用受控原生能力、持续推送新版本、备份恢复业务数据，并在升级 Hermit 后继续使用原实例。
 
@@ -19,7 +21,7 @@
 | 工作区 | 仅有设计文档，未建立 Git 仓库，没有 Android 源码、Wrapper 或测试 | S0 建工程与版本管理；先保留现有文档 |
 | JDK | 系统默认 java 找不到 runtime；`/opt/homebrew/opt/openjdk@17/bin/java` 与 javac 可运行，17.0.14 | 项目脚本显式选 JDK 17，不修改全局系统默认值 |
 | Android 工具 | PATH 未找到 adb、sdkmanager、emulator、gradle；常规 SDK 路径未发现 SDK | 安装项目所需 command-line tools、platform、Build Tools 和测试工具 |
-| Node | Node 22.22.0、npm 10.9.4 可用 | 锁定 Store/SDK 构建与契约检查依赖 |
+| Node | Node 22.22.0、npm 10.9.4 可用 | 用于宿主仓库契约检查与资源维护；不编译 Store/SDK，不要求页面作者安装 |
 | 设备/AVD | 因无可用 adb/emulator 尚未检查，不能据此认定没有设备 | SDK 就绪后读取实际设备/AVD清单 |
 | 签名与 APK | 尚未检查正式密钥，未构建任何 APK | S0 规划保管位置，S7 固定正式升级链 |
 
@@ -27,7 +29,7 @@
 
 ### 1.2 范围基线与变化
 
-所有 v1 功能以设计 v1.0.0 为准。相较旧稿，采用 Kotlin 协程、统一本地版本事务、结构化 Native 数据服务和 Runtime feature 门槛；扫码、回收站、任意 SQL、多 Bridge Origin、实例自定义图标和后台能力不进入首发验收。这些是已写入设计的收敛决策，不是临近交付时删功能。
+所有 v1 功能以设计文档当前版本为准。相较旧稿，采用 Kotlin 协程、统一本地版本事务、结构化 Native 数据服务和 Runtime feature 分级；扫码已经作为应用库本地能力进入当前版本，回收站、任意 SQL、多 Bridge Origin、实例自定义图标和后台能力不进入首发验收。这些是已写入设计的收敛决策，不是临近交付时删功能。
 
 四个必须完整通过的用户任务为：
 
@@ -83,7 +85,7 @@ S3、S4 在 S2 主合同稳定后可并行；S5 的来源适配器可提前开�
 | S0-01 | 复核目录，保留旧稿归档；建立 Git、忽略规则和初始目录 | 设计/计划可追踪；密钥、local.properties、SDK、临时导出不进 Git |
 | S0-02 | 配置 JDK 17，安装 Android CLI/SDK，生成带分发摘要的 Wrapper | AGP 9.1.1 + Gradle 9.3.1 + compile/target 37 实际构建成功 |
 | S0-03 | 创建单 Android 模块、debug 后缀、最小原生 Activity/恢复页 | debug 可安装；release 身份正确；没有混入假 Runtime 实现 |
-| S0-04 | 锁定 AndroidX WebKit 1.17.0、Activity、协程、JSON、OkHttp 和 Web 构建依赖 | 精确版本、锁文件、校验元数据、许可证清单；无动态版本 |
+| S0-04 | 锁定 AndroidX WebKit 1.17.0、Activity、协程、JSON、OkHttp 和离线 Web 资源 | 精确版本、锁文件、校验元数据、许可证清单；无动态版本或前端框架/打包器 |
 | S0-05 | 建立 schema/API 合同、测试 fixtures 与基础脚本 | 公共/host/deploy 三种调用者权限分开；设计引用可解析 |
 | S0-06 | 发现实际 adb 设备、AVD、CPU架构、WebView provider/features | `docs/validation/environment.md`，不在公共报告暴露设备序列号 |
 | S0-07 | 设置 CI 本地等价命令和验证报告目录 | JVM/TS/lint 流程可跑；未配置外部 CI 账户也可本地执行 |
@@ -99,7 +101,7 @@ S0 必须先输出这些契约，随后实现可以增补字段但不能各自�
 | `api/capabilities.json` | descriptor 列表、角色、权限表达式、资源范围、生命周期和配额 |
 | `api/deploy.openapi.yaml` | 窄部署路由、认证、摘要、幂等、expected release 和状态查询 |
 | `api/backup.schema.json` | 可恢复数据、逻辑文件 ID、摘要、排除项和格式版本 |
-| `sdk/src/` + `sdk/hermit-api.d.ts` | 页面接口与类型，构建后校验与 Native 描述一致 |
+| `sdk/src/` + `sdk/hermit-api.d.ts` | 原生 JS 页面接口及可选编辑器类型，直接校验与 Native 描述一致，无转译 |
 
 OpenAPI 的 YAML 只作开发文档，不给 APK 引入 YAML runtime。普通包版本与协议版本分开。schema 是后续构建交付物，本次计划不伪造已经存在的文件。
 
@@ -117,7 +119,7 @@ S0 门禁：在干净工作目录执行受控构建，产生可安装 debug APK�
 | S1-04 | 最小应用库、在线解析、添加/编辑、桌面图标与恢复页 | U1 的添加和启动路径贯通，拒绝固定图标不丢实例 |
 | S1-05 | 本地网关及 SW 抑制技术切片 | HTML/ESM/WASM/URL Worker/Blob Worker 可加载；SW 各种注册失败 |
 | S1-06 | Web 标准敏感入口统一拒绝；最小 LAN 系统授权 Broker 真实实现 | 空授权设备首次打开 LAN 可请求、拒绝与恢复；未知 Web 资源拒绝 |
-| S1-07 | Profile 清理与不兼容恢复 | loaded Profile 不被错误同步删除；新进程先处理清理任务 |
+| S1-07 | Profile 清理、三级兼容与不可用恢复 | loaded Profile 不被错误同步删除；缺少 Profile/Bridge feature 时自动降级并标识；provider 不可创建才进入恢复页 |
 | S1-08 | 最小性能与生命周期基准 | 本地首屏/Bridge p50/p95、50 次切换资源趋势，记录设备条件 |
 
 架构原型必须得到下列明确结论：
@@ -157,7 +159,7 @@ S2 门禁：本地导入→桌面启动→写数据→重启→更新→读回�
 | --- | --- | --- |
 | S3-01 | PermissionBroker、系统观测、一次/持久/拒绝授权与设置 UI | A 获系统权限后 B 仍需自己的敏感 grant；系统撤销正确传播 |
 | S3-02 | 条件权限与 Activity Result 协调 | coarse 可用、fine 拒绝；旋转/切应用期间结果不授予新页面 |
-| S3-03 | TTS、语音识别及声音/服务探测 | 首次初始化、无服务、引擎断连、部分/最终结果、取消均有终态 |
+| S3-03 | 原始录音/播放、TTS、语音识别及声音/服务探测 | 麦克风不依赖识别服务；单活跃、时限、后台释放、文件持久化、无服务、引擎断连、部分/最终结果和取消均有终态 |
 | S3-04 | 前台定位、系统拍照、分享、剪贴板、震动 | 后台采集停止；拍照/选择可取消；分享文件离开 Hermit 后可读 |
 | S3-05 | Native HTTP、目标授权、DNS/redirect/凭据边界 | 无默认目标；拒绝 SSRF/重绑定；跨站不泄漏凭据；非幂等请求不自动重试 |
 | S3-06 | CapabilityDescriptor → SDK 类型/清单与一致性测试 | 新 Adapter 不能漏掉权限、超时、取消、限额或错误合同 |
@@ -216,13 +218,14 @@ S5 门禁：U4 的备份恢复部分通过；逐字段比较记录与附件摘�
 
 | 环境 | 必须覆盖 | 证据要求 |
 | --- | --- | --- |
-| API 31（Android 12） | 最低安装版本、原生恢复和 Runtime 核心链 | Apple Silicon ARM64 模拟器或实体设备；验证最低受支持系统而不是已淘汰版本 |
+| API 29（Android 10） | 最低安装版本、定位兼容分支、原生恢复和 Runtime 核心链 | ARM64 模拟器或实体设备；验证 API 30 定位与 API 31 语音调用不会在旧系统执行 |
 | 现代 Android + 主流 WebView | 全部自动化和 U1—U4 | 至少一套完整通过的 device/emulator 记录 |
 | API 37 | LAN 三路径的允许/拒绝/撤销、系统行为变化 | 模拟器或真机可覆盖；厂商网络行为另由实机检查 |
-| 不满足必需 feature 的 provider | 阻止 Runtime、原生说明、数据恢复 | 真实旧 provider 或可控 feature 测试替身；替身不能算真实兼容设备 |
-| 主用实体手机 | 桌面固定/更新/禁用、拍照、识别、系统授权、分享、Wi-Fi LAN、升级 | 至少一台实体手机；记录型号与 provider，不以仅模拟器通过替代 |
+| 缺少新 WebKit feature 的 provider | 兼容消息或传统桥接模式；页面主链、风险提示与诊断一致 | 真实旧 provider 必测；替身不能算真实兼容设备 |
+| 国内无 GMS 实体手机 | 本地扫码、应用库、本地包、系统能力、桌面入口、Wi-Fi LAN、升级 | 至少覆盖华为/荣耀类 provider 与另一家国产主流 provider；扫码不得下载模块或访问外网 |
+| 主用实体手机 | 桌面固定/更新/禁用、拍照、识别、系统授权、分享、Wi-Fi LAN、升级 | 至少一台完整 Runtime 可用实体手机；记录型号与 provider，不以仅模拟器通过替代 |
 
-最低 API 的 Runtime 支持须有实际 provider 证据；若 API 31 设备上的 WebView provider 不具备必需能力，Hermit 必须阻止页面 Runtime 并保留原生恢复能力，不能把“APK 可安装”写成全功能支持。测试通过的 WebView 版本、feature 与设备组合形成首发支持矩阵，未验证组合明确列出。
+最低 API 的 Runtime 支持须有实际 provider 证据。API 29 或更高设备缺少新 feature 时，Hermit 必须进入对应兼容模式并继续运行应用库、本地页面和公开 API；不得把兼容通过写成“完整隔离”。测试通过的 WebView 版本、feature、runtimeMode 与设备组合形成支持矩阵，未验证组合明确列出。核心验收在关闭外网、设备无 GMS 的条件下重复本地导入、扫码和局域网开发；GitHub、海外站点或在线语音不可用不得阻断核心功能。
 
 真机不足时继续完成源码、构建和自动测试，尽早请求可用设备；最终门禁保留未完成，不以推测签发“产品级验证通过”。不同厂商/第二类 provider 可扩展验证范围，首发先保证上述可执行矩阵和真实主用手机链路，避免空泛要求未知的“两类 provider”。
 
@@ -241,7 +244,7 @@ S5 门禁：U4 的备份恢复部分通过；逐字段比较记录与附件摘�
 | T09 升级/清理 | 已签名旧版本→新版本、loaded Profile 删除、损坏 Registry | 身份和数据保持；清理可恢复，不删库“修复” |
 | T10 日常体验 | U1—U4、TalkBack、字体放大、键盘、50 次切换 | 主链和宿主交互可用，性能/资源趋势有记录 |
 
-JVM 测试负责纯解析、状态机、路径/限制、权限决策和故障模型；Android instrumentation 测试真实 WebView、SQLite、生命周期与系统入口；TypeScript 测试 SDK 编解码、超时、取消和 UI 状态。MockWebServer/DNS 测试替身只作为测试依赖。真实授权 UI、Launcher、相机和语音还需实体机验证。
+JVM 测试负责纯解析、状态机、路径/限制、权限决策和故障模型；Android instrumentation 测试真实 WebView、SQLite、生命周期与系统入口；原生 JavaScript 测试 SDK 编解码、超时、取消和 UI 状态，不引入 TypeScript 编译步骤。MockWebServer/DNS 测试替身只作为测试依赖。真实授权 UI、Launcher、相机和语音还需实体机验证。
 
 上述测试已经在实现阶段落成；每次发布以执行记录和交付验证报告中的实际次数、环境与退出状态为准，计划表本身不构成通过证据。
 
@@ -310,7 +313,7 @@ release 脚本读取仓库外签名配置，调用 assembleRelease、apksigner v
 
 技术风险通过原型和测试解决，不默认交给用户做架构选择。新增依赖、调整目录、补错误码、修生命周期等是执行者职责。需要用户提供的条件主要是无法替代的实体设备接入、已有正式签名材料，或新增的外部分发目标；常规阶段不暂停。
 
-遇到问题按影响处理：Bridge/权限越权、跨实例数据访问、事务损坏属于阻断后续依赖的缺陷；缺某系统引擎应实现准确降级；第三方网站不兼容应给出复现与适配说明，不随意削弱全局安全设置。部分设备待验证允许继续独立开发，但阻止最终相应支持声明。
+遇到问题按影响处理：隔离模式中的 Bridge/权限越权、Hermit 管理数据跨 appId 访问、事务损坏属于阻断缺陷；兼容模式已知的网页 Profile/iframe 弱隔离须明确标识而非伪装修复；缺某系统引擎应实现准确降级。第三方网站不兼容应给出复现与适配说明，仅削弱确实阻断旧 provider 的隔离机制，不顺带开放与兼容无关的 file URL、TLS 错误或任意混合内容。部分设备待验证允许继续独立开发，但阻止最终相应支持声明。
 
 正式执行时建立 `plans/hermitapp-v1-execution-log.md`，每个工作包记录状态、代码 commit、测试命令、报告路径、失败原因及下一动作；状态只用未开始/进行中/待外部条件/已完成。对失败结论与未运行测试必须保留，不为好看的完成率改写历史。
 

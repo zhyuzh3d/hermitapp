@@ -6,6 +6,7 @@ import android.location.Location
 import android.location.LocationListener
 import android.location.LocationManager
 import android.os.CancellationSignal
+import android.os.Build
 import android.os.Looper
 import androidx.core.content.ContextCompat
 import io.github.zhyuzh3d.hermit.model.ErrorCodes
@@ -35,12 +36,24 @@ class LocationController(context: Context) {
         return try {
             withTimeout(timeout) {
                 suspendCancellableCoroutine { continuation ->
-                    val signal = CancellationSignal()
-                    continuation.invokeOnCancellation { signal.cancel() }
-                    manager.getCurrentLocation(provider, signal, ContextCompat.getMainExecutor(appContext)) { location ->
-                        if (!continuation.isActive) return@getCurrentLocation
-                        if (location == null) continuation.resumeWithException(HermitException(ErrorCodes.TIMEOUT, "系统没有返回位置", true))
-                        else continuation.resume(location.json(false))
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                        val signal = CancellationSignal()
+                        continuation.invokeOnCancellation { signal.cancel() }
+                        manager.getCurrentLocation(provider, signal, ContextCompat.getMainExecutor(appContext)) { location ->
+                            if (!continuation.isActive) return@getCurrentLocation
+                            if (location == null) continuation.resumeWithException(HermitException(ErrorCodes.TIMEOUT, "系统没有返回位置", true))
+                            else continuation.resume(location.json(false))
+                        }
+                    } else {
+                        val listener = object : CompatLocationListener() {
+                            override fun onLocationChanged(location: Location) {
+                                manager.removeUpdates(this)
+                                if (continuation.isActive) continuation.resume(location.json(false))
+                            }
+                        }
+                        continuation.invokeOnCancellation { manager.removeUpdates(listener) }
+                        @Suppress("DEPRECATION")
+                        manager.requestSingleUpdate(provider, listener, Looper.getMainLooper())
                     }
                 }
             }
@@ -54,8 +67,10 @@ class LocationController(context: Context) {
         if (watches.size >= MAX_WATCHES) throw HermitException(ErrorCodes.QUOTA, "定位订阅数量已达上限")
         val provider = chooseProvider(params.optBoolean("precise", false))
         val id = UUID.randomUUID().toString()
-        val listener = LocationListener { location ->
-            if (watches.containsKey(id)) emit("location.changed", location.json(false).put("subscriptionId", id))
+        val listener = object : CompatLocationListener() {
+            override fun onLocationChanged(location: Location) {
+                if (watches.containsKey(id)) emit("location.changed", location.json(false).put("subscriptionId", id))
+            }
         }
         watches[id] = listener
         try {
@@ -99,4 +114,11 @@ class LocationController(context: Context) {
         .put("time", time).put("cached", cached)
 
     companion object { private const val MAX_WATCHES = 4 }
+}
+
+private abstract class CompatLocationListener : LocationListener {
+    @Deprecated("Required for Android 10 LocationListener compatibility")
+    override fun onStatusChanged(provider: String?, status: Int, extras: android.os.Bundle?) = Unit
+    override fun onProviderEnabled(provider: String) = Unit
+    override fun onProviderDisabled(provider: String) = Unit
 }

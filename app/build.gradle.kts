@@ -8,10 +8,10 @@ android {
 
     defaultConfig {
         applicationId = "io.github.zhyuzh3d.hermit"
-        minSdk = 31
+        minSdk = 29
         targetSdk = 37
-        versionCode = providers.gradleProperty("hermitVersionCode").orNull?.toInt() ?: 2
-        versionName = providers.gradleProperty("hermitVersionName").orNull ?: "1.0.0"
+        versionCode = providers.gradleProperty("hermitVersionCode").orNull?.toInt() ?: 12
+        versionName = providers.gradleProperty("hermitVersionName").orNull ?: "1.7.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
@@ -77,14 +77,35 @@ dependencyLocking {
     lockAllConfigurations()
 }
 
+val verifyAgentGuidance by tasks.registering {
+    val pairs = listOf(
+        rootProject.file("docs/webapp-authoring.md") to file("src/main/assets/agent/webapp-authoring.md"),
+        rootProject.file("sdk/hermit-api.d.ts") to file("src/main/assets/agent/hermit-api.d.ts"),
+    )
+    inputs.files(pairs.flatMap { listOf(it.first, it.second) })
+    doLast {
+        pairs.forEach { (source, packaged) ->
+            check(packaged.exists() && source.readBytes().contentEquals(packaged.readBytes())) {
+                "Stale phone guidance: run node tools/sync-agent-assets.mjs"
+            }
+        }
+    }
+}
+tasks.named("preBuild") { dependsOn(verifyAgentGuidance) }
+
 dependencies {
     implementation("androidx.activity:activity-ktx:1.12.2")
+    implementation("androidx.fragment:fragment:1.9.0")
     implementation("androidx.lifecycle:lifecycle-process:2.9.4")
     implementation("androidx.documentfile:documentfile:1.1.0")
     implementation("androidx.webkit:webkit:1.17.0")
+    implementation("androidx.camera:camera-camera2:1.5.3")
+    implementation("androidx.camera:camera-lifecycle:1.5.3")
+    implementation("androidx.camera:camera-view:1.5.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.10.2")
     implementation("com.squareup.okhttp3:okhttp:5.3.0")
     implementation("org.nanohttpd:nanohttpd:2.3.1")
+    implementation("com.google.zxing:core:3.5.4")
 
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.10.2")

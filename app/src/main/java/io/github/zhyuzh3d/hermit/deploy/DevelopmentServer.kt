@@ -4,7 +4,6 @@ import android.content.Context
 import android.util.Base64
 import fi.iki.elonen.NanoHTTPD
 import io.github.zhyuzh3d.hermit.install.InstallCoordinator
-import io.github.zhyuzh3d.hermit.model.DeliveryMode
 import io.github.zhyuzh3d.hermit.model.ErrorCodes
 import io.github.zhyuzh3d.hermit.model.HermitException
 import io.github.zhyuzh3d.hermit.registry.AppRegistry
@@ -65,7 +64,7 @@ class DevelopmentServer(
     fun start(appId: String, mode: String = "adb"): JSONObject {
         val app = registry.getInstance(appId)
             ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "页面应用不存在")
-        if (app.mode != DeliveryMode.LOCAL) throw HermitException(ErrorCodes.CONFLICT, "只有本地副本可以使用开发部署")
+        if (app.activeReleaseId == null) throw HermitException(ErrorCodes.CONFLICT, "只有已安装本地代码的 happ 可以使用开发部署")
         if (mode !in setOf("adb", "lan")) throw HermitException(ErrorCodes.INVALID_ARGUMENT, "开发连接模式无效")
         stop("Replaced")
         val tokenBytes = ByteArray(32).also(SecureRandom()::nextBytes)
@@ -230,11 +229,11 @@ private class DeployHttpServer(
     }
 }
 
-private class BoundedAsyncRunner : NanoHTTPD.AsyncRunner {
+internal class BoundedAsyncRunner(coreThreads: Int = 1) : NanoHTTPD.AsyncRunner {
     private val sequence = AtomicInteger()
     private val running = ConcurrentHashMap.newKeySet<NanoHTTPD.ClientHandler>()
     private val executor = ThreadPoolExecutor(
-        1,
+        coreThreads,
         4,
         30,
         TimeUnit.SECONDS,
@@ -305,7 +304,7 @@ private data class TlsIdentity(val alias: String, val socketFactory: SSLServerSo
     }
 }
 
-private class FixedLengthInputStream(private val source: InputStream, private var remaining: Long) : InputStream() {
+internal class FixedLengthInputStream(private val source: InputStream, private var remaining: Long) : InputStream() {
     override fun read(): Int {
         if (remaining <= 0) return -1
         val value = source.read()

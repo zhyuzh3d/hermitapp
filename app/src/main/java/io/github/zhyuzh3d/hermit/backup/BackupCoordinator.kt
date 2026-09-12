@@ -5,8 +5,9 @@ import android.net.Uri
 import io.github.zhyuzh3d.hermit.data.FileStore
 import io.github.zhyuzh3d.hermit.data.RecordsStore
 import io.github.zhyuzh3d.hermit.install.InstallCoordinator
-import io.github.zhyuzh3d.hermit.model.DeliveryMode
 import io.github.zhyuzh3d.hermit.model.ErrorCodes
+import io.github.zhyuzh3d.hermit.model.HappRuntimeMode
+import io.github.zhyuzh3d.hermit.model.HappSource
 import io.github.zhyuzh3d.hermit.model.HermitException
 import io.github.zhyuzh3d.hermit.model.WebAppInstance
 import io.github.zhyuzh3d.hermit.registry.AppRegistry
@@ -34,8 +35,7 @@ class BackupCoordinator(
 ) {
     suspend fun export(appId: String, destination: Uri): JSONObject = withContext(Dispatchers.IO) {
         val app = registry.getInstance(appId) ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "页面应用不存在")
-        val releaseId = if (app.mode == DeliveryMode.LOCAL) app.activeReleaseId
-            ?: throw HermitException(ErrorCodes.STORAGE, "活动代码版本不存在") else null
+        val releaseId = app.activeReleaseId
         releaseId?.let(installer::acquireRelease)
         val entries = JSONObject()
         var total = 0L
@@ -73,7 +73,7 @@ class BackupCoordinator(
                     }
 
                     var codeFiles = 0
-                    if (app.mode == DeliveryMode.LOCAL) {
+                    if (app.activeReleaseId != null) {
                         val release = app.activeReleaseId?.let(registry::getRelease)
                             ?: throw HermitException(ErrorCodes.STORAGE, "活动代码版本不存在")
                         val root = installer.releaseWebRoot(release).canonicalFile
@@ -86,9 +86,11 @@ class BackupCoordinator(
                             codeFiles++
                         }
                     }
-                    val manifest = JSONObject().put("schema", 1).put("createdAt", System.currentTimeMillis())
-                        .put("app", JSONObject().put("name", app.name).put("mode", app.mode.name.lowercase())
-                            .put("startUrl", app.startUrl).put("sourceAdapter", app.sourceAdapter)
+                    val manifest = JSONObject().put("schema", 2).put("createdAt", System.currentTimeMillis())
+                        .put("app", JSONObject().put("name", app.name).put("source", app.source.name.lowercase())
+                            .put("runtimeMode", app.runtimeMode.name.lowercase())
+                            .put("liveUrl", app.liveUrl ?: JSONObject.NULL)
+                            .put("sourceAdapter", app.sourceAdapter)
                             .put("sourceSpec", JSONObject(app.sourceSpec)))
                         .put("recordCount", recordCount).put("fileCount", stored.size).put("codeFileCount", codeFiles)
                         .put("entries", entries)
@@ -115,17 +117,31 @@ class BackupCoordinator(
                 val manifestEntry = zip.getEntry(MANIFEST) ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "不是 Hermit 备份")
                 if (manifestEntry.size !in 1..MAX_MANIFEST_BYTES) throw HermitException(ErrorCodes.QUOTA, "备份清单大小异常")
                 val manifest = zip.getInputStream(manifestEntry).use { JSONObject(it.reader().readText()) }
-                if (manifest.optInt("schema") != 1) throw HermitException(ErrorCodes.UNSUPPORTED, "不支持的备份版本")
+                val schema = manifest.optInt("schema")
+                if (schema !in setOf(1, 2)) throw HermitException(ErrorCodes.UNSUPPORTED, "不支持的备份版本")
                 validateArchive(zip, manifest.getJSONObject("entries"))
                 val appJson = manifest.getJSONObject("app")
                 val name = appJson.getString("name").trim().take(80).ifBlank { "恢复的应用" }
-                val mode = appJson.getString("mode")
-                val restored = if (mode == "local") {
+                val adapter = appJson.getString("sourceAdapter")
+                val source = if (schema == 2) when (appJson.getString("source")) {
+                    "local" -> HappSource.LOCAL
+                    "online" -> HappSource.ONLINE
+                    else -> throw HermitException(ErrorCodes.INVALID_ARGUMENT, "备份 happ 来源无效")
+                } else if (appJson.getString("mode") == "online" || adapter in setOf("online", "online-manifest", "https-package", "github")) {
+                    HappSource.ONLINE
+                } else HappSource.LOCAL
+                val runtimeMode = if (schema == 2) when (appJson.getString("runtimeMode")) {
+                    "local" -> HappRuntimeMode.LOCAL
+                    "live" -> HappRuntimeMode.LIVE
+                    else -> throw HermitException(ErrorCodes.INVALID_ARGUMENT, "备份 happ 运行方式无效")
+                } else if (appJson.getString("mode") == "online") HappRuntimeMode.LIVE else HappRuntimeMode.LOCAL
+                val liveUrl = if (schema == 2) appJson.optString("liveUrl").takeIf { it.isNotBlank() && it != "null" }
+                    else appJson.optString("startUrl").takeIf { appJson.getString("mode") == "online" }
+                val codeEntries = zip.entries().asSequence().filter { !it.isDirectory && it.name.startsWith("code/") }.toList()
+                val restored = if (codeEntries.isNotEmpty()) {
                     val codeZip = File(context.cacheDir, "restore-code-${UUID.randomUUID()}.zip")
                     try {
                         ZipOutputStream(FileOutputStream(codeZip)).use { out ->
-                            val codeEntries = zip.entries().asSequence().filter { !it.isDirectory && it.name.startsWith("code/") }.toList()
-                            if (codeEntries.isEmpty()) throw HermitException(ErrorCodes.INVALID_ARGUMENT, "本地应用备份缺少代码")
                             codeEntries.forEach { entry ->
                                 val relative = entry.name.removePrefix("code/")
                                 validatePath(relative)
@@ -134,12 +150,14 @@ class BackupCoordinator(
                                 out.closeEntry()
                             }
                         }
-                        FileInputStream(codeZip).use { installer.installZip(it, name, provenance = "backup") }.appId
+                        FileInputStream(codeZip).use {
+                            installer.installZip(it, name, provenance = "backup", source = source, liveUrl = liveUrl)
+                        }.appId
                     } finally { codeZip.delete() }
-                } else if (mode == "online") {
-                    val url = validateOnlineUrl(appJson.getString("startUrl"))
-                    WebAppInstance.newOnline(name, url).also(registry::insertInstance).appId
-                } else throw HermitException(ErrorCodes.INVALID_ARGUMENT, "备份应用模式无效")
+                } else if (source == HappSource.ONLINE && liveUrl != null) {
+                    val url = validateOnlineUrl(liveUrl)
+                    WebAppInstance.newOnlineLive(name, url).also(registry::insertInstance).appId
+                } else throw HermitException(ErrorCodes.INVALID_ARGUMENT, "备份缺少可运行的 happ 代码或线上地址")
                 appId = restored
                 val app = registry.getInstance(restored) ?: throw HermitException(ErrorCodes.STORAGE, "恢复实例创建失败")
                 zip.getEntry("records.jsonl")?.let { entry -> zip.getInputStream(entry).use { records.importJsonLines(restored, app.activeDataGeneration, it) } }
@@ -157,8 +175,11 @@ class BackupCoordinator(
                         throw HermitException(ErrorCodes.INVALID_ARGUMENT, "备份附件摘要不一致：$id")
                     }
                 }
-                registry.updateInstance(restored, name, null, null, null)
-                registry.updateSource(restored, appJson.getString("sourceAdapter"), appJson.getJSONObject("sourceSpec").toString())
+                registry.updateInstance(restored, name, null, null)
+                registry.updateSource(restored, adapter, appJson.getJSONObject("sourceSpec").toString())
+                if (runtimeMode == HappRuntimeMode.LIVE && app.runtimeMode != HappRuntimeMode.LIVE) {
+                    registry.setRuntimeMode(restored, HappRuntimeMode.LIVE)
+                }
                 JSONObject().put("restored", true).put("appId", restored).put("name", name)
             }
         } catch (error: Throwable) {
@@ -185,7 +206,7 @@ class BackupCoordinator(
                     ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "不是 Hermit 备份")
                 if (manifestEntry.size !in 1..MAX_MANIFEST_BYTES) throw HermitException(ErrorCodes.QUOTA, "备份清单大小异常")
                 val manifest = zip.getInputStream(manifestEntry).use { JSONObject(it.reader().readText()) }
-                if (manifest.optInt("schema") != 1) throw HermitException(ErrorCodes.UNSUPPORTED, "不支持的备份版本")
+                if (manifest.optInt("schema") !in setOf(1, 2)) throw HermitException(ErrorCodes.UNSUPPORTED, "不支持的备份版本")
                 validateArchive(zip, manifest.getJSONObject("entries"))
                 zip.getEntry("records.jsonl")?.let { entry ->
                     zip.getInputStream(entry).use { records.importJsonLines(targetAppId, nextGeneration, it) }

@@ -4,8 +4,9 @@ import android.content.Context
 import android.net.Uri
 import androidx.documentfile.provider.DocumentFile
 import io.github.zhyuzh3d.hermit.model.CodeRelease
-import io.github.zhyuzh3d.hermit.model.DeliveryMode
 import io.github.zhyuzh3d.hermit.model.ErrorCodes
+import io.github.zhyuzh3d.hermit.model.HappRuntimeMode
+import io.github.zhyuzh3d.hermit.model.HappSource
 import io.github.zhyuzh3d.hermit.model.HermitException
 import io.github.zhyuzh3d.hermit.model.WebAppInstance
 import io.github.zhyuzh3d.hermit.registry.AppRegistry
@@ -52,14 +53,15 @@ class InstallCoordinator(
         expectedReleaseId: String? = null,
         declaredSha256: String? = null,
         sourceRevision: String? = null,
+        fallbackName: String? = null,
+        source: HappSource = HappSource.LOCAL,
+        liveUrl: String? = null,
+        commitGuard: (() -> Unit) -> Unit = { it() },
     ): InstallResult = withContext(Dispatchers.IO) {
         val appId = existingAppId ?: UUID.randomUUID().toString()
         locks.computeIfAbsent(appId) { Mutex() }.withLock {
             val instance = existingAppId?.let {
                 registry.getInstance(it) ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "页面应用不存在")
-            }
-            if (instance != null && instance.mode != DeliveryMode.LOCAL) {
-                throw HermitException(ErrorCodes.CONFLICT, "在线应用不能直接接收本地版本")
             }
             val incomingDir = File(appsRoot, "$appId/incoming").apply { mkdirs() }
             val zipFile = File(incomingDir, "${UUID.randomUUID()}.zip")
@@ -135,7 +137,7 @@ class InstallCoordinator(
                     if (duplicate != null) {
                         staging.deleteRecursively()
                         if (duplicate.releaseId != currentInstance?.activeReleaseId) {
-                            registry.activateRelease(appId, duplicate.releaseId, currentInstance?.activeReleaseId)
+                            commitGuard { registry.activateRelease(appId, duplicate.releaseId, currentInstance?.activeReleaseId) }
                         }
                         registry.updateOperation(operationId, "succeeded", duplicate.releaseId)
                         pruneReleases(appId, duplicate.releaseId)
@@ -163,21 +165,23 @@ class InstallCoordinator(
                 )
                 registry.updateOperation(operationId, "committing")
                 if (instance == null) {
-                    val name = metadata?.optString("name")?.takeIf { it.isNotBlank() } ?: suggestedName?.takeIf { it.isNotBlank() } ?: "本地应用"
+                    val name = suggestedName?.trim()?.takeIf { it.isNotBlank() }
+                        ?: metadata?.optString("name")?.takeIf { it.isNotBlank() }
+                        ?: fallbackName?.takeIf { it.isNotBlank() } ?: "本地应用"
                     val origin = "https://$appId.apps.hermit.invalid"
                     val app = WebAppInstance(
-                        appId = appId, name = name.take(80), mode = DeliveryMode.LOCAL,
-                        startUrl = "$origin/$entry", primaryOrigin = origin,
+                        appId = appId, name = name.take(80), source = source, runtimeMode = HappRuntimeMode.LOCAL,
+                        startUrl = "$origin/$entry", liveUrl = liveUrl, primaryOrigin = origin,
                         webProfileName = "app-${appId.replace("-", "")}", trustRevision = 1,
                         activeReleaseId = null, activeDataGeneration = UUID.randomUUID().toString(),
                         sourceAdapter = provenance, sourceSpec = JSONObject().put("kind", provenance).toString(),
-                        developerEnabled = false, createdAt = now, updatedAt = now,
+                        developerEnabled = false, favorite = false, iconDataUrl = null, createdAt = now, updatedAt = now,
                     )
-                    registry.insertLocalWithRelease(app, release)
+                    commitGuard { registry.insertLocalWithRelease(app, release) }
                     registryCommitted = true
                 } else {
                     try {
-                        registry.commitRelease(release, currentInstance?.activeReleaseId)
+                        commitGuard { registry.commitRelease(release, currentInstance?.activeReleaseId) }
                         registryCommitted = true
                     } catch (e: Throwable) {
                         destination.deleteRecursively()
