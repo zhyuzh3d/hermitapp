@@ -6,6 +6,10 @@
 
 Hermit 项目包含 Android 宿主 HermitApp 与官网/HermitUI 所在的 HermitWeb。HermitApp 可以加载多个 happ；HermitUI 是默认加载且具有宿主管理权限的官方 happ。每个 happ 实例都有稳定 ID、独立的 Hermit 业务数据、逐应用敏感能力授权和可选本地代码版本。
 
+## 仓库边界
+
+HermitApp 与 HermitWeb 是同级但完全独立的 Git 仓库。本目录只推送到 `git@github.com:zhyuzh3d/hermitapp.git`；HermitWeb 只推送到 `git@github.com:zhyuzh3d/hermitweb.git`。共同父目录不建立 Git 仓库，跨项目修改必须分别提交和推送。具体防误操作规则见 `AGENTS.md`。
+
 “本地 happ / 线上 happ”描述来源，“本地运行 / 线上实时运行”描述当前执行方式，两者不能混用。手机文件或目录导入的是本地 happ 且只能本地运行；URL、HTTPS 包和 GitHub 是线上来源，即使代码已下载到手机仍是线上 happ。添加页面 URL 时会探测同源 `/hermit-install.json`：有有效 ZIP 时默认本地运行，没有时实时运行；同时具备本地代码和页面 URL 的线上 happ 可在管理设置中切换。网页 Cookie 与站点存储继续遵守标准同源规则。
 
 正式包名为 `io.github.zhyuzh3d.hermit`，最低支持 Android 10 / API 29，compileSdk 与 targetSdk 为 37。只要设备存在可创建的系统 WebView，Hermit 就尝试运行页面：优先使用可校验 Origin/主 frame 的 WebMessage 通道，旧 provider 则使用传统 `JavascriptInterface`。两者都使用共享资料空间；传统桥接无法隔离 iframe 调用，界面与诊断会如实显示。
