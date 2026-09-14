@@ -130,6 +130,8 @@ test("launcher uses the compressed Hermit brand icon while notifications keep a 
   const icon = fs.statSync("app/src/main/res/drawable-nodpi/hermit_icon.webp");
   const colors = fs.readFileSync("app/src/main/res/values/colors.xml", "utf8");
   assert.match(foreground, /@drawable\/hermit_icon/);
+  const appManifest = fs.readFileSync("app/src/main/AndroidManifest.xml", "utf8");
+  assert.match(appManifest, /android:icon="@mipmap\/ic_launcher_1102"/);
   assert.doesNotMatch(foreground, /android:inset/);
   assert.match(notifications, /R\.drawable\.ic_notification/);
   assert.match(colors, /name="hermit_icon_background">#000000/);
