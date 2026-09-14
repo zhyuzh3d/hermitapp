@@ -7,7 +7,7 @@
 <body>
 <a class="skip-link" href="#mainContent">跳到主要内容</a>
 <div id="shell">
-<header id="favoriteTopbar" class="topbar"><a id="homeBrand" class="brand" href="#libraryView" aria-label="Hermit 应用库"><span class="brand-mark" aria-hidden="true"><img src="assets/hermit-icon.webp" alt=""></span>hermit<span id="brandDot" class="brand-dot">.</span></a><div id="topbarCopy" class="topbar-copy hidden"><h1 id="topbarTitle">全部应用</h1><p id="topbarDescription">你的页面应用，都在这里。</p></div><div class="topbar-versions"><span>APK <b id="topApkVersion">读取中…</b></span><span>UI <b id="topWebVersion">1.10.0</b></span></div></header>
+<header id="favoriteTopbar" class="topbar"><a id="homeBrand" class="brand" href="#libraryView" aria-label="Hermit 应用库"><span class="brand-mark"><span class="theme-logo" aria-hidden="true"></span></span>hermit<span id="brandDot" class="brand-dot">.</span></a><div id="topbarCopy" class="topbar-copy hidden"><h1 id="topbarTitle">全部应用</h1><p id="topbarDescription">你的页面应用，都在这里。</p></div><div class="topbar-versions"><span>APK <b id="topApkVersion">读取中…</b></span><span>UI <b id="topWebVersion">1.10.1</b></span></div></header>
 <main id="mainContent">
 <section id="libraryView" class="view" aria-label="应用库">
 <div id="browserNotice" class="info-card hidden" role="status"><i class="fa-solid fa-mobile-screen-button" aria-hidden="true"></i><div><strong>在 HermitApp 中，管理你的应用</strong><p>这是 HermitUI 界面。普通浏览器无法读取手机上的应用或调用设备能力。</p><a href="https://hermit.10knet.com/pages/download.html">下载 HermitApp</a><span aria-hidden="true"> · </span><a href="https://hermit.10knet.com/pages/guide.html">阅读使用指南</a></div></div>
@@ -16,7 +16,7 @@
 </div>
 <div id="libraryUnavailable" class="empty glass-panel hidden" role="status"><h2>暂时无法读取应用库</h2><p id="libraryErrorText"></p><button id="retryLibrary" class="primary">重新读取</button></div>
 <div id="loading" class="loading" role="status"><i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i>正在读取应用库…</div>
-<div id="empty" class="empty plain-empty hidden"><div class="empty-art" aria-hidden="true"><span class="mini-tile blue"><i class="fa-solid fa-globe"></i></span><span class="main-tile"><img class="theme-logo" src="assets/hermit-icon.webp" alt=""></span><span class="mini-tile violet"><i class="fa-solid fa-heart"></i></span></div><h2 id="emptyTitle">收藏你的第一个应用</h2><p id="emptyMessage">使用上方方式添加，或点亮已有应用卡片上的爱心。</p><span class="empty-foot"><i class="fa-solid fa-shield-halved"></i>原生数据按应用隔离 · 同源页面数据可共享</span></div>
+<div id="empty" class="empty plain-empty hidden"><div class="empty-art" aria-hidden="true"><span class="mini-tile blue"><i class="fa-solid fa-globe"></i></span><span class="main-tile"><span class="theme-logo"></span></span><span class="mini-tile violet"><i class="fa-solid fa-heart"></i></span></div><h2 id="emptyTitle">收藏你的第一个应用</h2><p id="emptyMessage">使用上方方式添加，或点亮已有应用卡片上的爱心。</p><span class="empty-foot"><i class="fa-solid fa-shield-halved"></i>原生数据按应用隔离 · 同源页面数据可共享</span></div>
 <p id="collectionPrompt" class="collection-prompt">已收藏【0】个HAPP应用</p><div id="apps" class="grid"></div>
 </section>
 <section id="developmentView" class="view hidden" aria-label="开发连接">
@@ -31,7 +31,7 @@
 </section>
 <section id="settingsView" class="view hidden" aria-label="设置">
 <div class="settings-card"><h2>外观</h2><div id="themeChoices" class="segmented" aria-label="主题"><button data-theme-choice="system">跟随系统</button><button data-theme-choice="light">浅色</button><button data-theme-choice="dark">深色</button></div></div>
-<div class="settings-card"><h2>界面</h2><p id="shellVersionSwitch" class="shell-version-text">当前界面版本：1.10.0</p><button id="updateLocalShell" class="primary wide"><i class="fa-solid fa-download accent-lime"></i>更新本地版本</button></div>
+<div class="settings-card"><h2>界面</h2><p id="shellVersionSwitch" class="shell-version-text">当前界面版本：1.10.1</p><button id="updateLocalShell" class="primary wide"><i class="fa-solid fa-download accent-lime"></i>更新本地版本</button></div>
 <div id="voiceSettings" class="settings-card"><h2>系统语音</h2><p class="hint">Hermit 统一适配设备内置语音服务，happ 只调用同一套 TTS 和 ASR 接口。</p>
 <div class="voice-section"><div class="voice-section-head"><strong>文字朗读（TTS）</strong><span id="ttsCapabilityStatus" class="voice-status">正在检测…</span></div>
 <label>朗读引擎<select id="ttsEngine"><option value="system">跟随系统默认</option></select></label>
@@ -48,7 +48,7 @@
 <button id="restoreBackupSettings" class="setting-row"><span class="tool-icon orange"><i class="fa-solid fa-clock-rotate-left"></i></span><span><strong>恢复应用备份</strong><small>从备份创建独立的新应用</small></span><i class="fa-solid fa-chevron-right"></i></button>
 <button id="diagnosticsButton" class="setting-row"><span class="tool-icon blue"><i class="fa-solid fa-stethoscope"></i></span><span><strong>运行诊断</strong><small>检查运行环境并复制报告</small></span><i class="fa-solid fa-chevron-right"></i></button>
 <button id="licensesButton" class="setting-row"><span class="tool-icon green"><i class="fa-solid fa-scale-balanced"></i></span><span><strong>开源许可</strong><small>查看所使用的开源软件与许可证</small></span><i class="fa-solid fa-chevron-right"></i></button></div>
-<div class="settings-card about-card"><div class="about-mark"><img class="theme-logo" src="assets/hermit-icon.webp" alt=""></div><div><h2>智能体时代，我的应用我做主。</h2></div><dl><div><dt>版本</dt><dd id="aboutVersion">读取中…</dd></div><div><dt>作者</dt><dd id="aboutAuthor">10knet·zhyuzh3d</dd></div><div><dt>应用标识</dt><dd id="aboutAppId">io.github.zhyuzh3d.hermit</dd></div></dl><button id="githubButton" class="wide"><i class="fa-brands fa-github"></i>打开 GitHub 仓库</button></div>
+<div class="settings-card about-card"><div class="about-mark"><span class="theme-logo" aria-hidden="true"></span></div><div><h2>智能体时代，我的应用我做主。</h2></div><dl><div><dt>版本</dt><dd id="aboutVersion">读取中…</dd></div><div><dt>作者</dt><dd id="aboutAuthor">10knet·zhyuzh3d</dd></div><div><dt>应用标识</dt><dd id="aboutAppId">io.github.zhyuzh3d.hermit</dd></div></dl><button id="githubButton" class="wide"><i class="fa-brands fa-github"></i>打开 GitHub 仓库</button></div>
 </section>
 <section id="iconsView" class="view hidden" aria-labelledby="iconsTitle">
 <h1 id="iconsTitle" class="sr-only">内置图标</h1><div class="compact-toolbar"><button data-view="settings"><i class="fa-solid fa-arrow-left"></i>返回设置</button></div>
@@ -91,6 +91,7 @@
 <section id="diagnosticsPanel" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="diagnosticsTitle"><div class="modal-card"><div class="panel-head"><div><p class="eyebrow">运行环境</p><h2 id="diagnosticsTitle">运行诊断</h2></div><button data-close="#diagnosticsPanel" class="icon-button" aria-label="关闭诊断"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div><p class="hint">报告不含设备序列号、页面数据、开发令牌或文件内容。</p><pre id="diagnosticsOutput"></pre><button id="copyDiagnostics" class="primary wide"><i class="fa-solid fa-copy accent-lime" aria-hidden="true"></i>复制诊断报告</button></div></section>
 <section id="licensesPanel" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="licensesTitle"><div class="modal-card"><div class="panel-head"><div><p class="eyebrow">开源组件</p><h2 id="licensesTitle">开源许可</h2></div><button data-close="#licensesPanel" class="icon-button" aria-label="关闭许可"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div><pre id="licensesOutput"></pre></div></section>
 <section id="confirmPanel" class="modal confirm-modal hidden" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" aria-describedby="confirmMessage"><div class="modal-card"><span class="tool-icon orange"><i class="fa-solid fa-triangle-exclamation" aria-hidden="true"></i></span><h2 id="confirmTitle">确认操作</h2><p id="confirmMessage"></p><div class="actions"><button id="cancelConfirm">取消</button><button id="acceptConfirm" class="primary">继续</button></div></div></section>
+<section id="hostPromptPanel" class="modal confirm-modal hidden" role="alertdialog" aria-modal="true" aria-labelledby="hostPromptTitle" aria-describedby="hostPromptMessage"><div class="modal-card"><span class="tool-icon blue"><i class="fa-solid fa-circle-info" aria-hidden="true"></i></span><h2 id="hostPromptTitle">确认操作</h2><p id="hostPromptMessage"></p><div id="hostPromptActions" class="host-prompt-actions"></div></div></section>
 <script src="core/runtime.js"></script>
 <script src="platform/host.js"></script>
 <script src="components/ui.js"></script>

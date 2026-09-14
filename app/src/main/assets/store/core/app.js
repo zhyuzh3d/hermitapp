@@ -2,6 +2,7 @@
   "use strict";
   const H = window.HermitShell, { $, state, host } = H;
   H.beforeClose = async selector => {
+    if (selector === "#hostPromptPanel") { await H.ui.cancelHostPrompt(); return false; }
     if (selector !== "#managePanel" || !H.features.manage.isDirty()) return true;
     return H.ui.confirmAction("放弃尚未保存的修改？", "已保存的应用数据不受影响。", "放弃修改", true);
   };

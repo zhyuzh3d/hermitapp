@@ -195,6 +195,50 @@ class PersistenceInstrumentedTest {
         }
     }
 
+    @Test fun onlineEntryClassifiesLivePagesAndInstallDescriptors() = runBlocking {
+        val app = context.applicationContext as HermitApplication
+        val archive = zipOf(mapOf(
+            "index.html" to "<!doctype html><title>Direct package</title>",
+            "hermit.json" to "{\"schema\":1,\"name\":\"Direct package\",\"version\":{\"name\":\"3.0.0\"}}",
+        ))
+        val sha = MessageDigest.getInstance("SHA-256").digest(archive).joinToString("") { "%02x".format(it) }
+        val server = object : fi.iki.elonen.NanoHTTPD("127.0.0.1", 0) {
+            override fun serve(session: IHTTPSession): Response = when (session.uri) {
+                "/direct.zip", "/catalog/direct.zip" -> newFixedLengthResponse(
+                    Response.Status.OK, "application/zip", ByteArrayInputStream(archive), archive.size.toLong()
+                )
+                "/catalog/hermit-install.json" -> newFixedLengthResponse(
+                    Response.Status.OK, "application/json",
+                    "{\"schema\":1,\"package\":\"direct.zip\",\"sha256\":\"$sha\"}",
+                )
+                "/hermit-install.json" -> newFixedLengthResponse(Response.Status.NOT_FOUND, "text/plain", "missing")
+                else -> newFixedLengthResponse(Response.Status.OK, "text/html", "<!doctype html><title>Live page</title>")
+            }
+        }
+        server.start()
+        try {
+            val base = "http://127.0.0.1:${server.listeningPort}"
+            val descriptor = app.remoteInstaller.installOnline("$base/catalog/hermit-install.json", null)
+            createdApps += descriptor.appId
+            val descriptorApp = app.registry.getInstance(descriptor.appId)!!
+            assertEquals("descriptor", descriptor.kind)
+            assertEquals("online-descriptor", descriptorApp.sourceAdapter)
+            assertNotNull(descriptorApp.activeReleaseId)
+            assertEquals("clean", app.devWorkspaces.enter(descriptor.appId).getString("state"))
+
+            val live = app.remoteInstaller.installOnline("$base/page", null)
+            createdApps += live.appId
+            val liveApp = app.registry.getInstance(live.appId)!!
+            assertEquals("live", live.kind)
+            assertEquals(HappRuntimeMode.LIVE, liveApp.runtimeMode)
+            assertEquals(null, liveApp.activeReleaseId)
+            val error = assertThrows(HermitException::class.java) { app.devWorkspaces.enter(live.appId) }
+            assertEquals(ErrorCodes.CONFLICT, error.code)
+        } finally {
+            server.stop()
+        }
+    }
+
     @Test fun systemPermissionObservationsPersistLatestKnownState() {
         val registry = (context.applicationContext as HermitApplication).registry
         val permission = "io.github.zhyuzh3d.hermit.TEST_PERMISSION"

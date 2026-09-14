@@ -21,7 +21,7 @@ test("happ display policy is package-scoped and restored outside the happ", () =
   assert.match(activity, /SOFT_INPUT_ADJUST_NOTHING/);
   assert.match(activity, /SCREEN_ORIENTATION_PORTRAIT/);
   assert.match(activity, /if \(!keyboardOverlaysContent\) types = types or WindowInsetsCompat\.Type\.ime\(\)/);
-  assert.match(activity, /showSupportBrowser\(\)[\s\S]*?applyDisplayPolicy\(null\)/);
+  assert.match(activity, /showSupportBrowser\(\)[\s\S]*?applyDisplayPolicy\(null, forcePortrait = true\)/);
 });
 
 test("bridge keeps the isolated transport and an explicit legacy fallback", () => {
@@ -128,13 +128,29 @@ test("launcher uses the compressed Hermit brand icon while notifications keep a 
   const foreground = fs.readFileSync("app/src/main/res/drawable/ic_launcher_foreground.xml", "utf8");
   const notifications = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/notification/NotificationDispatcher.kt", "utf8");
   const icon = fs.statSync("app/src/main/res/drawable-nodpi/hermit_icon.webp");
-  const darkIcon = fs.statSync("app/src/main/res/drawable-night-nodpi/hermit_icon.webp");
+  const colors = fs.readFileSync("app/src/main/res/values/colors.xml", "utf8");
   assert.match(foreground, /@drawable\/hermit_icon/);
   assert.doesNotMatch(foreground, /android:inset/);
   assert.match(notifications, /R\.drawable\.ic_notification/);
+  assert.match(colors, /name="hermit_icon_background">#000000/);
   assert.ok(icon.size < 32 * 1024, `launcher icon is unexpectedly large: ${icon.size}`);
-  assert.ok(darkIcon.size < 32 * 1024, `dark launcher icon is unexpectedly large: ${darkIcon.size}`);
-  assert.ok(fs.statSync("app/src/main/assets/store/assets/hermit-icon.webp").size < 8 * 1024);
+  assert.equal(fs.existsSync("app/src/main/res/drawable-night-nodpi/hermit_icon.webp"), false);
+  assert.ok(fs.statSync("app/src/main/assets/store/assets/hermit-mark.svg").size < 2 * 1024);
+});
+
+test("official HermitUI is portrait-only while installed happs retain manifest orientation", () => {
+  const activity = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
+  assert.match(activity, /applyDisplayPolicy\(packageManifest, forcePortrait = instance == null\)/);
+  assert.match(activity, /forcePortrait -> ActivityInfo\.SCREEN_ORIENTATION_PORTRAIT/);
+  assert.match(activity, /manifest\?\.displayOrientation == "landscape" -> ActivityInfo\.SCREEN_ORIENTATION_LANDSCAPE/);
+});
+
+test("online entry separates live pages from direct packages and install descriptors", () => {
+  const installer = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/install/RemoteSourceInstaller.kt", "utf8");
+  assert.match(installer, /encodedPath\.endsWith\("\.zip", ignoreCase = true\)/);
+  assert.match(installer, /equals\("hermit-install\.json", ignoreCase = true\)/);
+  assert.match(installer, /OnlineInstallResult\(app\.appId, null, "live", "live"\)/);
+  assert.match(installer, /"online-descriptor"/);
 });
 
 test("official shell keeps live fallback support and explicit local refresh", () => {

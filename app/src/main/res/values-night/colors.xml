@@ -1,4 +1,5 @@
 <resources>
     <color name="hermit_background">#050507</color>
     <color name="hermit_icon_background">#000000</color>
+    <color name="hermit_dialog_background">#111116</color>
 </resources>

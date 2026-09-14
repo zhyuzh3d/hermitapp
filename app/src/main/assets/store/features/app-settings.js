@@ -14,7 +14,7 @@
     }
     try {
       if (desired.liveUrl !== (app.liveUrl || "") || desired.updateUrl !== (app.updateUrl || ""))
-        await step("apps.updateUrls", { liveUrl: desired.liveUrl, updateUrl: desired.updateUrl }, "应用地址");
+        await step("apps.updateUrls", { liveUrl: desired.liveUrl, updateUrl: desired.updateUrl, insecureConfirmed:!!desired.insecureConfirmed }, "应用地址");
       const currentCustomIcon = Object.prototype.hasOwnProperty.call(app, "customIconDataUrl") ? (app.customIconDataUrl || "") : (app.iconDataUrl || "");
       const desiredIcon = typeof desired.customIconDataUrl === "string" ? desired.customIconDataUrl : currentCustomIcon;
       const iconChanged = desiredIcon !== currentCustomIcon;

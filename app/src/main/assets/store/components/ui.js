@@ -66,6 +66,7 @@
     }
   }
   let confirmResult;
+  let hostPrompt = null;
   function confirmAction(title, message, label = "继续", destructive = false) {
     if (confirmResult) return Promise.resolve(false);
     $("#confirmTitle").textContent = title; $("#confirmMessage").textContent = message;
@@ -80,6 +81,40 @@
   }
   $("#cancelConfirm").onclick = () => finishConfirm(false);
   $("#acceptConfirm").onclick = () => finishConfirm(true);
+  function nativePrompt(payload) {
+    if (hostPrompt || !payload || !payload.token || !Array.isArray(payload.choices) || !payload.choices.length) return false;
+    const choices = payload.choices.filter(choice => choice && typeof choice.value === "string" && typeof choice.label === "string");
+    if (!choices.length) return false;
+    hostPrompt = { token:payload.token, choices };
+    $("#hostPromptTitle").textContent = String(payload.title || "确认操作");
+    $("#hostPromptMessage").textContent = String(payload.message || "");
+    const actions = $("#hostPromptActions"); actions.replaceChildren();
+    choices.forEach(choice => {
+      const button = document.createElement("button");
+      button.textContent = choice.label;
+      if (choice.emphasis === "primary") button.classList.add("primary");
+      if (choice.emphasis === "danger") button.classList.add("danger");
+      button.onclick = () => busy(button, () => finishHostPrompt(choice.value));
+      actions.append(button);
+    });
+    open("#hostPromptPanel");
+    actions.querySelector("button")?.focus();
+    return true;
+  }
+  async function finishHostPrompt(choice) {
+    const prompt = hostPrompt;
+    if (!prompt) return;
+    await H.host.call("dialog.resolve", { token:prompt.token, choice });
+    hostPrompt = null;
+    close("#hostPromptPanel");
+  }
+  async function cancelHostPrompt() {
+    const prompt = hostPrompt;
+    if (!prompt) return;
+    const cancel = prompt.choices.find(choice => choice.value === "cancel") || prompt.choices[0];
+    await finishHostPrompt(cancel.value);
+  }
+  window.hermitNativePrompt = nativePrompt;
   function selected(group, key, value) {
     $$(group + " button").forEach(button => {
       const active = button.dataset[key] === value;
@@ -91,5 +126,5 @@
     if (H.beforeClose && !await H.beforeClose(selector)) return;
     close(selector);
   }
-  H.ui = { requestClose, say, busy, bind, open, close, confirmAction, selected, finishConfirm, focusable, get confirming() { return !!confirmResult; } };
+  H.ui = { requestClose, say, busy, bind, open, close, confirmAction, selected, finishConfirm, cancelHostPrompt, focusable, get confirming() { return !!confirmResult; }, get hostPrompting() { return !!hostPrompt; } };
 })();

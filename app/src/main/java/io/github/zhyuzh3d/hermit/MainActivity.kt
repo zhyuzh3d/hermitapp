@@ -130,6 +130,13 @@ class MainActivity : ComponentActivity(), BridgeHost {
     @Volatile private var visibleAppId: String? = null
     private var launchedFromLibrary = false
     private var pendingStoreScript: String? = null
+    private data class PromptChoice(val value: String, val label: String, val emphasis: String = "normal")
+    private data class PendingShellPrompt(
+        val token: String,
+        val choices: Set<String>,
+        val continuation: CancellableContinuation<String>,
+    )
+    private var pendingShellPrompt: PendingShellPrompt? = null
     private var pendingOpenedNotification: JSONObject? = null
     private var forceLocalStoreOnce = false
     private var storeRunningMode = OfficialShellManager.Mode.LOCAL.value
@@ -335,8 +342,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
         if (!shared.isNullOrBlank()) {
             intent.action = null
             intent.removeExtra(Intent.EXTRA_TEXT)
-            showTarget(null, false)
-            root.postDelayed({ promptSharedUrl(shared) }, 350)
+            promptSharedUrl(shared)
             return
         }
         showTarget(intent.getStringExtra(EXTRA_APP_ID), false)
@@ -452,7 +458,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
         val packageManifest = installedRelease?.let { release ->
             runCatching { PackageManifestReader.read(hermitApp.installer.releaseWebRoot(release)) }.getOrNull()
         }
-        applyDisplayPolicy(packageManifest)
+        applyDisplayPolicy(packageManifest, forcePortrait = instance == null)
         val forcedLocalStore = instance == null && forceLocalStoreOnce
         if (instance == null) forceLocalStoreOnce = false
         val onlineStore = instance == null && !forcedLocalStore && hermitApp.officialShell.mode() == OfficialShellManager.Mode.ONLINE
@@ -696,7 +702,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
     @SuppressLint("RequiresFeature", "MissingOnRenderProcessGone")
     private fun showSupportBrowser() {
         destroyRuntime()
-        applyDisplayPolicy(null)
+        applyDisplayPolicy(null, forcePortrait = true)
         val currentSession = RuntimeSession(RuntimeRole.SUPPORT, null, null, SUPPORT_ORIGIN, "hermit-shared")
         val view = WebView(this)
         configure(view)
@@ -730,15 +736,16 @@ class MainActivity : ComponentActivity(), BridgeHost {
         root.removeAllViews(); root.addView(view, android.widget.FrameLayout.LayoutParams(-1, -1)); view.loadUrl(SUPPORT_URL)
     }
 
-    private fun applyDisplayPolicy(manifest: PackageManifest?) {
+    private fun applyDisplayPolicy(manifest: PackageManifest?, forcePortrait: Boolean = false) {
         keyboardOverlaysContent = manifest?.keyboardMode == "overlay"
         window.setSoftInputMode(
             if (keyboardOverlaysContent) WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
             else WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
         )
-        requestedOrientation = when (manifest?.displayOrientation) {
-            "portrait" -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-            "landscape" -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        requestedOrientation = when {
+            forcePortrait -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            manifest?.displayOrientation == "portrait" -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            manifest?.displayOrientation == "landscape" -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
             else -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
         ViewCompat.requestApplyInsets(root)
@@ -796,6 +803,10 @@ class MainActivity : ComponentActivity(), BridgeHost {
             nativeHttp.closeAll(it)
         }
         bridge?.close()
+        pendingShellPrompt?.let { pending ->
+            pendingShellPrompt = null
+            if (pending.continuation.isActive) pending.continuation.cancel()
+        }
         bridge = null
         session = null
         visibleAppId = null
@@ -843,6 +854,18 @@ class MainActivity : ComponentActivity(), BridgeHost {
 
     private suspend fun dispatchHost(method: String, params: JSONObject): Any? {
         return when (method) {
+        "host.dialog.resolve" -> {
+            val pending = pendingShellPrompt
+                ?: throw HermitException(ErrorCodes.SESSION_EXPIRED, "确认操作已经结束")
+            val token = params.optString("token")
+            val choice = params.optString("choice")
+            if (token != pending.token || choice !in pending.choices) {
+                throw HermitException(ErrorCodes.INVALID_ARGUMENT, "确认结果无效")
+            }
+            pendingShellPrompt = null
+            if (pending.continuation.isActive) pending.continuation.resume(choice)
+            JSONObject().put("resolved", true)
+        }
         "host.apps.list" -> JSONObject().put("apps", JSONArray(hermitApp.registry.listInstances().map { app ->
             val release = app.activeReleaseId?.let(hermitApp.registry::getRelease)
             app.toJson().put("activeVersion", if (release == null) JSONObject.NULL else JSONObject()
@@ -867,7 +890,8 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "页面应用不存在")
             val live = params.optString("liveUrl").takeIf { params.has("liveUrl") && it.isNotBlank() }?.let(::normalizeUrl)
             val update = params.optString("updateUrl").takeIf { params.has("updateUrl") && it.isNotBlank() }?.let(::normalizeUrl)
-            if (live != null && live != app.liveUrl && Uri.parse(live).scheme.equals("http", true) && !confirmInsecureUrl(live)) {
+            if (live != null && live != app.liveUrl && Uri.parse(live).scheme.equals("http", true)
+                && !params.optBoolean("insecureConfirmed") && !confirmInsecureUrl(live)) {
                 return JSONObject().put("cancelled", true)
             }
             if (live != null && isLanUrl(live) && !ensureLanPermission()) {
@@ -907,7 +931,8 @@ class MainActivity : ComponentActivity(), BridgeHost {
         }
         "host.apps.installOnline" -> {
             val url = normalizeUrl(params.optString("url"))
-            if (Uri.parse(url).scheme.equals("http", true) && !confirmInsecureUrl(url)) {
+            if (Uri.parse(url).scheme.equals("http", true)
+                && !params.optBoolean("insecureConfirmed") && !confirmInsecureUrl(url)) {
                 return JSONObject().put("cancelled", true)
             }
             if (isLanUrl(url) && !ensureLanPermission()) {
@@ -925,7 +950,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 if (params.optBoolean("favorite")) hermitApp.registry.setFavorite(installed.appId, true) else presented
             }
             shortcuts.update(updated)
-            updated.toJson().put("cancelled", false).put("installStrategy", installed.strategy)
+            updated.toJson().put("cancelled", false).put("installStrategy", installed.strategy).put("installKind", installed.kind)
         }
         "host.apps.importZip" -> {
             val uri = pickZip() ?: return JSONObject().put("cancelled", true)
@@ -1264,7 +1289,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 }
             }
             "app.checkUpdate" -> JSONObject().put("updateUrl", app?.updateUrl ?: JSONObject.NULL)
-                .put("canCheck", app?.updateUrl != null || app?.sourceAdapter in setOf("online-manifest", "https-package", "github"))
+                .put("canCheck", app?.updateUrl != null || app?.sourceAdapter in setOf("online-manifest", "online-descriptor", "https-package", "github"))
             "app.reload" -> {
                 root.postDelayed({ showTarget(app?.appId, launchedFromLibrary) }, 80)
                 JSONObject().put("reloading", true)
@@ -2398,55 +2423,69 @@ class MainActivity : ComponentActivity(), BridgeHost {
 
     private fun promptSharedUrl(text: String) {
         val candidate = runCatching { normalizeUrl(text) }.getOrNull() ?: return
-        val warning = if (Uri.parse(candidate).scheme.equals("http", true)) {
-            "\n\n警告：这是未加密的 HTTP 地址，网页内容和凭据可能被同一网络中的其他人读取或篡改。"
-        } else ""
-        AlertDialog.Builder(this).setTitle("添加在线应用？").setMessage(candidate + warning)
-            .setNegativeButton("取消", null).setPositiveButton("添加") { _, _ ->
-                lifecycleScope.launch {
-                    try {
-                        if (isLanUrl(candidate) && !ensureLanPermission()) {
-                            throw HermitException(ErrorCodes.OS_PERMISSION_DENIED, "Android 未授予局域网权限")
-                        }
-                        hermitApp.remoteInstaller.installOnline(candidate, Uri.parse(candidate).host ?: "线上 happ", ::chooseIdentityInstall)
-                        showTarget(null, false)
-                    } catch (error: Throwable) {
-                        Toast.makeText(this@MainActivity, error.message ?: "happ 添加失败", Toast.LENGTH_LONG).show()
-                    }
-                }
-            }.show()
+        pendingStoreScript = "window.hermitOpenSharedUrl && window.hermitOpenSharedUrl(${JSONObject.quote(candidate)})"
+        showTarget(null, false)
     }
 
-    private suspend fun confirmInsecureUrl(url: String): Boolean = suspendCancellableCoroutine { continuation ->
-        val dialog = AlertDialog.Builder(this)
-            .setTitle("允许未加密的 HTTP 页面？")
-            .setMessage("$url\n\n网页内容和凭据可能被同一网络中的其他人读取或篡改。仅在你信任当前网络和服务时继续。")
-            .setNegativeButton("取消") { _, _ -> if (continuation.isActive) continuation.resume(false) }
-            .setPositiveButton("仍然添加") { _, _ -> if (continuation.isActive) continuation.resume(true) }
-            .setOnCancelListener { if (continuation.isActive) continuation.resume(false) }
-            .create()
-        continuation.invokeOnCancellation { dialog.dismiss() }
-        dialog.show()
+    private suspend fun confirmInsecureUrl(url: String): Boolean = promptChoice(
+        "允许未加密的 HTTP 页面？",
+        "$url\n\n网页内容和凭据可能被同一网络中的其他人读取或篡改。仅在你信任当前网络和服务时继续。",
+        listOf(PromptChoice("cancel", "取消"), PromptChoice("continue", "仍然添加", "primary")),
+    ) == "continue"
+
+    private suspend fun chooseIdentityInstall(existing: WebAppInstance, incomingPublisherKeyId: String?): IdentityInstallChoice {
+        val verified = incomingPublisherKeyId != null && existing.publisherKeyId == incomingPublisherKeyId
+        val publisherChanged = existing.publisherKeyId != incomingPublisherKeyId
+        val message = if (verified) "“${existing.name}”具有相同 happId 和发布者公钥。更新原实例会保留它的数据、设置和授权；全新安装会创建相互隔离的新实例。"
+            else if (publisherChanged) "“${existing.name}”使用相同 happId，但发布者公钥与当前包不同或缺失。只有你确认这是同一 happ 时才更新原实例；更新会采用新包的发布者信息并保留数据与授权。"
+            else "“${existing.name}”使用相同 happId，但双方都没有可验证的发布者签名。仅在你确认它们是同一 happ 时更新原实例；也可以创建隔离的新实例。"
+        return when (promptChoice(
+            if (verified) "已安装同一签名的 happ" else "发现相同 happId 的实例",
+            message,
+            listOf(PromptChoice("cancel", "取消"), PromptChoice("new", "全新安装"), PromptChoice("update", "更新原实例", "primary")),
+        )) {
+            "new" -> IdentityInstallChoice.NEW_INSTANCE
+            "update" -> IdentityInstallChoice.UPDATE
+            else -> IdentityInstallChoice.CANCEL
+        }
     }
 
-    private suspend fun chooseIdentityInstall(existing: WebAppInstance, incomingPublisherKeyId: String?): IdentityInstallChoice = withContext(Dispatchers.Main) {
+    private suspend fun promptChoice(title: String, message: String, choices: List<PromptChoice>): String {
+        val webChoice = withContext(Dispatchers.Main.immediate) { requestShellPrompt(title, message, choices) }
+        return webChoice ?: withContext(Dispatchers.Main.immediate) { requestNativePrompt(title, message, choices) }
+    }
+
+    private suspend fun requestShellPrompt(title: String, message: String, choices: List<PromptChoice>): String? =
         suspendCancellableCoroutine { continuation ->
-            val verified = incomingPublisherKeyId != null && existing.publisherKeyId == incomingPublisherKeyId
-            val publisherChanged = existing.publisherKeyId != incomingPublisherKeyId
-            val dialog = AlertDialog.Builder(this@MainActivity)
-                .setTitle(if (verified) "已安装同一签名的 happ" else "发现相同 happId 的实例")
-                .setMessage(if (verified) "“${existing.name}”具有相同 happId 和发布者公钥。更新原实例会保留它的数据、设置和授权；全新安装会创建相互隔离的新实例。"
-                    else if (publisherChanged) "“${existing.name}”使用相同 happId，但发布者公钥与当前包不同或缺失。只有你确认这是同一 happ 时才更新原实例；更新会采用新包的发布者信息并保留数据与授权。"
-                    else "“${existing.name}”使用相同 happId，但双方都没有可验证的发布者签名。仅在你确认它们是同一 happ 时更新原实例；也可以创建隔离的新实例。")
-                .setNegativeButton("取消") { _, _ -> if (continuation.isActive) continuation.resume(IdentityInstallChoice.CANCEL) }
-                .setNeutralButton("全新安装") { _, _ -> if (continuation.isActive) continuation.resume(IdentityInstallChoice.NEW_INSTANCE) }
-                .setPositiveButton("更新原实例") { _, _ -> if (continuation.isActive) continuation.resume(IdentityInstallChoice.UPDATE) }
-                .setOnCancelListener { if (continuation.isActive) continuation.resume(IdentityInstallChoice.CANCEL) }
+            val view = webView
+            if (view == null || session?.role != RuntimeRole.STORE || pendingShellPrompt != null) {
+                continuation.resume(null)
+                return@suspendCancellableCoroutine
+            }
+            val token = UUID.randomUUID().toString()
+            val payload = JSONObject().put("token", token).put("title", title).put("message", message)
+                .put("choices", JSONArray(choices.map { JSONObject().put("value", it.value).put("label", it.label).put("emphasis", it.emphasis) }))
+            val pending = PendingShellPrompt(token, choices.mapTo(linkedSetOf()) { it.value }, continuation)
+            pendingShellPrompt = pending
+            continuation.invokeOnCancellation { if (pendingShellPrompt === pending) pendingShellPrompt = null }
+            view.evaluateJavascript("Boolean(window.hermitNativePrompt && window.hermitNativePrompt($payload))") { handled ->
+                if (handled != "true" && pendingShellPrompt === pending) {
+                    pendingShellPrompt = null
+                    if (continuation.isActive) continuation.resume(null)
+                }
+            }
+        }
+
+    private suspend fun requestNativePrompt(title: String, message: String, choices: List<PromptChoice>): String =
+        suspendCancellableCoroutine { continuation ->
+            val labels = choices.map { it.label }.toTypedArray()
+            val dialog = AlertDialog.Builder(this).setTitle(title).setMessage(message)
+                .setItems(labels) { _, index -> if (continuation.isActive) continuation.resume(choices[index].value) }
+                .setOnCancelListener { if (continuation.isActive) continuation.resume("cancel") }
                 .create()
             continuation.invokeOnCancellation { dialog.dismiss() }
             dialog.show()
         }
-    }
 
     @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
     fun inspectRuntimeForTest(callback: (String?) -> Unit) {

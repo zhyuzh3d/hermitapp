@@ -33,7 +33,7 @@
     $("#name").value = value.name || (value.url ? new URL(value.url).hostname : "");
     $("#addVersion").value = value.version || "1.0.0";
     $("#addSourceLabel").textContent = kind === "directory" ? "文件夹快照" : value.scanned ? "二维码链接" : "在线网址";
-    $("#manifestStatus").textContent = kind === "directory" ? (value.manifestFound ? "已找到并解析 hermit.json，可在下方修改后添加。" : "未找到 hermit.json，已生成基础配置，请检查后添加。") : "将检查同源 hermit-install.json；有安装包时默认下载到本地运行，否则线上实时运行。";
+    $("#manifestStatus").textContent = kind === "directory" ? (value.manifestFound ? "已找到并解析 hermit.json，可在下方修改后添加。" : "未找到 hermit.json，已生成基础配置，请检查后添加。") : "普通网页会直接实时运行且不能进入开发；ZIP 或 hermit-install.json 会下载安装为本地版本，可创建开发副本。";
     resetAddIcon();
     if (value.iconDataUrl) showAddIcon(value.iconDataUrl);
     open("#addPanel");
@@ -78,11 +78,23 @@
     const name = $("#name").value.trim();
     if (!name) { $("#name").focus(); throw new Error("应用名称不能为空。"); }
     const common = { name, version:$("#addVersion").value.trim(), favorite:state.addToFavorites, iconDataUrl:draft.customIconDataUrl || "" };
+    let onlineUrl = null;
+    if (draft.kind === "online") {
+      onlineUrl = validUrl("#url");
+      if (new URL(onlineUrl).protocol === "http:") {
+        const accepted = await confirmAction("允许未加密的 HTTP 页面？", onlineUrl + "\n\n网页内容和凭据可能被同一网络中的其他人读取或篡改。仅在你信任当前网络和服务时继续。", "仍然添加");
+        if (!accepted) return;
+        common.insecureConfirmed = true;
+      }
+    }
     const value = draft.kind === "directory"
       ? await host.call("apps.confirmDirectory", Object.assign(common, { token:draft.token }))
-      : await host.call("apps.installOnline", Object.assign(common, { url:validUrl("#url") }));
-    const message = draft.kind === "directory" ? "本地 happ 已添加。" : value.installStrategy === "local" ? "线上 happ 已安装并采用本地运行。" : "线上 happ 已添加并采用实时运行。";
+      : await host.call("apps.installOnline", Object.assign(common, { url:onlineUrl }));
+    const message = draft.kind === "directory" ? "本地 happ 已添加。"
+      : value.installStrategy === "local" ? "安装包已下载为本地 happ，可创建开发副本。"
+      : "普通网页已添加为实时 happ；没有本地代码，不能进入开发模式。";
     await installed(value, message);
   });
+  window.hermitOpenSharedUrl = url => openAdd("online", { url, shared:true });
   H.features.install = { validUrl };
 })();

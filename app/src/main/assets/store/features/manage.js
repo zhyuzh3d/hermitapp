@@ -155,7 +155,12 @@
       if (!await confirmAction("保存运行方式？", message, "保存并切换")) return;
     }
     try {
-      await H.features.appSettings.save(app, Object.assign({}, draft, { name: $("#editName").value.trim(), liveUrl, updateUrl }));
+      let insecureConfirmed = false;
+      if (liveUrl && liveUrl !== (app.liveUrl || "") && new URL(liveUrl).protocol === "http:") {
+        insecureConfirmed = await confirmAction("允许未加密的 HTTP 页面？", liveUrl + "\n\n网页内容和凭据可能被同一网络中的其他人读取或篡改。仅在你信任当前网络和服务时继续。", "仍然保存");
+        if (!insecureConfirmed) return;
+      }
+      await H.features.appSettings.save(app, Object.assign({}, draft, { name: $("#editName").value.trim(), liveUrl, updateUrl, insecureConfirmed }));
     } catch (error) {
       try { await refresh(); state.selected = state.apps.find(item => item.appId === app.appId) || app; } catch (_) {}
       renderManageDraft();

@@ -36,6 +36,7 @@ class RemoteSourceInstaller(
         val appId: String,
         val releaseId: String?,
         val strategy: String,
+        val kind: String,
     )
 
     private data class InstallManifest(
@@ -52,6 +53,15 @@ class RemoteSourceInstaller(
     suspend fun installOnline(url: String, name: String?,
         identityChoice: suspend (WebAppInstance, String?) -> IdentityInstallChoice = { _, _ -> IdentityInstallChoice.NEW_INSTANCE }): OnlineInstallResult = withContext(Dispatchers.IO) {
         val normalized = validateNetworkUrl(url)
+        val parsed = normalized.toHttpUrl()
+        if (parsed.encodedPath.endsWith(".zip", ignoreCase = true)) {
+            val result = installHttps(normalized, name, identityChoice = identityChoice)
+            return@withContext OnlineInstallResult(result.appId, result.releaseId, "local", "package")
+        }
+        if (parsed.encodedPath.substringAfterLast('/').equals("hermit-install.json", ignoreCase = true)) {
+            val manifest = readInstallManifest(parsed, required = true)!!
+            return@withContext installManifestPackage(manifest, name, null, "online-descriptor", "descriptor", identityChoice)
+        }
         val manifest = discoverInstallManifest(normalized)
         if (manifest == null) {
             val fallbackName = name?.trim()?.takeIf { it.isNotBlank() }
@@ -59,31 +69,42 @@ class RemoteSourceInstaller(
             val app = WebAppInstance.newOnlineLive(fallbackName, normalized)
             registry.insertInstance(app)
             registry.updateSource(app.appId, "online", JSONObject().put("url", normalized).toString())
-            return@withContext OnlineInstallResult(app.appId, null, "live")
+            return@withContext OnlineInstallResult(app.appId, null, "live", "live")
         }
 
+        installManifestPackage(manifest, name, normalized, "online-manifest", "manifest", identityChoice)
+    }
+
+    private suspend fun installManifestPackage(
+        manifest: InstallManifest,
+        name: String?,
+        liveUrl: String?,
+        provenance: String,
+        kind: String,
+        identityChoice: suspend (WebAppInstance, String?) -> IdentityInstallChoice,
+    ): OnlineInstallResult {
         val archive = downloadSameOrigin(manifest.packageUrl, manifest.manifestUrl)
         try {
             val result = FileInputStream(archive).use {
                 installer.installZip(
                     it,
                     name,
-                    provenance = "online-manifest",
+                    provenance = provenance,
                     declaredSha256 = manifest.sha256,
-                    fallbackName = normalized.toHttpUrl().host,
+                    fallbackName = liveUrl?.toHttpUrl()?.host ?: manifest.manifestUrl.toHttpUrl().host,
                     source = HappSource.ONLINE,
-                    liveUrl = normalized,
+                    liveUrl = liveUrl,
                     downloadUrl = manifest.packageUrl,
                     identityChoice = identityChoice,
                 )
             }
-            registry.updateSource(result.appId, "online-manifest", JSONObject()
-                .put("url", normalized)
+            registry.updateSource(result.appId, provenance, JSONObject()
+                .put("url", liveUrl ?: manifest.manifestUrl)
                 .put("manifestUrl", manifest.manifestUrl)
                 .put("packageUrl", manifest.packageUrl)
                 .put("sha256", manifest.sha256 ?: JSONObject.NULL)
                 .toString())
-            OnlineInstallResult(result.appId, result.releaseId, "local")
+            return OnlineInstallResult(result.appId, result.releaseId, "local", kind)
         } finally {
             archive.delete()
         }
@@ -152,6 +173,7 @@ class RemoteSourceInstaller(
             "github" -> installGitHub(spec.getString("owner"), spec.getString("repo"), spec.getString("ref"),
                 spec.optString("path"), app.name, appId, app.activeReleaseId)
             "online-manifest" -> installManifestUpdate(app)
+            "online-descriptor" -> installDescriptorUpdate(app)
             else -> throw HermitException(ErrorCodes.UNSUPPORTED, "该来源不支持在线检查更新")
         }
     }
@@ -235,6 +257,32 @@ class RemoteSourceInstaller(
         }
     }
 
+    private suspend fun installDescriptorUpdate(app: WebAppInstance): InstallResult {
+        val source = runCatching { JSONObject(app.sourceSpec) }.getOrElse {
+            throw HermitException(ErrorCodes.STORAGE, "安装来源记录已损坏")
+        }
+        val manifestUrl = source.optString("manifestUrl").takeIf { it.isNotBlank() }
+            ?: throw HermitException(ErrorCodes.STORAGE, "安装配置地址缺失")
+        val manifest = readInstallManifest(manifestUrl.toHttpUrl(), required = true)!!
+        val archive = downloadSameOrigin(manifest.packageUrl, manifest.manifestUrl)
+        try {
+            val result = FileInputStream(archive).use {
+                installer.installZip(it, app.name, app.appId, "online-descriptor",
+                    expectedReleaseId = app.activeReleaseId, declaredSha256 = manifest.sha256)
+            }
+            registry.updateSource(result.appId, "online-descriptor", JSONObject()
+                .put("url", manifest.manifestUrl)
+                .put("manifestUrl", manifest.manifestUrl)
+                .put("packageUrl", manifest.packageUrl)
+                .put("sha256", manifest.sha256 ?: JSONObject.NULL)
+                .toString())
+            registry.getRelease(result.releaseId)?.let { registry.recordDownload(result.appId, manifest.packageUrl, it.versionCode, it.versionName) }
+            return result
+        } finally {
+            archive.delete()
+        }
+    }
+
     private fun discoverInstallManifest(pageUrl: String): InstallManifest? {
         val page = pageUrl.toHttpUrl()
         val manifestUrl = page.newBuilder()
@@ -242,11 +290,21 @@ class RemoteSourceInstaller(
             .query(null)
             .fragment(null)
             .build()
+        return readInstallManifest(manifestUrl, required = false)
+    }
+
+    private fun readInstallManifest(manifestUrl: okhttp3.HttpUrl, required: Boolean): InstallManifest? {
         val request = Request.Builder().url(manifestUrl).header("Accept", "application/json").build()
         val body = try {
             SAME_ORIGIN_CLIENT.newCall(request).execute().use { response ->
-                if (response.code == 404 || response.code == 410) return null
-                if (!response.isSuccessful) return null
+                if (response.code == 404 || response.code == 410) {
+                    if (required) throw HermitException(ErrorCodes.NETWORK, "安装配置不存在：HTTP ${response.code}")
+                    return null
+                }
+                if (!response.isSuccessful) {
+                    if (required) throw HermitException(ErrorCodes.NETWORK, "安装配置读取失败：HTTP ${response.code}", response.code >= 500)
+                    return null
+                }
                 val declared = response.body.contentLength()
                 if (declared > MAX_MANIFEST_BYTES) throw HermitException(ErrorCodes.QUOTA, "hermit-install.json 过大")
                 val output = java.io.ByteArrayOutputStream()
@@ -262,7 +320,8 @@ class RemoteSourceInstaller(
                 }
                 output.toString(Charsets.UTF_8.name())
             }
-        } catch (_: IOException) {
+        } catch (error: IOException) {
+            if (required) throw HermitException(ErrorCodes.NETWORK, error.message ?: "安装配置读取失败", true)
             return null
         }
         val json = runCatching { JSONObject(body) }
