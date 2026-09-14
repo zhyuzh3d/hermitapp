@@ -34,6 +34,16 @@
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && connected && host.ready()) H.navigation.showView(state.view).catch(error => H.ui.say(error.message, true));
   });
+  addEventListener("hermitresume", async () => {
+    if (!connected || !host.ready()) return;
+    try {
+      await H.features.library.refresh();
+      if (state.selected) {
+        state.selected = state.apps.find(app => app.appId === state.selected.appId) || state.selected;
+        if (H.features.manage && !$("#managePanel").classList.contains("hidden")) H.features.manage.renderManageDraft();
+      }
+    } catch (error) { H.ui.say(error.message || "桌面图标状态刷新失败，请重试。", true); }
+  });
   if (host.ready()) start();
   else {
     H.navigation.showView("favorites", false);

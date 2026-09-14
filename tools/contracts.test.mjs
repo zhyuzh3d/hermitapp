@@ -122,6 +122,10 @@ test("package defaults and custom happ icon overrides stay distinct", () => {
   assert.match(registry, /put\("default_icon_data_url", defaultIconDataUrl\)/);
   assert.match(shortcuts, /instance\.effectiveIconDataUrl/);
   assert.match(shortcuts, /Icon::createWithBitmap/);
+  assert.match(shortcuts, /manager\.pinnedShortcuts/);
+  assert.match(shortcuts, /enum class PinState/);
+  assert.match(activity, /put\("desktopShortcutState"/);
+  assert.match(activity, /new Event\('hermitresume'\)/);
 });
 
 test("launcher uses the compressed Hermit brand icon while notifications keep a monochrome glyph", () => {

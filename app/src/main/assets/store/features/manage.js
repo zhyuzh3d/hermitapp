@@ -3,7 +3,7 @@
   const H = window.HermitShell;
   const { $, $$, state, host } = H;
   const { say, busy, bind, open, close, confirmAction, selected } = H.ui;
-  const { appSource, appRuntime, hasLocal, hasLive, sourceLabel, runtimeLabel, refresh, resetFilters, pin } = H.features.library;
+  const { appSource, appRuntime, hasLocal, hasLive, sourceLabel, runtimeLabel, refresh, resetFilters, pin, renderPinButton } = H.features.library;
   const { validUrl } = H.features.install;
   const { showView, cachedViewState } = H.navigation;
   const capabilityLabels = { "camera.capture": "拍照", "microphone.record": "麦克风录音", speech: "语音识别", "location.approximate": "大致位置", "location.precise": "精确位置", "clipboard.read": "读取剪贴板", network: "网络请求", notifications: "发送通知" };
@@ -58,7 +58,8 @@
       button.setAttribute("aria-pressed", String(draft.runtimeMode === mode));
     });
     $("#saveApp").disabled = !isDirty();
-    $("#managePin").disabled = isDirty();
+    const managePinState = renderPinButton($("#managePin"), app);
+    $("#managePin").disabled = isDirty() || managePinState === "unsupported";
     $("#updateApp").disabled = !canUpdateFromSource(app) || isDirty();
     $("#reinstallApp").disabled = !app.downloadUrl || isDirty();
     $("#removeCustomAppIcon").classList.toggle("hidden", !draft.customIconDataUrl);

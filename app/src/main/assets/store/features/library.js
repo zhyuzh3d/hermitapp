@@ -32,7 +32,26 @@
     $("#emptyMessage").textContent = state.view === "favorites" ? "点亮应用卡片上的爱心，常用工具就会集中在这里。" : "添加在线网址或导入原生 HTML、JavaScript 和 CSS 页面。";
   }
   function resetFilters() { filterApps(); }
+  function shortcutState(app) {
+    return ["pinned", "notPinned", "unsupported", "unknown"].includes(app.desktopShortcutState)
+      ? app.desktopShortcutState : "unknown";
+  }
+  function renderPinButton(button, app) {
+    const value = shortcutState(app), pinned = value === "pinned";
+    button.classList.toggle("active", pinned);
+    button.classList.toggle("unavailable", value === "unknown" || value === "unsupported");
+    button.setAttribute("aria-pressed", String(pinned));
+    const label = pinned ? "已添加到手机桌面" : value === "unsupported" ? "当前桌面不支持固定图标" : value === "unknown" ? "无法确认桌面图标状态" : "添加到手机桌面";
+    button.setAttribute("aria-label", label);
+    button.title = label;
+    const copy = button.querySelector(".pin-label");
+    if (copy) copy.textContent = pinned ? "已添加到桌面" : value === "unsupported" ? "桌面不支持" : value === "unknown" ? "添加到桌面" : "添加到桌面";
+    return value;
+  }
   async function pin(app) {
+    const current = shortcutState(app);
+    if (current === "pinned") { say("桌面图标仍然存在；如需移除，请在桌面长按图标删除。"); return; }
+    if (current === "unsupported") { say("当前桌面不支持固定图标。"); return; }
     const value = await host.call("apps.pin", { appId: app.appId });
     say(value.requested ? "已请求添加到手机桌面，请确认系统提示。" : "当前桌面不支持固定图标。");
   }
@@ -74,12 +93,15 @@
         await refresh();
         say(app.favorite ? "已加入收藏。" : "已取消收藏。");
       });
-      fragment.querySelector(".pin").onclick = event => busy(event.currentTarget, () => pin(app));
+      const pinButton = fragment.querySelector(".pin");
+      const pinState = renderPinButton(pinButton, app);
+      pinButton.disabled = pinState === "unsupported";
+      pinButton.onclick = event => busy(event.currentTarget, () => pin(app));
       fragment.querySelector(".manage").onclick = () => H.features.manage.openManage(app).catch(error => say(error.message, true));
       cards.append(fragment);
     }
     root.replaceChildren(cards);
     filterApps();
   }
-  H.features.library = { refresh, filterApps, resetFilters, pin, appSource, appRuntime, hasLocal, hasLive, sourceLabel, runtimeLabel, versionLabel };
+  H.features.library = { refresh, filterApps, resetFilters, pin, renderPinButton, appSource, appRuntime, hasLocal, hasLive, sourceLabel, runtimeLabel, versionLabel };
 })();

@@ -238,6 +238,9 @@ code { font-family:ui-monospace,monospace; }
 .context-note { display:flex; align-items:center; gap:9px; width:max-content; max-width:100%; margin:-12px 0 17px; padding:9px 12px; border:1px solid var(--line); border-radius:12px; background:var(--surface); color:var(--muted); font-size:11px; box-shadow:inset 0 1px 0 var(--highlight); }
 .card-footer .favorite.active { color:var(--danger); }
 .card-footer .favorite.active i { filter:drop-shadow(0 3px 5px #e34f6844); }
+.card-footer .pin.active,#managePin.active { color:var(--blue); }
+.card-footer .pin.active i,#managePin.active i { color:var(--blue); filter:drop-shadow(0 3px 6px color-mix(in srgb,var(--blue) 48%,transparent)); }
+.card-footer .pin.unavailable:not(.active) { color:var(--disabled-ink); }
 .nav-live-dot { position:absolute; top:2px; right:4px; width:7px; height:7px; border-radius:50%; background:var(--green); border:1.5px solid var(--surface-solid); box-shadow:0 0 0 2px color-mix(in srgb,var(--green) 25%,transparent),0 2px 7px color-mix(in srgb,var(--green) 60%,transparent); }
 .switch-row { display:flex; align-items:center; justify-content:space-between; gap:16px; }
 .switch-row > div { min-width:0; }

@@ -14,6 +14,36 @@ import io.github.zhyuzh3d.hermit.model.WebAppInstance
 class ShortcutHost(private val context: Context) {
     private val manager = context.getSystemService(ShortcutManager::class.java)
 
+    enum class PinState(val value: String) {
+        PINNED("pinned"),
+        NOT_PINNED("notPinned"),
+        UNSUPPORTED("unsupported"),
+        UNKNOWN("unknown"),
+    }
+
+    /**
+     * ShortcutManager is the authoritative public API for shortcuts owned by
+     * this package. Call this from a worker thread: some launchers may take
+     * noticeable time to return their pinned shortcut list.
+     */
+    fun pinStates(appIds: Collection<String>): Map<String, PinState> {
+        val supported = runCatching { manager.isRequestPinShortcutSupported }.getOrNull()
+        val pinnedIds = runCatching {
+            manager.pinnedShortcuts.asSequence()
+                .filter(ShortcutInfo::isPinned)
+                .map(ShortcutInfo::getId)
+                .toSet()
+        }.getOrElse { return appIds.associateWith { PinState.UNKNOWN } }
+        return appIds.associateWith { appId ->
+            when {
+                shortcutId(appId) in pinnedIds -> PinState.PINNED
+                supported == true -> PinState.NOT_PINNED
+                supported == false -> PinState.UNSUPPORTED
+                else -> PinState.UNKNOWN
+            }
+        }
+    }
+
     fun requestPin(instance: WebAppInstance): Boolean {
         if (!manager.isRequestPinShortcutSupported) return false
         val shortcut = ShortcutInfo.Builder(context, shortcutId(instance.appId))

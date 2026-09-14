@@ -158,6 +158,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
     private val rebuilding = AtomicBoolean(false)
     private var lastHapticAt = 0L
     private var keyboardOverlaysContent = false
+    private var hasResumed = false
 
     private val zipPicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         pendingZip?.let { continuation ->
@@ -866,13 +867,18 @@ class MainActivity : ComponentActivity(), BridgeHost {
             if (pending.continuation.isActive) pending.continuation.resume(choice)
             JSONObject().put("resolved", true)
         }
-        "host.apps.list" -> JSONObject().put("apps", JSONArray(hermitApp.registry.listInstances().map { app ->
-            val release = app.activeReleaseId?.let(hermitApp.registry::getRelease)
-            app.toJson().put("activeVersion", if (release == null) JSONObject.NULL else JSONObject()
-                .put("code", release.versionCode ?: JSONObject.NULL)
-                .put("name", release.versionName ?: JSONObject.NULL))
-                .put("devWorkspace", hermitApp.devWorkspaces.status(app.appId))
-        }))
+        "host.apps.list" -> withContext(Dispatchers.IO) {
+            val apps = hermitApp.registry.listInstances()
+            val pinStates = shortcuts.pinStates(apps.map { it.appId })
+            JSONObject().put("apps", JSONArray(apps.map { app ->
+                val release = app.activeReleaseId?.let(hermitApp.registry::getRelease)
+                app.toJson().put("activeVersion", if (release == null) JSONObject.NULL else JSONObject()
+                    .put("code", release.versionCode ?: JSONObject.NULL)
+                    .put("name", release.versionName ?: JSONObject.NULL))
+                    .put("devWorkspace", hermitApp.devWorkspaces.status(app.appId))
+                    .put("desktopShortcutState", pinStates[app.appId]?.value ?: ShortcutHost.PinState.UNKNOWN.value)
+            }))
+        }
         "host.apps.favorite" -> withContext(Dispatchers.IO) {
             hermitApp.registry.setFavorite(params.getString("appId"), params.getBoolean("favorite")).toJson()
         }
@@ -2548,6 +2554,12 @@ class MainActivity : ComponentActivity(), BridgeHost {
     override fun onResume() {
         super.onResume()
         observeDeclaredSystemPermissions()
+        if (hasResumed && session?.role == RuntimeRole.STORE) {
+            webView?.post {
+                webView?.evaluateJavascript("window.dispatchEvent(new Event('hermitresume'))", null)
+            }
+        }
+        hasResumed = true
     }
 
     companion object {
