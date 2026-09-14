@@ -59,9 +59,12 @@ test("agent catalog, guide snapshots and shared-password authority stay aligned"
   const root = "app/src/main/assets/agent/";
   const tools = JSON.parse(fs.readFileSync(root + "tools.json", "utf8"));
   const server = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/deploy/AgentDevelopmentServer.kt", "utf8");
-  assert.equal(new Set(tools.map(tool => tool.name)).size, 28);
+  assert.equal(new Set(tools.map(tool => tool.name)).size, 29);
   assert.deepEqual(tools.find(tool => tool.name === "hermit_get_guide").inputSchema.properties, {});
   assert.deepEqual(tools.find(tool => tool.name === "hermit_reload_shell").inputSchema.properties.runtimeMode.enum, ["current", "online", "local"]);
+  assert.deepEqual(tools.find(tool => tool.name === "hermit_reload_app").inputSchema.properties.strategy.enum, ["reload", "recreate"]);
+  assert.ok(tools.find(tool => tool.name === "hermit_reload_app").inputSchema.properties.postReloadScript);
+  assert.equal(tools.find(tool => tool.name === "hermit_reload_shell").inputSchema.properties.postReloadScript, undefined);
   assert.match(server, /"hermit_reload_shell"\s*->\s*ui\("reload-shell",\s*args,\s*authorization\)/);
   for (const tool of tools) {
     const dispatch = new RegExp(`(?:"[^"]+"\\s*,\\s*)*"${tool.name}"(?:\\s*,\\s*"[^"]+")*\\s*->`);
@@ -71,6 +74,12 @@ test("agent catalog, guide snapshots and shared-password authority stay aligned"
   assert.doesNotMatch(server, /class Pairing|class Client|pairUrl|phone-approved/);
   assert.match(server, /commitGuard = \{ guarded\(authorization/);
   assert.match(server, /guardedValue\(authorization\) \{\s*devWorkspaces\.apply/);
+  const activity = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
+  assert.match(activity, /page state only allows current running happ development copy|页面状态只允许读取当前运行的 happ 开发副本/);
+  assert.match(activity, /refresh only allows scheduling current running happ development copy|刷新只允许调度当前运行的 happ 开发副本/);
+  assert.match(activity, /val strategy = args\.optString\("strategy", RELOAD_IN_PLACE\)/);
+  assert.match(activity, /applyPendingAgentReload\(view, currentSession\)/);
+  assert.match(activity, /window\.hermitDevState/);
   assert.equal(fs.readFileSync(root + "webapp-authoring.md", "utf8"), fs.readFileSync("docs/webapp-authoring.md", "utf8"));
   assert.equal(fs.readFileSync(root + "hermit-api.d.ts", "utf8"), fs.readFileSync("sdk/hermit-api.d.ts", "utf8"));
 });

@@ -33,7 +33,7 @@ try {
   const one = await connect("computer-one", config.password);
   const two = await connect("computer-two", config.password);
   const [a, b] = await Promise.all([one.listTools(), two.listTools()]);
-  assert.equal(a.tools.length, 27); assert.equal(b.tools.length, 27);
+  assert.equal(a.tools.length, 29); assert.equal(b.tools.length, 29);
   const guide = await one.callTool({ name: "hermit_get_guide", arguments: {} });
   assert(guide.structuredContent.text.includes("six-digit"));
   const resource = await two.readResource({ uri: "hermit://page-api" });
@@ -62,7 +62,7 @@ try {
   await assert.rejects(() => one.listTools());
   await assert.rejects(() => two.listTools());
   const three = await connect("new-password-computer", changed.password);
-  assert.equal((await three.listTools()).tools.length, 27);
+  assert.equal((await three.listTools()).tools.length, 29);
   console.log("PASS: real LAN MCP SDK initialize, two concurrent password-sharing clients, tools/resources, create/patch/open, Python binary ZIP publish, and live password rotation invalidating both old clients.");
 } finally {
   await Promise.allSettled(clients.map(client => client.close()));

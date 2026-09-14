@@ -28,6 +28,29 @@
       value.limit = state.iconLimit;
     }
     cachedViewState.views[view] = value;
+    cachedViewState.currentView = view;
+    writeViewState();
+  }
+  function initialView() {
+    return VIEWS.includes(cachedViewState.currentView) ? cachedViewState.currentView : "favorites";
+  }
+  function restoreCachedViewState(value) {
+    if (!value || typeof value !== "object") return;
+    const restored = {};
+    for (const view of VIEWS) {
+      const source = value.views && value.views[view];
+      if (!source || typeof source !== "object") continue;
+      const item = { scrollY:Number.isFinite(source.scrollY) ? Math.max(0, Math.round(source.scrollY)) : 0 };
+      if (view === "development") item.eventsOpen = !!source.eventsOpen;
+      if (view === "icons") {
+        item.query = typeof source.query === "string" ? source.query.slice(0, 300) : "";
+        item.style = ["all", "solid", "regular", "brands"].includes(source.style) ? source.style : "all";
+        item.limit = Number.isInteger(source.limit) ? Math.max(60, Math.min(source.limit, 600)) : 60;
+      }
+      restored[view] = item;
+    }
+    cachedViewState.views = restored;
+    cachedViewState.currentView = VIEWS.includes(value.currentView) ? value.currentView : initialView();
     writeViewState();
   }
   function restoreViewState(view) {
@@ -81,10 +104,12 @@
     if (state.viewMounted) captureViewState();
     state.view = view;
     state.viewMounted = true;
+    cachedViewState.currentView = view;
+    writeViewState();
     const epoch = ++state.viewEpoch;
     const topbarCopy = {
       all: ["全部应用", "你的页面应用，都在这里。"],
-      development: ["开发连接", "让任意电脑的智能体快速更新、刷新和发布 happ。"],
+      development: ["开发服务", "让任意电脑的智能体快速更新、刷新和发布 happ。"],
       settings: ["设置", "调整外观、界面版本与常用工具。"],
       support: ["支持 Hermit", "向项目提交反馈，并查看开源仓库。"],
       icons: ["内置图标", "搜索并复制页面可直接使用的图标。"]
@@ -118,5 +143,5 @@
   $$("[data-view]").forEach(button => { button.onclick = () => switchView(button.dataset.view); });
   $(".brand").onclick = event => { event.preventDefault(); switchView("favorites"); };
   addEventListener("pagehide", () => { if (state.viewMounted) captureViewState(); });
-  H.navigation = { showView, switchView, captureViewState, restoreViewScroll, cachedViewState };
+  H.navigation = { showView, switchView, captureViewState, restoreViewScroll, restoreCachedViewState, initialView, cachedViewState };
 })();

@@ -91,11 +91,11 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
+import org.json.JSONTokener
 import java.net.InetAddress
 import java.io.File
 import java.io.ByteArrayOutputStream
@@ -131,6 +131,13 @@ class MainActivity : ComponentActivity(), BridgeHost {
     @Volatile private var visibleAppId: String? = null
     private var launchedFromLibrary = false
     private var pendingStoreScript: String? = null
+    private data class PendingAgentReload(
+        val role: RuntimeRole,
+        val appId: String?,
+        val restoreStateJson: String?,
+        val postReloadScript: String?,
+    )
+    private var pendingAgentReload: PendingAgentReload? = null
     private data class PromptChoice(val value: String, val label: String, val emphasis: String = "normal")
     private data class PendingShellPrompt(
         val token: String,
@@ -280,27 +287,9 @@ class MainActivity : ComponentActivity(), BridgeHost {
             val appId = args.optString("appId").takeIf { it.isNotBlank() }
             when (action) {
                 "open" -> openAgentTarget(appId, args.optString("route").takeIf { !args.isNull("route") && it.isNotBlank() })
-                "reload" -> {
-                    if (visibleAppId == appId && session?.role == RuntimeRole.WEB_APP) {
-                        session?.devRevision = args.optLong("revision").takeIf { args.has("revision") && !args.isNull("revision") }
-                        webView?.settings?.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
-                        webView?.reload()
-                        JSONObject().put("state", "reloading").put("appId", appId)
-                    } else JSONObject().put("state", "not-visible").put("appId", appId)
-                }
-                "reload-shell" -> {
-                    val requestedMode = args.optString("runtimeMode", "current")
-                    val configuredMode = when (requestedMode) {
-                        "current" -> hermitApp.officialShell.mode()
-                        OfficialShellManager.Mode.ONLINE.value -> runBlocking { hermitApp.officialShell.activateOnline() }
-                        OfficialShellManager.Mode.LOCAL.value -> hermitApp.officialShell.setMode(OfficialShellManager.Mode.LOCAL.value)
-                        else -> throw HermitException(ErrorCodes.INVALID_ARGUMENT, "未知界面模式")
-                    }
-                    if (visibleAppId == null && session?.role == RuntimeRole.STORE) {
-                        root.post { if (visibleAppId == null && session?.role == RuntimeRole.STORE) showTarget(null, false) }
-                        JSONObject().put("state", "reloading").put("configuredMode", configuredMode.value)
-                    } else JSONObject().put("state", "not-visible").put("configuredMode", configuredMode.value)
-                }
+                "page-state" -> captureAgentPageState(args)
+                "reload" -> reloadAppFromAgent(args)
+                "reload-shell" -> reloadShellFromAgent(args)
                 "refresh" -> refreshDevRuntime(args)
                 "switch" -> {
                     if (visibleAppId == appId && session?.role == RuntimeRole.WEB_APP) {
@@ -427,6 +416,196 @@ class MainActivity : ComponentActivity(), BridgeHost {
         view.settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
         view.reload()
         return JSONObject().put("state", "reloading").put("appId", appId).put("revision", revision)
+    }
+
+    private suspend fun captureAgentPageState(args: JSONObject): JSONObject {
+        val view = webView ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "当前没有可读取的页面")
+        val current = session ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "当前没有页面会话")
+        if (current.role !in setOf(RuntimeRole.STORE, RuntimeRole.WEB_APP)) {
+            throw HermitException(ErrorCodes.ORIGIN_DENIED, "当前页面不开放开发状态读取")
+        }
+        val requestedAppId = args.optString("appId").takeIf { it.isNotBlank() }
+        if (current.role == RuntimeRole.WEB_APP) {
+            if (requestedAppId == null || requestedAppId != current.instance?.appId) {
+                throw HermitException(ErrorCodes.INVALID_ARGUMENT, "必须指定当前前台 happ 的 appId")
+            }
+            if (current.instance?.launchChannel != LaunchChannel.DEV) {
+                throw HermitException(ErrorCodes.DEV_MODE_REQUIRED, "页面状态只允许读取当前运行的 happ 开发副本")
+            }
+        } else if (requestedAppId != null) {
+            throw HermitException(ErrorCodes.INVALID_ARGUMENT, "读取 HermitUI 状态时不能指定 appId")
+        }
+        val requestedKeys = args.optJSONArray("localStorageKeys") ?: JSONArray()
+        val shellKeys = setOf("hermit.theme", "hermit.shell.view-state.v1")
+        val storageKeys = JSONArray()
+        for (index in 0 until requestedKeys.length()) {
+            val key = requestedKeys.getString(index)
+            if (current.role != RuntimeRole.STORE || key in shellKeys) storageKeys.put(key)
+        }
+        val captureCustomState = true
+        val script = """
+            (() => {
+              const keys = $storageKeys, values = {}, truncatedKeys = [];
+              for (const key of keys) {
+                try {
+                  const value = localStorage.getItem(key);
+                  if (typeof value === "string" && value.length > $MAX_STORAGE_VALUE_CHARS) {
+                    values[key] = value.slice(0, $MAX_STORAGE_VALUE_CHARS); truncatedKeys.push(key);
+                  } else values[key] = value;
+                } catch (_) { values[key] = null; }
+              }
+              let appState = null, appStateError = null;
+              if ($captureCustomState) {
+                try {
+                  const hook = window.hermitDevState;
+                  if (hook && typeof hook.capture === "function") appState = hook.capture();
+                } catch (error) { appStateError = String(error && error.message || error); }
+              }
+              const result = {
+                location: { href:location.href, origin:location.origin, pathname:location.pathname, search:location.search, hash:location.hash },
+                document: { title:document.title, readyState:document.readyState, visibilityState:document.visibilityState, contentType:document.contentType, referrer:document.referrer },
+                viewport: { width:innerWidth, height:innerHeight, devicePixelRatio:devicePixelRatio || 1 },
+                scroll: { x:Math.max(0, Math.round(scrollX || 0)), y:Math.max(0, Math.round(scrollY || 0)) },
+                historyLength:history.length,
+                userAgent:navigator.userAgent,
+                localStorage:values,
+                truncatedLocalStorageKeys:truncatedKeys,
+                appState,
+                appStateError
+              };
+              let text = JSON.stringify(result);
+              if (text.length > $MAX_PAGE_STATE_CHARS) {
+                result.appState = null;
+                result.appStateError = "页面自定义状态超过大小限制";
+                text = JSON.stringify(result);
+              }
+              return text;
+            })()
+        """.trimIndent()
+        val page = evaluatePageJson(view, script)
+        return JSONObject()
+            .put("role", current.role.name)
+            .put("appId", current.instance?.appId ?: JSONObject.NULL)
+            .put("launchChannel", current.instance?.launchChannel?.name?.lowercase() ?: JSONObject.NULL)
+            .put("runtimeMode", current.instance?.runtimeMode?.name?.lowercase() ?: storeRunningMode)
+            .put("page", page)
+            .put("native", JSONObject()
+                .put("url", view.url ?: JSONObject.NULL)
+                .put("originalUrl", view.originalUrl ?: JSONObject.NULL)
+                .put("canGoBack", view.canGoBack())
+                .put("canGoForward", view.canGoForward()))
+    }
+
+    private fun reloadAppFromAgent(args: JSONObject): JSONObject {
+        val appId = args.getString("appId")
+        val current = session
+        val view = webView
+        if (visibleAppId != appId || current?.role != RuntimeRole.WEB_APP || view == null) {
+            throw HermitException(ErrorCodes.INVALID_ARGUMENT, "只能刷新当前前台运行的 happ 开发副本")
+        }
+        if (current.instance?.launchChannel != LaunchChannel.DEV) {
+            throw HermitException(ErrorCodes.DEV_MODE_REQUIRED, "刷新只允许调度当前运行的 happ 开发副本")
+        }
+        current.devRevision = args.optLong("revision").takeIf { args.has("revision") && !args.isNull("revision") }
+        val strategy = reloadStrategy(args)
+        val restoreStateJson = restoreStateJson(args)
+        val postReloadScript = args.optString("postReloadScript").takeIf { args.has("postReloadScript") && it.isNotBlank() }
+        if (postReloadScript != null) {
+            if (postReloadScript.length > MAX_POST_RELOAD_SCRIPT_CHARS) {
+                throw HermitException(ErrorCodes.QUOTA, "刷新后脚本超过大小限制")
+            }
+        }
+        pendingAgentReload = PendingAgentReload(RuntimeRole.WEB_APP, appId, restoreStateJson, postReloadScript)
+        val recreated = strategy == RELOAD_RECREATE
+        if (recreated) showTarget(appId, launchedFromLibrary)
+        else {
+            view.settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
+            view.reload()
+        }
+        return JSONObject().put("state", if (recreated) "runtime-recreated" else "reloading")
+            .put("appId", appId).put("strategy", strategy).put("reusedWebView", !recreated)
+            .put("restoreStateAccepted", restoreStateJson != null)
+            .put("postReloadScriptAccepted", postReloadScript != null)
+    }
+
+    private suspend fun reloadShellFromAgent(args: JSONObject): JSONObject {
+        val requestedMode = args.optString("runtimeMode", "current")
+        val configuredMode = when (requestedMode) {
+            "current" -> hermitApp.officialShell.mode()
+            OfficialShellManager.Mode.ONLINE.value -> hermitApp.officialShell.activateOnline()
+            OfficialShellManager.Mode.LOCAL.value -> hermitApp.officialShell.setMode(OfficialShellManager.Mode.LOCAL.value)
+            else -> throw HermitException(ErrorCodes.INVALID_ARGUMENT, "未知界面模式")
+        }
+        val view = webView
+        if (visibleAppId != null || session?.role != RuntimeRole.STORE || view == null) {
+            return JSONObject().put("state", "not-visible").put("configuredMode", configuredMode.value)
+        }
+        val strategy = reloadStrategy(args)
+        val restoreStateJson = restoreStateJson(args)
+        val recreated = strategy == RELOAD_RECREATE || storeRunningMode != configuredMode.value
+        pendingAgentReload = PendingAgentReload(RuntimeRole.STORE, null, restoreStateJson, null)
+        if (recreated) showTarget(null, false)
+        else {
+            view.settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
+            view.reload()
+        }
+        return JSONObject().put("state", if (recreated) "runtime-recreated" else "reloading")
+            .put("configuredMode", configuredMode.value).put("strategy", strategy).put("reusedWebView", !recreated)
+            .put("restoreStateAccepted", restoreStateJson != null)
+    }
+
+    private fun reloadStrategy(args: JSONObject): String {
+        val strategy = args.optString("strategy", RELOAD_IN_PLACE)
+        if (strategy !in setOf(RELOAD_IN_PLACE, RELOAD_RECREATE)) {
+            throw HermitException(ErrorCodes.INVALID_ARGUMENT, "刷新策略必须是 reload 或 recreate")
+        }
+        return strategy
+    }
+
+    private fun restoreStateJson(args: JSONObject): String? {
+        val text = args.optString("restoreStateJson").takeIf { args.has("restoreStateJson") && it.isNotBlank() } ?: return null
+        if (text.length > MAX_PAGE_STATE_CHARS) throw HermitException(ErrorCodes.QUOTA, "页面恢复状态超过大小限制")
+        val valid = runCatching {
+            val tokener = JSONTokener(text)
+            tokener.nextValue()
+            tokener.nextClean() == '\u0000'
+        }.getOrDefault(false)
+        if (!valid) throw HermitException(ErrorCodes.INVALID_ARGUMENT, "restoreStateJson 必须是完整 JSON")
+        return text
+    }
+
+    private suspend fun evaluatePageJson(view: WebView, script: String): JSONObject = suspendCancellableCoroutine { continuation ->
+        view.evaluateJavascript(script) { encoded ->
+            val result = if (webView !== view) Result.failure(HermitException(ErrorCodes.CONFLICT, "页面会话已变化，请重新读取状态")) else runCatching {
+                val text = JSONTokener(encoded ?: "null").nextValue() as? String
+                    ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "页面状态返回格式无效")
+                if (text.length > MAX_PAGE_STATE_CHARS) throw HermitException(ErrorCodes.QUOTA, "页面状态超过大小限制")
+                JSONObject(text)
+            }
+            if (continuation.isActive) continuation.resumeWith(result)
+        }
+    }
+
+    private fun applyPendingAgentReload(view: WebView, current: RuntimeSession) {
+        val pending = pendingAgentReload ?: return
+        if (webView !== view || pending.role != current.role || pending.appId != current.instance?.appId) return
+        pendingAgentReload = null
+        val state = pending.restoreStateJson ?: "null"
+        val postScript = pending.postReloadScript?.let(JSONObject::quote)
+        val script = """
+            (async () => {
+              const state = $state;
+              try {
+                if (state !== null) {
+                  const hook = window.hermitDevState;
+                  if (hook && typeof hook.restore === "function") await hook.restore(state);
+                  else window.dispatchEvent(new CustomEvent("hermitdevrestore", { detail:state }));
+                }
+                ${if (postScript == null) "" else "(0, eval)($postScript);"}
+              } catch (error) { console.error("Hermit post-refresh action failed", error); }
+            })()
+        """.trimIndent()
+        view.evaluateJavascript(script, null)
     }
 
     private fun resolveAppRoute(app: WebAppInstance, route: String?): String {
@@ -621,6 +800,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
                     pendingStoreScript = null
                     view.evaluateJavascript(script, null)
                 }
+                applyPendingAgentReload(view, currentSession)
             }
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
                 if (devWorkspace != null) hermitApp.agentServer.recordDevDiagnostic(instance!!.appId, currentSession.devRevision,
@@ -2588,6 +2768,11 @@ class MainActivity : ComponentActivity(), BridgeHost {
         private const val STORE_ORIGIN = "https://store.hermit.invalid"
         private const val STORE_URL = "$STORE_ORIGIN/index.html"
         private const val MAX_URL_LENGTH = 4096
+        private const val RELOAD_IN_PLACE = "reload"
+        private const val RELOAD_RECREATE = "recreate"
+        private const val MAX_POST_RELOAD_SCRIPT_CHARS = 64 * 1024
+        private const val MAX_PAGE_STATE_CHARS = 512 * 1024
+        private const val MAX_STORAGE_VALUE_CHARS = 8 * 1024
         private const val SUPPORT_URL = "https://hermit.10knet.com/pages/donate.html"
         private const val SUPPORT_ORIGIN = "https://hermit.10knet.com"
         private const val REPOSITORY_URL = "https://github.com/zhyuzh3d/hermit"

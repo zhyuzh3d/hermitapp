@@ -16,8 +16,10 @@
   applyTheme(theme);
   $$("[data-theme-choice]").forEach(button => { button.onclick = () => applyTheme(button.dataset.themeChoice); });
 
-  bind("#licensesButton", async () => { const value = await host.call("licenses.info", {}); $("#licensesOutput").textContent = value.text; open("#licensesPanel"); });
-  bind("#diagnosticsButton", async () => { const report = await host.call("diagnostics.info", {}); $("#diagnosticsOutput").textContent = JSON.stringify(report, null, 2); open("#diagnosticsPanel"); });
+  async function openLicenses() { const value = await host.call("licenses.info", {}); $("#licensesOutput").textContent = value.text; open("#licensesPanel"); }
+  async function openDiagnostics() { const report = await host.call("diagnostics.info", {}); $("#diagnosticsOutput").textContent = JSON.stringify(report, null, 2); open("#diagnosticsPanel"); }
+  bind("#licensesButton", openLicenses);
+  bind("#diagnosticsButton", openDiagnostics);
   bind("#copyDiagnostics", () => copy($("#diagnosticsOutput").textContent, "诊断报告"));
   bind("#githubButton", () => host.call("about.openRepository", {}));
 
@@ -120,5 +122,5 @@
     const results = await Promise.allSettled([loadAbout(), loadVoiceSettings(true)]);
     if (results[1].status === "rejected") setStatus("#speechCapabilityStatus", (results[1].reason && results[1].reason.message) || "语音能力检测失败", "error");
   }
-  H.features.settings = { loadAbout, loadVoiceSettings, load };
+  H.features.settings = { loadAbout, loadVoiceSettings, load, openLicenses, openDiagnostics };
 })();

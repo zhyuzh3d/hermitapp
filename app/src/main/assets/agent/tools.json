@@ -32,6 +32,40 @@
     }
   },
   {
+    "name": "hermit_get_page_state",
+    "description": "Read bounded basics for the visible page. Selected localStorage and custom app state are available only to HermitUI or an ordinary happ running its development copy.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "appId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Required for an ordinary happ and must match the visible DEV copy. Omit for HermitUI."
+        },
+        "localStorageKeys": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "description": "Explicit keys to read. HermitUI filters this list to its public state keys."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false
+    }
+  },
+  {
     "name": "hermit_list_apps",
     "description": "List ordinary installed happs. The protected HermitUI control plane is never returned.",
     "inputSchema": {
@@ -588,7 +622,7 @@
   },
   {
     "name": "hermit_reload_app",
-    "description": "Reload the current route only when the target happ is visible.",
+    "description": "Reload the visible happ in its existing WebView by default, optionally recreate the runtime, restore app state, and run a bounded post-refresh script only for a development copy.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -597,6 +631,24 @@
           "minLength": 1,
           "maxLength": 80,
           "description": "Hermit instance appId"
+        },
+        "strategy": {
+          "type": "string",
+          "enum": [
+            "reload",
+            "recreate"
+          ],
+          "description": "reload reuses the current WebView and bypasses cache; recreate rebuilds the WebView runtime."
+        },
+        "restoreStateJson": {
+          "type": "string",
+          "maxLength": 524288,
+          "description": "JSON passed to window.hermitDevState.restore(state), or to the hermitdevrestore event when the hook is absent."
+        },
+        "postReloadScript": {
+          "type": "string",
+          "maxLength": 65536,
+          "description": "JavaScript evaluated after refresh. Accepted only while this ordinary happ is running its development copy."
         }
       },
       "required": [
@@ -613,7 +665,7 @@
   },
   {
     "name": "hermit_reload_shell",
-    "description": "Reload the currently visible HermitUI. This does not expose or modify protected HermitUI source files.",
+    "description": "Reload the visible HermitUI in its existing WebView by default, optionally recreate the runtime, and invoke only the fixed HermitUI restore hook. Arbitrary script input is never accepted.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -625,6 +677,19 @@
             "local"
           ],
           "description": "Keep the configured mode, or explicitly select the official online/local HermitUI runtime before reloading."
+        },
+        "strategy": {
+          "type": "string",
+          "enum": [
+            "reload",
+            "recreate"
+          ],
+          "description": "reload reuses the current WebView and bypasses cache; recreate rebuilds the WebView runtime."
+        },
+        "restoreStateJson": {
+          "type": "string",
+          "maxLength": 524288,
+          "description": "JSON passed only to HermitUI fixed window.hermitDevState.restore(state) hook."
         }
       },
       "required": [],

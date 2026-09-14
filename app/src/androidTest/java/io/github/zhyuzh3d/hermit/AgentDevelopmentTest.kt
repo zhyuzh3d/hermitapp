@@ -105,13 +105,13 @@ class AgentDevelopmentTest {
     @Test fun protocolDiscoveryOriginAndBruteForceLimits() {
         val discovery = JSONObject(request("/.well-known/hermit-agent", credential = null).second)
         assertFalse(discovery.toString().contains(password)); assertFalse(discovery.has("pairUrl"))
-        assertEquals(27, discovery.getJSONArray("tools").length())
+        assertEquals(29, discovery.getJSONArray("tools").length())
         assertEquals(200, request("/skills/hermit-device/SKILL.md", credential = null).first)
         assertEquals(200, request("/hermit-agent.py", credential = null).first)
         val initialized = rpc("initialize", JSONObject().put("protocolVersion", "2025-11-25").put("clientInfo", JSONObject().put("name", "test").put("version", "1")).put("capabilities", JSONObject()))
         assertEquals("2025-11-25", initialized.getString("protocolVersion"))
         assertTrue(initialized.getString("instructions").contains("password"))
-        assertEquals(27, rpc("tools/list").getJSONArray("tools").length())
+        assertEquals(29, rpc("tools/list").getJSONArray("tools").length())
         assertTrue(rpc("resources/read", JSONObject().put("uri", "hermit://webapp-guide")).getJSONArray("contents").getJSONObject(0).getString("text").contains("HTML"))
         assertTrue(rpc("prompts/get", JSONObject().put("name", "develop-webapp"))
             .getJSONArray("messages").getJSONObject(0).getJSONObject("content").getString("text").contains("hermit_enter_dev_mode"))
@@ -154,8 +154,8 @@ class AgentDevelopmentTest {
         val appBefore = app.registry.getInstance(id)!!
         assertEquals("opening", tool("hermit_open_app", JSONObject().put("appId", id)).getString("state"))
         assertEquals(id, tool("hermit_runtime_status").getString("appId"))
-        assertEquals("reloading", tool("hermit_reload_app", JSONObject().put("appId", id)).getString("state"))
-        assertEquals("not-visible", tool("hermit_reload_app", JSONObject().put("appId", secondApp.getString("appId"))).getString("state"))
+        assertEquals("E_DEV_MODE_REQUIRED", tool("hermit_reload_app", JSONObject().put("appId", id), true).getString("code"))
+        assertEquals("E_INVALID_ARGUMENT", tool("hermit_reload_app", JSONObject().put("appId", secondApp.getString("appId")), true).getString("code"))
         assertTrue(tool("hermit_list_releases", JSONObject().put("appId", id)).getJSONArray("releases").length() >= 2)
         tool("hermit_rollback", JSONObject().put("appId", id).put("releaseId", first).put("expectedReleaseId", applied.getString("releaseId")).put("requestId", UUID.randomUUID().toString()))
         val appAfter = app.registry.getInstance(id)!!

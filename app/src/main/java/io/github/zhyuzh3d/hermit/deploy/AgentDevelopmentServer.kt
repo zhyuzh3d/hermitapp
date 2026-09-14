@@ -38,7 +38,7 @@ class AgentDevelopmentServer(
     private val catalog by lazy { JSONArray(catalogText) }
     private val guidanceVersion by lazy { AgentWorkspace.sha((guide() + resource("hermit://webapp-guide") + resource("hermit://page-api")).toByteArray()) }
     @Volatile private var active: Endpoint? = null
-    @Volatile private var uiHandler: ((String, JSONObject) -> JSONObject)? = null
+    @Volatile private var uiHandler: (suspend (String, JSONObject) -> JSONObject)? = null
     private data class RenderOperation(
         val id: String, val appId: String, val revision: Long, val createdAt: Long,
         val result: CompletableDeferred<JSONObject> = CompletableDeferred(),
@@ -76,7 +76,7 @@ class AgentDevelopmentServer(
 
     private fun authorized(header: String) = constantEquals("Bearer " + passwordForUi(), header)
 
-    fun setUiHandler(handler: ((String, JSONObject) -> JSONObject)?) { uiHandler = handler }
+    fun setUiHandler(handler: (suspend (String, JSONObject) -> JSONObject)?) { uiHandler = handler }
 
     fun reportDevRender(appId: String, revision: Long, url: String) {
         renderOperations.values.filter { it.appId == appId && it.revision == revision && !it.result.isCompleted }.forEach { operation ->
@@ -361,6 +361,7 @@ class AgentDevelopmentServer(
                         .put("runId", runId).put("guidanceVersion", guidanceVersion).put("text", guide())
                     "hermit_runtime_status" -> ui("status", JSONObject(), authorization)
                         .put("serverVersion", BuildConfig.VERSION_NAME).put("runId", runId)
+                    "hermit_get_page_state" -> ui("page-state", args, authorization)
                     "hermit_list_apps" -> JSONObject().put("apps", JSONArray(registry.listInstances().map { app ->
                         app.toJson().put("devWorkspace", devWorkspaces.status(app.appId))
                     }))
@@ -415,8 +416,9 @@ class AgentDevelopmentServer(
                         val app = registry.getInstance(appId!!)!!
                         val workspace = if (app.launchChannel == io.github.zhyuzh3d.hermit.model.LaunchChannel.DEV) registry.getDevWorkspace(appId) else null
                         val operation = workspace?.let { createRenderOperation(appId, it.revision) }
-                        val ui = ui("reload", JSONObject().put("appId", appId)
-                            .put("revision", workspace?.revision ?: JSONObject.NULL), authorization)
+                        val payload = JSONObject(args.toString()).put("appId", appId)
+                            .put("revision", workspace?.revision ?: JSONObject.NULL)
+                        val ui = ui("reload", payload, authorization)
                         if (ui.optString("state") == "not-visible") operation?.let(::discardRenderOperation)
                         ui.put("renderOperationId", operation?.id ?: JSONObject.NULL)
                     }
@@ -543,8 +545,8 @@ class AgentDevelopmentServer(
             withContext(Dispatchers.Main) {
                 synchronized(this@AgentDevelopmentServer) {
                     live(authorization)
-                    uiHandler?.invoke(action, args) ?: throw IllegalStateException("Hermit has no foreground activity")
                 }
+                uiHandler?.invoke(action, args) ?: throw IllegalStateException("Hermit has no foreground activity")
             }
         }
 

@@ -7,7 +7,7 @@
 <body>
 <a class="skip-link" href="#mainContent">跳到主要内容</a>
 <div id="shell">
-<header id="favoriteTopbar" class="topbar"><a id="homeBrand" class="brand" href="#libraryView" aria-label="Hermit 应用库"><span class="brand-mark"><span class="theme-logo" aria-hidden="true"></span></span>hermit<span id="brandDot" class="brand-dot">.</span></a><div id="topbarCopy" class="topbar-copy hidden"><h1 id="topbarTitle">全部应用</h1><p id="topbarDescription">你的页面应用，都在这里。</p></div><div class="topbar-versions"><span>APK <b id="topApkVersion">读取中…</b></span><span>UI <b id="topWebVersion">1.10.2</b></span></div></header>
+<header id="favoriteTopbar" class="topbar"><a id="homeBrand" class="brand" href="#libraryView" aria-label="Hermit 应用库"><span class="brand-mark"><span class="theme-logo" aria-hidden="true"></span></span>hermit<span id="brandDot" class="brand-dot">.</span></a><div id="topbarCopy" class="topbar-copy hidden"><h1 id="topbarTitle">全部应用</h1><p id="topbarDescription">你的页面应用，都在这里。</p></div><div class="topbar-versions"><span>APK <b id="topApkVersion">读取中…</b></span><span>UI <b id="topWebVersion">1.10.3</b></span></div></header>
 <main id="mainContent">
 <section id="libraryView" class="view" aria-label="应用库">
 <div id="browserNotice" class="info-card hidden" role="status"><i class="fa-solid fa-mobile-screen-button" aria-hidden="true"></i><div><strong>在 HermitApp 中，管理你的应用</strong><p>这是 HermitUI 界面。普通浏览器无法读取手机上的应用或调用设备能力。</p><a href="https://hermit.10knet.com/pages/download.html">下载 HermitApp</a><span aria-hidden="true"> · </span><a href="https://hermit.10knet.com/pages/guide.html">阅读使用指南</a></div></div>
@@ -19,10 +19,10 @@
 <div id="empty" class="empty plain-empty hidden"><div class="empty-art" aria-hidden="true"><span class="mini-tile blue"><i class="fa-solid fa-globe"></i></span><span class="main-tile"><span class="theme-logo"></span></span><span class="mini-tile violet"><i class="fa-solid fa-heart"></i></span></div><h2 id="emptyTitle">收藏你的第一个应用</h2><p id="emptyMessage">使用上方方式添加，或点亮已有应用卡片上的爱心。</p><span class="empty-foot"><i class="fa-solid fa-shield-halved"></i>原生数据按应用隔离 · 同源页面数据可共享</span></div>
 <p id="collectionPrompt" class="collection-prompt">已收藏【0】个HAPP应用</p><div id="apps" class="grid"></div>
 </section>
-<section id="developmentView" class="view hidden" aria-label="开发连接">
+<section id="developmentView" class="view hidden" aria-label="开发服务">
 <div class="developer-card"><div class="switch-row"><div><strong>智能体开发模式</strong><small id="agentStatus" role="status">正在读取状态…</small></div><button id="agentToggle" class="switch" role="switch" aria-checked="false" aria-label="开启智能体开发模式"><span></span></button></div>
 <p class="hint">开发地址本身就是自描述入口：Windows、macOS 或 Linux 上的智能体可从中发现 MCP 工具、Skill、指南和通用适配器。修改普通 happ 前，必须先在 happ 设置中切换到“运行开发副本”；HermitUI 始终受保护。</p>
-<div class="agent-address-row"><div><span class="field-label">局域网地址</span><output id="agentUrl" class="agent-url">未连接 Wi-Fi</output></div><button id="copyAgentAddress" aria-label="复制局域网地址"><i class="fa-solid fa-copy accent-blue" aria-hidden="true"></i>复制</button></div>
+<div class="agent-address-row"><div><span class="field-label">开发服务地址</span><output id="agentUrl" class="agent-url">未连接 Wi-Fi</output></div><button id="copyAgentAddress" aria-label="复制开发服务地址"><i class="fa-solid fa-copy accent-blue" aria-hidden="true"></i>复制</button></div>
 <div class="agent-address-row"><div><span class="field-label">USB 备用</span><output id="agentUsb" class="agent-url">adb forward tcp:8766 tcp:8766</output></div><button id="copyAgentUsb" aria-label="复制 USB 命令"><i class="fa-solid fa-copy accent-violet" aria-hidden="true"></i>复制</button></div>
 <button id="startAgentUsb" class="wide"><i class="fa-solid fa-usb accent-violet" aria-hidden="true"></i>仅 USB 启动</button>
 <div class="agent-secret"><label for="agentPassword">六位密码<input id="agentPassword" type="text" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" aria-label="六位开发密码"></label><button id="saveAgentPassword"><i class="fa-solid fa-floppy-disk accent-orange" aria-hidden="true"></i>保存</button></div>
@@ -31,7 +31,7 @@
 </section>
 <section id="settingsView" class="view hidden" aria-label="设置">
 <div class="settings-card"><h2>外观</h2><div id="themeChoices" class="segmented" aria-label="主题"><button data-theme-choice="system">跟随系统</button><button data-theme-choice="light">浅色</button><button data-theme-choice="dark">深色</button></div></div>
-<div class="settings-card"><h2>界面</h2><p id="shellVersionSwitch" class="shell-version-text">当前界面版本：1.10.2</p><button id="updateLocalShell" class="primary wide"><i class="fa-solid fa-download accent-lime"></i>更新本地版本</button></div>
+<div class="settings-card"><h2>界面</h2><p id="shellVersionSwitch" class="shell-version-text">当前界面版本：1.10.3</p><button id="updateLocalShell" class="primary wide"><i class="fa-solid fa-download accent-lime"></i>更新本地版本</button></div>
 <div id="voiceSettings" class="settings-card"><h2>系统语音</h2><p class="hint">Hermit 统一适配设备内置语音服务，happ 只调用同一套 TTS 和 ASR 接口。</p>
 <div class="voice-section"><div class="voice-section-head"><strong>文字朗读（TTS）</strong><span id="ttsCapabilityStatus" class="voice-status">正在检测…</span></div>
 <label>朗读引擎<select id="ttsEngine"><option value="system">跟随系统默认</option></select></label>
@@ -104,6 +104,7 @@
 <script src="features/development.js"></script>
 <script src="features/settings.js"></script>
 <script src="features/icons.js"></script>
+<script src="core/development-state.js"></script>
 <script src="core/app.js"></script>
 </body>
 </html>
