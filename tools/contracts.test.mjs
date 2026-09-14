@@ -60,6 +60,8 @@ test("agent catalog, guide snapshots and shared-password authority stay aligned"
   const tools = JSON.parse(fs.readFileSync(root + "tools.json", "utf8"));
   const server = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/deploy/AgentDevelopmentServer.kt", "utf8");
   assert.equal(new Set(tools.map(tool => tool.name)).size, 28);
+  assert.deepEqual(tools.find(tool => tool.name === "hermit_get_guide").inputSchema.properties, {});
+  assert.deepEqual(tools.find(tool => tool.name === "hermit_reload_shell").inputSchema.properties.runtimeMode.enum, ["current", "online", "local"]);
   for (const tool of tools) {
     const dispatch = new RegExp(`(?:"[^"]+"\\s*,\\s*)*"${tool.name}"(?:\\s*,\\s*"[^"]+")*\\s*->`);
     assert.match(server, dispatch);

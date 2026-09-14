@@ -4,17 +4,7 @@
     "description": "Return current device development guidance and version identifiers.",
     "inputSchema": {
       "type": "object",
-      "properties": {
-        "runtimeMode": {
-          "type": "string",
-          "enum": [
-            "current",
-            "online",
-            "local"
-          ],
-          "description": "Keep the configured mode, or explicitly select the official online/local HermitUI runtime before reloading."
-        }
-      },
+      "properties": {},
       "required": [],
       "additionalProperties": false
     },
@@ -626,7 +616,17 @@
     "description": "Reload the currently visible HermitUI. This does not expose or modify protected HermitUI source files.",
     "inputSchema": {
       "type": "object",
-      "properties": {},
+      "properties": {
+        "runtimeMode": {
+          "type": "string",
+          "enum": [
+            "current",
+            "online",
+            "local"
+          ],
+          "description": "Keep the configured mode, or explicitly select the official online/local HermitUI runtime before reloading."
+        }
+      },
       "required": [],
       "additionalProperties": false
     },
