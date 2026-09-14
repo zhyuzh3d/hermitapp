@@ -80,12 +80,13 @@ class FileStore(private val context: Context) {
         return import(appId, generation, bytes.inputStream(), name, "text/plain")
     }
 
-    fun readText(appId: String, generation: String, logicalId: String): JSONObject {
+    fun readText(appId: String, generation: String, logicalId: String, maxBytes: Int = MAX_INLINE_BYTES): JSONObject {
         val metadata = metadata(appId, generation, logicalId) ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "文件不存在")
         if (!metadata.mime.startsWith("text/") && metadata.mime !in setOf("application/json", "application/xml")) {
             throw HermitException(ErrorCodes.INVALID_ARGUMENT, "该文件不是可内联读取的文本")
         }
-        if (metadata.size > MAX_INLINE_BYTES) throw HermitException(ErrorCodes.QUOTA, "文件过大，请导出后读取")
+        val boundedMax = maxBytes.coerceIn(1, MAX_EXTENDED_INLINE_BYTES)
+        if (metadata.size > boundedMax) throw HermitException(ErrorCodes.QUOTA, "文件超过允许的内联读取上限")
         val text = file(appId, generation, logicalId).readText(Charsets.UTF_8)
         return metadata.json().put("text", text)
     }
@@ -227,6 +228,7 @@ class FileStore(private val context: Context) {
         private const val MAX_APP_FILE_BYTES = 256L * 1024 * 1024
         private const val MAX_APP_FILES = 10_000L
         private const val MAX_INLINE_BYTES = 256 * 1024
+        private const val MAX_EXTENDED_INLINE_BYTES = 8 * 1024 * 1024
         private const val SHARE_TTL_MS = 24L * 60 * 60 * 1000
     }
 }

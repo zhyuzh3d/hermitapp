@@ -1,5 +1,6 @@
 {
-  "schema": 1,
+  "schema": 2,
+  "happId": "com.hermit.voicenotes",
   "name": "Hermit 语音笔记",
   "entry": "index.html",
   "routing": "hash",

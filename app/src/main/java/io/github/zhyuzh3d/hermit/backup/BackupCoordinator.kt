@@ -90,6 +90,11 @@ class BackupCoordinator(
                         .put("app", JSONObject().put("name", app.name).put("source", app.source.name.lowercase())
                             .put("runtimeMode", app.runtimeMode.name.lowercase())
                             .put("liveUrl", app.liveUrl ?: JSONObject.NULL)
+                            .put("happId", app.happId ?: JSONObject.NULL)
+                            .put("updateUrl", app.updateUrl ?: JSONObject.NULL)
+                            .put("downloadUrl", app.downloadUrl ?: JSONObject.NULL)
+                            .put("customIconDataUrl", app.iconDataUrl ?: JSONObject.NULL)
+                            .put("allowCrossOriginNetwork", app.allowCrossOriginNetwork)
                             .put("sourceAdapter", app.sourceAdapter)
                             .put("sourceSpec", JSONObject(app.sourceSpec)))
                         .put("recordCount", recordCount).put("fileCount", stored.size).put("codeFileCount", codeFiles)
@@ -175,7 +180,18 @@ class BackupCoordinator(
                         throw HermitException(ErrorCodes.INVALID_ARGUMENT, "备份附件摘要不一致：$id")
                     }
                 }
-                registry.updateInstance(restored, name, null, null)
+                registry.updateInstance(restored, name, app.liveUrl, null)
+                if (schema == 2 && appJson.has("customIconDataUrl")) {
+                    registry.updatePresentation(
+                        restored,
+                        name,
+                        appJson.optString("customIconDataUrl").takeIf { it.isNotBlank() && it != "null" },
+                    )
+                }
+                if (schema == 2) {
+                    registry.updateUrls(restored, liveUrl, appJson.optString("updateUrl").takeIf { it.isNotBlank() && it != "null" })
+                    if (appJson.optBoolean("allowCrossOriginNetwork")) registry.setCrossOriginNetworkEnabled(restored, true)
+                }
                 registry.updateSource(restored, adapter, appJson.getJSONObject("sourceSpec").toString())
                 if (runtimeMode == HappRuntimeMode.LIVE && app.runtimeMode != HappRuntimeMode.LIVE) {
                     registry.setRuntimeMode(restored, HappRuntimeMode.LIVE)

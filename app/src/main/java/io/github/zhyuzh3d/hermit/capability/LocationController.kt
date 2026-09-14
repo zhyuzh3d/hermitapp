@@ -24,6 +24,13 @@ class LocationController(context: Context) {
     private val manager = appContext.getSystemService(LocationManager::class.java)
     private val watches = ConcurrentHashMap<String, LocationListener>()
 
+    fun availability(): JSONObject = JSONObject()
+        .put("supported", manager.allProviders.isNotEmpty())
+        .put("enabled", manager.isLocationEnabled)
+        .put("providers", org.json.JSONArray(manager.allProviders.map { provider ->
+            JSONObject().put("name", provider).put("enabled", runCatching { manager.isProviderEnabled(provider) }.getOrDefault(false))
+        }))
+
     @SuppressLint("MissingPermission")
     suspend fun getCurrent(params: JSONObject): JSONObject {
         val provider = chooseProvider(params.optBoolean("precise", false))

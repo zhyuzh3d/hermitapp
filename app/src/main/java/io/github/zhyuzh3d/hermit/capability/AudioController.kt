@@ -5,17 +5,21 @@ import android.content.pm.PackageManager
 import android.media.MediaPlayer
 import android.media.MediaRecorder
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import io.github.zhyuzh3d.hermit.model.ErrorCodes
 import io.github.zhyuzh3d.hermit.model.HermitException
 import org.json.JSONObject
 import java.io.File
 import java.io.FileInputStream
 import java.util.UUID
+import kotlin.math.log10
 
 /** Local microphone recording and managed-file playback without an online media service. */
 class AudioController(context: Context) {
     private val appContext = context.applicationContext
     private val lock = Any()
+    private val levelHandler = Handler(Looper.getMainLooper())
     private var recording: Recording? = null
     private var playback: Playback? = null
 
@@ -28,6 +32,7 @@ class AudioController(context: Context) {
         val startedAt: Long,
         var recorder: MediaRecorder?,
         var finalizedAt: Long? = null,
+        var levelTicker: Runnable? = null,
     )
 
     private data class Playback(val sessionId: String, val id: String, val player: MediaPlayer)
@@ -77,6 +82,7 @@ class AudioController(context: Context) {
                 recorder.prepare()
                 recorder.start()
                 recording = active
+                startLevelTicker(active, emit)
             } catch (error: Throwable) {
                 runCatching { recorder.reset() }
                 recorder.release()
@@ -209,6 +215,7 @@ class AudioController(context: Context) {
 
     private fun finalizeLocked(active: Recording) {
         val recorder = active.recorder ?: return
+        stopLevelTicker(active)
         recorder.stop()
         recorder.release()
         active.recorder = null
@@ -216,6 +223,7 @@ class AudioController(context: Context) {
     }
 
     private fun releaseRecorder(active: Recording) {
+        stopLevelTicker(active)
         active.recorder?.let { recorder ->
             runCatching { recorder.stop() }
             recorder.release()
@@ -223,9 +231,41 @@ class AudioController(context: Context) {
         }
     }
 
+    private fun startLevelTicker(active: Recording, emit: (String, JSONObject) -> Unit) {
+        val ticker = object : Runnable {
+            override fun run() {
+                val amplitude = synchronized(lock) {
+                    if (recording !== active || active.recorder == null) return
+                    runCatching { active.recorder?.maxAmplitude ?: 0 }.getOrDefault(0).coerceIn(0, 32_767)
+                }
+                val level = amplitude.toDouble() / 32_767.0
+                val peakDb = if (amplitude > 0) 20.0 * log10(level) else -90.0
+                emit(
+                    "audio.recording.level",
+                    JSONObject()
+                        .put("recordingId", active.id)
+                        .put("amplitude", amplitude)
+                        .put("level", level)
+                        .put("peakDb", peakDb.coerceAtLeast(-90.0)),
+                )
+                synchronized(lock) {
+                    if (recording === active && active.recorder != null) levelHandler.postDelayed(this, LEVEL_INTERVAL_MS)
+                }
+            }
+        }
+        active.levelTicker = ticker
+        levelHandler.post(ticker)
+    }
+
+    private fun stopLevelTicker(active: Recording) {
+        active.levelTicker?.let(levelHandler::removeCallbacks)
+        active.levelTicker = null
+    }
+
     companion object {
         private const val MIN_MAX_DURATION_MS = 1_000L
         private const val DEFAULT_MAX_DURATION_MS = 5L * 60_000
         private const val MAX_MAX_DURATION_MS = 30L * 60_000
+        private const val LEVEL_INTERVAL_MS = 100L
     }
 }

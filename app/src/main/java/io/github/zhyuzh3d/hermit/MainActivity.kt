@@ -3,11 +3,14 @@ package io.github.zhyuzh3d.hermit
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.AlertDialog
+import android.app.AlarmManager
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -15,7 +18,9 @@ import android.os.storage.StorageManager
 import android.provider.Settings
 import android.view.Gravity
 import android.view.View
+import android.view.WindowManager
 import android.webkit.GeolocationPermissions
+import android.webkit.ConsoleMessage
 import android.webkit.PermissionRequest
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
@@ -31,6 +36,7 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
+import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -40,6 +46,8 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.annotation.VisibleForTesting
 import androidx.lifecycle.lifecycleScope
 import androidx.webkit.ProfileStore
+import androidx.webkit.ServiceWorkerClientCompat
+import androidx.webkit.ServiceWorkerControllerCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import io.github.zhyuzh3d.hermit.bridge.BridgeController
@@ -53,12 +61,22 @@ import io.github.zhyuzh3d.hermit.capability.PermissionBroker
 import io.github.zhyuzh3d.hermit.capability.SpeechController
 import io.github.zhyuzh3d.hermit.capability.LocationController
 import io.github.zhyuzh3d.hermit.capability.NativeHttpClient
+import io.github.zhyuzh3d.hermit.capability.SensorController
+import io.github.zhyuzh3d.hermit.capability.WifiController
+import io.github.zhyuzh3d.hermit.capability.BluetoothController
+import io.github.zhyuzh3d.hermit.capability.InfraredController
+import io.github.zhyuzh3d.hermit.capability.DeviceController
 import io.github.zhyuzh3d.hermit.data.FileStore
 import io.github.zhyuzh3d.hermit.data.RecordsStore
 import io.github.zhyuzh3d.hermit.launcher.ShortcutHost
+import io.github.zhyuzh3d.hermit.install.IdentityInstallChoice
+import io.github.zhyuzh3d.hermit.install.IconProcessor
+import io.github.zhyuzh3d.hermit.install.PackageManifest
+import io.github.zhyuzh3d.hermit.install.PackageManifestReader
 import io.github.zhyuzh3d.hermit.model.ErrorCodes
 import io.github.zhyuzh3d.hermit.model.HappRuntimeMode
 import io.github.zhyuzh3d.hermit.model.HappSource
+import io.github.zhyuzh3d.hermit.model.LaunchChannel
 import io.github.zhyuzh3d.hermit.model.HermitException
 import io.github.zhyuzh3d.hermit.model.WebAppInstance
 import io.github.zhyuzh3d.hermit.runtime.LocalContentGateway
@@ -66,6 +84,10 @@ import io.github.zhyuzh3d.hermit.runtime.OfficialShellManager
 import io.github.zhyuzh3d.hermit.runtime.SharedAssetGateway
 import io.github.zhyuzh3d.hermit.runtime.RuntimeRole
 import io.github.zhyuzh3d.hermit.runtime.RuntimeSession
+import io.github.zhyuzh3d.hermit.runtime.RuntimeNetworkPolicy
+import io.github.zhyuzh3d.hermit.notification.NotificationSpec
+import io.github.zhyuzh3d.hermit.notification.Recurrence
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -94,6 +116,11 @@ class MainActivity : ComponentActivity(), BridgeHost {
     private val speech by lazy { SpeechController(this) }
     private val permissionBroker by lazy { PermissionBroker(this, hermitApp.registry, ::requestPermissions) }
     private val location by lazy { LocationController(this) }
+    private val sensors by lazy { SensorController(this) }
+    private val wifi by lazy { WifiController(this) }
+    private val bluetooth by lazy { BluetoothController(this) }
+    private val infrared by lazy { InfraredController(this) }
+    private val device by lazy { DeviceController(this) }
     private val nativeHttp by lazy { NativeHttpClient(files) }
     private val backup by lazy { BackupCoordinator(this, hermitApp.registry, hermitApp.installer, records, files) }
     private lateinit var root: android.widget.FrameLayout
@@ -103,11 +130,13 @@ class MainActivity : ComponentActivity(), BridgeHost {
     @Volatile private var visibleAppId: String? = null
     private var launchedFromLibrary = false
     private var pendingStoreScript: String? = null
+    private var pendingOpenedNotification: JSONObject? = null
     private var forceLocalStoreOnce = false
     private var storeRunningMode = OfficialShellManager.Mode.LOCAL.value
     private var pendingZip: CancellableContinuation<Uri?>? = null
     private var pendingTree: CancellableContinuation<Uri?>? = null
     private var pendingFile: CancellableContinuation<Uri?>? = null
+    private var pendingImage: CancellableContinuation<Uri?>? = null
     private var pendingFileExport: CancellableContinuation<Uri?>? = null
     private var pendingPermissions: CancellableContinuation<Map<String, Boolean>>? = null
     private var pendingCamera: CancellableContinuation<Boolean>? = null
@@ -116,9 +145,12 @@ class MainActivity : ComponentActivity(), BridgeHost {
     private var pendingBackupImport: CancellableContinuation<Uri?>? = null
     private var pendingQrScan: CancellableContinuation<JSONObject>? = null
     private var pendingIcon: CancellableContinuation<Uri?>? = null
+    private var pendingExactAlarm: CancellableContinuation<Boolean>? = null
+    private var pendingSpeechActivity: CancellableContinuation<JSONObject>? = null
     private val pendingDirectoryImports = LinkedHashMap<String, Uri>()
     private val rebuilding = AtomicBoolean(false)
     private var lastHapticAt = 0L
+    private var keyboardOverlaysContent = false
 
     private val zipPicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         pendingZip?.let { continuation ->
@@ -129,6 +161,12 @@ class MainActivity : ComponentActivity(), BridgeHost {
     private val filePicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         pendingFile?.let { continuation ->
             pendingFile = null
+            if (continuation.isActive) continuation.resume(uri)
+        }
+    }
+    private val imagePicker = registerForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        pendingImage?.let { continuation ->
+            pendingImage = null
             if (continuation.isActive) continuation.resume(uri)
         }
     }
@@ -194,6 +232,21 @@ class MainActivity : ComponentActivity(), BridgeHost {
             continuation.resumeWith(Result.failure(HermitException(ErrorCodes.INVALID_ARGUMENT, "二维码中没有可添加的网页链接")))
         }
     }
+    private val exactAlarmLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        pendingExactAlarm?.let { continuation ->
+            pendingExactAlarm = null
+            if (continuation.isActive) continuation.resume(hermitApp.notifications.scheduler.exactAlarmAvailable())
+        }
+    }
+    private val speechActivityLauncher = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        pendingSpeechActivity?.let { continuation ->
+            pendingSpeechActivity = null
+            if (continuation.isActive) continuation.resume(
+                if (result.resultCode == RESULT_OK) speech.activityResult(result.data)
+                else JSONObject().put("cancelled", true).put("mode", "one-shot")
+            )
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -201,7 +254,9 @@ class MainActivity : ComponentActivity(), BridgeHost {
         setContentView(root)
         root.setBackgroundColor(ContextCompat.getColor(this, R.color.hermit_background))
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
-            val safe = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout() or WindowInsetsCompat.Type.ime())
+            var types = WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
+            if (!keyboardOverlaysContent) types = types or WindowInsetsCompat.Type.ime()
+            val safe = insets.getInsets(types)
             view.setPadding(safe.left, safe.top, safe.right, safe.bottom)
             WindowInsetsCompat.CONSUMED
         }
@@ -212,10 +267,20 @@ class MainActivity : ComponentActivity(), BridgeHost {
             }
         }
         processPendingProfileCleanup()
-        hermitApp.agentServer.setUiHandler { action, appId ->
+        hermitApp.agentServer.setUiHandler { action, args ->
+            val appId = args.optString("appId").takeIf { it.isNotBlank() }
             when (action) {
-                "open" -> { showTarget(appId, true); JSONObject().put("state", "opening").put("appId", appId) }
+                "open" -> openAgentTarget(appId, args.optString("route").takeIf { !args.isNull("route") && it.isNotBlank() })
                 "reload" -> {
+                    if (visibleAppId == appId && session?.role == RuntimeRole.WEB_APP) {
+                        session?.devRevision = args.optLong("revision").takeIf { args.has("revision") && !args.isNull("revision") }
+                        webView?.settings?.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
+                        webView?.reload()
+                        JSONObject().put("state", "reloading").put("appId", appId)
+                    } else JSONObject().put("state", "not-visible").put("appId", appId)
+                }
+                "refresh" -> refreshDevRuntime(args)
+                "switch" -> {
                     if (visibleAppId == appId && session?.role == RuntimeRole.WEB_APP) {
                         showTarget(appId, launchedFromLibrary)
                         JSONObject().put("state", "reloading").put("appId", appId)
@@ -252,6 +317,13 @@ class MainActivity : ComponentActivity(), BridgeHost {
     }
 
     private fun handleIntent(intent: Intent) {
+        val notificationId = intent.getStringExtra(EXTRA_NOTIFICATION_ID)
+        if (!notificationId.isNullOrBlank()) {
+            pendingOpenedNotification = JSONObject().put("id", notificationId)
+                .put("data", runCatching { JSONObject(intent.getStringExtra(EXTRA_NOTIFICATION_DATA) ?: "{}") }.getOrDefault(JSONObject()))
+            intent.removeExtra(EXTRA_NOTIFICATION_ID)
+            intent.removeExtra(EXTRA_NOTIFICATION_DATA)
+        }
         val sharedUri = if (intent.action == Intent.ACTION_SEND) sharedStream(intent) else null
         if (sharedUri != null) {
             intent.action = null
@@ -279,7 +351,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
         showTarget(null, false)
         lifecycleScope.launch {
             try {
-                val result = hermitApp.installer.installUri(uri, null)
+                val result = hermitApp.installer.installUri(uri, null, ::chooseIdentityInstall)
                 Toast.makeText(this@MainActivity, "ZIP 副本已导入", Toast.LENGTH_LONG).show()
                 showTarget(result.appId, true)
             } catch (error: Throwable) {
@@ -289,7 +361,69 @@ class MainActivity : ComponentActivity(), BridgeHost {
         }
     }
 
-    private fun showTarget(appId: String?, fromLibrary: Boolean) {
+    private fun openAgentTarget(appId: String?, route: String?): JSONObject {
+        val id = appId ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "缺少 appId")
+        val app = hermitApp.registry.getInstance(id)
+            ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "页面应用不存在")
+        val target = resolveAppRoute(app, route)
+        val current = session
+        if (visibleAppId == id && current?.role == RuntimeRole.WEB_APP && current.instance?.launchChannel == app.launchChannel) {
+            webView?.loadUrl(target)
+            return JSONObject().put("state", "opening").put("appId", id).put("url", target).put("reusedWebView", true)
+        }
+        showTarget(id, true, route)
+        return JSONObject().put("state", "opening").put("appId", id).put("url", target).put("reusedWebView", false)
+    }
+
+    private fun refreshDevRuntime(args: JSONObject): JSONObject {
+        val appId = args.getString("appId")
+        val current = session
+        val view = webView
+        if (visibleAppId != appId || current?.role != RuntimeRole.WEB_APP || view == null || current.instance?.launchChannel != LaunchChannel.DEV) {
+            return JSONObject().put("state", "not-visible").put("appId", appId)
+        }
+        val revision = args.getLong("revision")
+        current.devRevision = revision
+        val route = args.optString("route").takeIf { !args.isNull("route") && it.isNotBlank() }
+        if (route != null) {
+            val target = resolveAppRoute(hermitApp.registry.getInstance(appId)!!, route)
+            view.loadUrl(target)
+            return JSONObject().put("state", "opening").put("appId", appId).put("url", target).put("reusedWebView", true)
+        }
+        val paths = args.optJSONArray("changedPaths") ?: JSONArray()
+        if ((0 until paths.length()).any { paths.getString(it) == "hermit.json" }) {
+            showTarget(appId, launchedFromLibrary)
+            return JSONObject().put("state", "runtime-recreated").put("appId", appId).put("revision", revision)
+        }
+        val cssOnly = paths.length() > 0 && (0 until paths.length()).all { paths.getString(it).substringAfterLast('.', "").equals("css", true) }
+        if (args.optString("refreshMode", "auto") == "auto" && cssOnly) {
+            view.evaluateJavascript(
+                "window.__hermitDevRefreshCss && window.__hermitDevRefreshCss(" + paths.toString() + "," + revision + ")",
+                null,
+            )
+            return JSONObject().put("state", "css-hot-swap").put("appId", appId).put("revision", revision)
+        }
+        view.settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
+        view.reload()
+        return JSONObject().put("state", "reloading").put("appId", appId).put("revision", revision)
+    }
+
+    private fun resolveAppRoute(app: WebAppInstance, route: String?): String {
+        if (route.isNullOrBlank()) return app.runtimeUrl
+        val raw = route.trim()
+        if (raw.startsWith("//") || raw.contains(Regex("^[a-zA-Z][a-zA-Z0-9+.-]*:")) || raw.contains('\u0000') || raw.contains('\n') || raw.contains('\r')) {
+            throw HermitException(ErrorCodes.ORIGIN_DENIED, "只能打开 happ 内的相对页面")
+        }
+        val resolved = app.runtimeUrl.toHttpUrl().resolve(raw)
+            ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "页面路由无效")
+        if (resolved.scheme !in setOf("http", "https") || resolved.username.isNotEmpty() || resolved.password.isNotEmpty() ||
+            WebAppInstance.originOf(resolved.toString()) != app.runtimeOrigin) {
+            throw HermitException(ErrorCodes.ORIGIN_DENIED, "页面路由不能跨 Origin")
+        }
+        return resolved.toString()
+    }
+
+    private fun showTarget(appId: String?, fromLibrary: Boolean, route: String? = null) {
         launchedFromLibrary = fromLibrary
         val instance = appId?.let(hermitApp.registry::getInstance)
         if (appId != null && instance == null) {
@@ -300,37 +434,53 @@ class MainActivity : ComponentActivity(), BridgeHost {
             showNativeError(getString(R.string.incompatible_title), runtimeCompatibilityMessage(), appId != null)
             return
         }
-        if (instance != null && instance.runtimeMode == HappRuntimeMode.LIVE && isLanUrl(instance.startUrl)) {
+        if (instance != null && isLanUrl(instance.runtimeUrl)) {
             lifecycleScope.launch {
-                if (ensureLanPermission()) createWebRuntime(instance) else {
+                if (ensureLanPermission()) createWebRuntime(instance, route) else {
                     showNativeError("需要局域网权限", "Android 已阻止访问此局域网页面。你可以重试或在系统设置中授权。", true)
                 }
             }
         } else {
-            createWebRuntime(instance)
+            createWebRuntime(instance, route)
         }
     }
 
     @SuppressLint("RequiresFeature", "MissingOnRenderProcessGone")
-    private fun createWebRuntime(instance: WebAppInstance?) {
+    private fun createWebRuntime(instance: WebAppInstance?, route: String? = null) {
         destroyRuntime()
+        val installedRelease = instance?.activeReleaseId?.let(hermitApp.registry::getRelease)
+        val packageManifest = installedRelease?.let { release ->
+            runCatching { PackageManifestReader.read(hermitApp.installer.releaseWebRoot(release)) }.getOrNull()
+        }
+        applyDisplayPolicy(packageManifest)
         val forcedLocalStore = instance == null && forceLocalStoreOnce
         if (instance == null) forceLocalStoreOnce = false
         val onlineStore = instance == null && !forcedLocalStore && hermitApp.officialShell.mode() == OfficialShellManager.Mode.ONLINE
         val role = if (instance == null) RuntimeRole.STORE else RuntimeRole.WEB_APP
-        val origin = instance?.primaryOrigin ?: if (onlineStore) OfficialShellManager.OFFICIAL_ORIGIN else STORE_ORIGIN
+        val origin = instance?.runtimeOrigin ?: if (onlineStore) OfficialShellManager.OFFICIAL_ORIGIN else STORE_ORIGIN
         if (instance == null) storeRunningMode = if (onlineStore) "online" else if (forcedLocalStore) "local-fallback" else "local"
         // Hermit intentionally uses Android WebView's shared default profile. Standard
         // same-origin rules then allow pages on the same origin to share site data.
         // Hermit's native records, files and grants remain isolated by appId.
         val profileName = "hermit-shared"
-        val release = instance?.takeIf { it.runtimeMode == HappRuntimeMode.LOCAL }
+        val release = instance?.takeIf { it.launchChannel == LaunchChannel.DEV || it.runtimeMode == HappRuntimeMode.LOCAL }
             ?.activeReleaseId?.let(hermitApp.registry::getRelease)
         if (instance?.runtimeMode == HappRuntimeMode.LOCAL && release == null) {
             showNativeError("本地代码不可用", "活动版本不存在或已损坏。请从应用库重新导入。", true)
             return
         }
-        val currentSession = RuntimeSession(role, instance, release, origin, profileName)
+        val devWorkspace = instance?.takeIf { it.launchChannel == LaunchChannel.DEV }
+            ?.let { hermitApp.registry.getDevWorkspace(it.appId) }
+        if (instance?.launchChannel == LaunchChannel.DEV && devWorkspace == null) {
+            showNativeError("开发副本不可用", "开发工作副本不存在或已损坏，请返回应用库重建。", true)
+            return
+        }
+        val devConfig = instance?.takeIf { it.launchChannel == LaunchChannel.DEV }
+            ?.let { runCatching { hermitApp.devWorkspaces.runtimeConfig(it.appId) }.getOrElse { error ->
+                showNativeError("开发副本不可用", error.message ?: "开发工作副本无法读取。", true)
+                return
+            } }
+        val currentSession = RuntimeSession(role, instance, release, origin, profileName, devWorkspace?.revision)
         release?.releaseId?.let(hermitApp.installer::acquireRelease)
         val documentStart = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
         val webMessage = WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)
@@ -339,23 +489,63 @@ class MainActivity : ComponentActivity(), BridgeHost {
         val sdk = listOf("bridge/icons.js", "bridge/hermit-v1.js").joinToString("\n") { path ->
             assets.open(path).bufferedReader().use { it.readText() }
         }
-        val compatibilitySource = "$legacyBootstrap\n$sdk"
+        val localRuntimeGuard = if (release == null) "" else """
+            (()=>{if(!('serviceWorker' in navigator))return;try{navigator.serviceWorker.getRegistrations().then(v=>v.forEach(r=>r.unregister()));Object.defineProperty(ServiceWorkerContainer.prototype,'register',{value:()=>Promise.reject(new DOMException('Service Worker is disabled for local happ releases','NotSupportedError'))});}catch(_){}})();
+        """.trimIndent()
+        val crossOriginGuard = if (instance?.liveUrl == null || instance.allowCrossOriginNetwork) "" else """
+            (()=>{const own=${JSONObject.quote(origin)};const check=v=>{const u=new URL(String(v),location.href);if(u.origin!==own)throw new DOMException('Hermit blocked an active cross-Origin request','SecurityError');return v;};
+            if(window.fetch){const f=window.fetch;window.fetch=(v,o)=>{try{check(v instanceof Request?v.url:v);return f.call(window,v,o)}catch(e){return Promise.reject(e)}}}
+            if(window.XMLHttpRequest){const o=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(m,u,...r){check(u);return o.call(this,m,u,...r)}}
+            for(const n of ['WebSocket','EventSource','Worker','SharedWorker']){const C=window[n];if(!C)continue;const G=function(u,...r){check(u);return Reflect.construct(C,[u,...r],new.target||C)};G.prototype=C.prototype;Object.setPrototypeOf(G,C);window[n]=G}
+            addEventListener('submit',e=>{try{check(e.target.action)}catch(x){e.preventDefault();e.stopImmediatePropagation();throw x}},true);
+            })();
+        """.trimIndent()
+        val devRuntime = if (devWorkspace == null) "" else """
+            (()=>{
+              const revision=()=>Number(document.querySelector('meta[name="hermit-dev-revision"]')?.content||0);
+              const report=()=>requestAnimationFrame(()=>requestAnimationFrame(()=>window.hermit?.call('runtime.devReady',{revision:revision(),url:location.href}).catch(()=>{})));
+              addEventListener('DOMContentLoaded',report,{once:true});
+              window.__hermitDevRefreshCss=async(paths,next)=>{
+                const wanted=new Set(paths.map(path=>String(path).replace(/^\\//,'')));
+                const links=[...document.querySelectorAll('link[rel~="stylesheet"][href]')].filter(link=>{
+                  try{const path=decodeURIComponent(new URL(link.href,location.href).pathname);return [...wanted].some(item=>path==='/' + item||path.endsWith('/' + item))}catch(_){return false}
+                });
+                if(!links.length){location.reload();return}
+                const loaded=await Promise.all(links.map(link=>new Promise(resolve=>{
+                  const copy=link.cloneNode();const url=new URL(link.href,location.href);url.searchParams.set('__hermit_dev',String(next));copy.href=url.href;
+                  copy.onload=()=>{link.remove();resolve(true)};copy.onerror=()=>{copy.remove();resolve(false)};link.after(copy);
+                })));
+                if(loaded.some(value=>!value)){location.reload();return}
+                const meta=document.querySelector('meta[name="hermit-dev-revision"]');if(meta)meta.content=String(next);
+                report();
+              };
+            })();
+        """.trimIndent()
+        val sessionSdk = "$localRuntimeGuard\n$crossOriginGuard\n$devRuntime\n$sdk"
+        val compatibilitySource = "$legacyBootstrap\n$sessionSdk"
         val gateway = if (instance == null && !onlineStore) {
             if (hermitApp.officialShell.hasDownloadedShell()) {
-                LocalContentGateway.forRelease(this, Uri.parse(STORE_ORIGIN).host!!, hermitApp.officialShell.downloadedRoot,
-                    historyFallback = false, injectRuntime = !nativeDocumentBootstrap)
+                LocalContentGateway.forRelease(this, STORE_URL, hermitApp.officialShell.downloadedRoot, "index.html",
+                    historyFallback = false, injectRuntime = !nativeDocumentBootstrap, allowNetworkFallback = false)
             } else {
                 LocalContentGateway.forStore(this, injectRuntime = !nativeDocumentBootstrap)
             }
+        } else if (release != null && devWorkspace != null && devConfig != null) {
+            LocalContentGateway.forDev(this, instance!!.runtimeUrl, devConfig.entryPath,
+                devConfig.routing == "history", injectRuntime = !nativeDocumentBootstrap,
+                allowNetworkFallback = instance.liveUrl != null,
+                revisionProvider = { hermitApp.registry.getDevWorkspace(instance.appId)?.revision },
+                resolver = { path -> runCatching { hermitApp.devWorkspaces.resolve(instance.appId, path) }.getOrNull() })
         } else if (release != null) {
             val webRoot = hermitApp.installer.releaseWebRoot(release)
-            val history = runCatching { JSONObject(java.io.File(webRoot, "hermit.json").readText()).optString("routing") == "history" }.getOrDefault(false)
-            LocalContentGateway.forRelease(this, Uri.parse(origin).host!!, webRoot, history, injectRuntime = !nativeDocumentBootstrap)
+            LocalContentGateway.forRelease(this, instance!!.runtimeUrl, webRoot, release.entryPath,
+                release.routing == "history", injectRuntime = !nativeDocumentBootstrap,
+                allowNetworkFallback = instance.liveUrl != null)
         } else null
 
         val view = WebView(this)
         configure(view)
-        if (onlineStore) view.settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
+        if (onlineStore || devWorkspace != null) view.settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
         val shellLoadingView = if (onlineStore) TextView(this).apply {
             text = "正在加载官网界面…"
             gravity = Gravity.CENTER
@@ -364,8 +554,16 @@ class MainActivity : ComponentActivity(), BridgeHost {
         } else null
         if (shellLoadingView != null) view.visibility = View.INVISIBLE
         val sharedAssets = SharedAssetGateway(this, origin, compatibilitySource.takeIf { !nativeDocumentBootstrap })
+        val networkPolicy = instance?.takeIf { it.liveUrl != null }
+            ?.let { RuntimeNetworkPolicy(it.runtimeUrl, it.allowCrossOriginNetwork) }
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_SHOULD_INTERCEPT_REQUEST)) {
+            ServiceWorkerControllerCompat.getInstance().setServiceWorkerClient(object : ServiceWorkerClientCompat() {
+                override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? =
+                    sharedAssets.intercept(request) ?: gateway?.intercept(request) ?: networkPolicy?.intercept(request)
+            })
+        }
         val controller: PageBridge = if (webMessage) {
-            BridgeController(view, currentSession, this, sdk)
+            BridgeController(view, currentSession, this, sessionSdk)
         } else {
             LegacyBridgeController(view, currentSession, this)
         }
@@ -383,14 +581,14 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 controller.navigationStarted()
             }
             override fun onPageCommitVisible(view: WebView?, url: String?) {
-                controller.navigationCommitted()
+                if (release == null || gateway?.wasLocalMainFrame(url) == true) controller.navigationCommitted()
                 if (view != null && webView === view) {
                     view.visibility = View.VISIBLE
                     shellLoadingView?.let(root::removeView)
                 }
             }
             override fun onPageFinished(view: WebView, url: String?) {
-                if (controller.recoverAfterUncommittedNavigation()) {
+                if ((release == null || gateway?.wasLocalMainFrame(url) == true) && controller.recoverAfterUncommittedNavigation()) {
                     view.evaluateJavascript("window.dispatchEvent(new Event('__hermitrecover'))", null)
                 }
                 if (!nativeDocumentBootstrap) {
@@ -404,20 +602,32 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 }
             }
             override fun onReceivedError(view: WebView, request: WebResourceRequest, error: WebResourceError) {
-                if (request.isForMainFrame) fallBackToLocalShell("官网实时界面暂时无法访问，当前使用本地版。")
+                if (devWorkspace != null) hermitApp.agentServer.recordDevDiagnostic(instance!!.appId, currentSession.devRevision,
+                    if (request.isForMainFrame) "navigation-error" else "resource-error", error.description.toString(), request.url.toString())
+                if (request.isForMainFrame) {
+                    if (instance?.runtimeMode == HappRuntimeMode.LIVE) root.post {
+                        showNativeError("实时页面无法访问", "请返回 HermitApp，在此 happ 的设置中关闭线上实时运行。", true)
+                    } else fallBackToLocalShell("官网实时界面暂时无法访问，当前使用本地版。")
+                }
             }
             override fun onReceivedHttpError(view: WebView, request: WebResourceRequest, response: WebResourceResponse) {
+                if (devWorkspace != null) hermitApp.agentServer.recordDevDiagnostic(instance!!.appId, currentSession.devRevision,
+                    if (request.isForMainFrame) "navigation-http" else "resource-http", "HTTP ${response.statusCode}", request.url.toString())
                 if (request.isForMainFrame && response.statusCode >= 400) {
-                    fallBackToLocalShell("官网实时界面返回 HTTP ${response.statusCode}，当前使用本地版。")
+                    if (instance?.runtimeMode == HappRuntimeMode.LIVE) root.post {
+                        showNativeError("实时页面无法访问", "服务器返回 HTTP ${response.statusCode}。请返回 HermitApp 关闭此 happ 的线上实时运行。", true)
+                    } else fallBackToLocalShell("官网实时界面返回 HTTP ${response.statusCode}，当前使用本地版。")
                 }
             }
             override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest): WebResourceResponse? =
-                sharedAssets.intercept(request) ?: gateway?.intercept(request) ?: super.shouldInterceptRequest(view, request)
+                sharedAssets.intercept(request) ?: gateway?.intercept(request) ?: networkPolicy?.intercept(request)
+                ?: super.shouldInterceptRequest(view, request)
 
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest): Boolean {
                 val target = request.url
                 if (request.isForMainFrame && target.scheme in setOf("http", "https")) {
                     if (originOf(target) == origin) return false
+                    if (instance?.liveUrl != null && instance.allowCrossOriginNetwork) return false
                     openExternal(target)
                     return true
                 }
@@ -440,6 +650,13 @@ class MainActivity : ComponentActivity(), BridgeHost {
             }
         }
         view.webChromeClient = object : WebChromeClient() {
+            override fun onConsoleMessage(consoleMessage: ConsoleMessage): Boolean {
+                if (devWorkspace != null && consoleMessage.messageLevel() in setOf(ConsoleMessage.MessageLevel.WARNING, ConsoleMessage.MessageLevel.ERROR)) {
+                    hermitApp.agentServer.recordDevDiagnostic(instance!!.appId, currentSession.devRevision,
+                        "console-${consoleMessage.messageLevel().name.lowercase()}", consoleMessage.message(), consoleMessage.sourceId())
+                }
+                return super.onConsoleMessage(consoleMessage)
+            }
             override fun onPermissionRequest(request: PermissionRequest) {
                 request.deny()
             }
@@ -454,13 +671,32 @@ class MainActivity : ComponentActivity(), BridgeHost {
         root.removeAllViews()
         root.addView(view, android.widget.FrameLayout.LayoutParams(-1, -1))
         shellLoadingView?.let { root.addView(it, android.widget.FrameLayout.LayoutParams(-1, -1)) }
-        val targetUrl = instance?.startUrl ?: if (onlineStore) OfficialShellManager.ONLINE_URL else STORE_URL
+        if (instance?.liveUrl != null && instance.allowCrossOriginNetwork) {
+            root.addView(android.widget.TextView(this).apply {
+                text = "已允许此 happ 主动访问其他 Origin"
+                setTextColor(Color.WHITE)
+                setBackgroundColor(Color.rgb(187, 91, 25))
+                textSize = 12f
+                gravity = android.view.Gravity.CENTER
+                setPadding(12, 8, 12, 8)
+            }, android.widget.FrameLayout.LayoutParams(-1, -2, android.view.Gravity.TOP))
+        }
+        if (devWorkspace != null) {
+            root.addView(View(this).apply {
+                setBackgroundColor(Color.rgb(41, 151, 255))
+                isClickable = false
+                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+            }, android.widget.FrameLayout.LayoutParams(-1, (3 * resources.displayMetrics.density).toInt().coerceAtLeast(3), android.view.Gravity.TOP))
+            view.contentDescription = "运行开发副本"
+        }
+        val targetUrl = instance?.let { resolveAppRoute(it, route) } ?: if (onlineStore) OfficialShellManager.ONLINE_URL else STORE_URL
         if (onlineStore) view.loadUrl(targetUrl, mapOf("Cache-Control" to "no-cache", "Pragma" to "no-cache")) else view.loadUrl(targetUrl)
     }
 
     @SuppressLint("RequiresFeature", "MissingOnRenderProcessGone")
     private fun showSupportBrowser() {
         destroyRuntime()
+        applyDisplayPolicy(null)
         val currentSession = RuntimeSession(RuntimeRole.SUPPORT, null, null, SUPPORT_ORIGIN, "hermit-shared")
         val view = WebView(this)
         configure(view)
@@ -492,6 +728,20 @@ class MainActivity : ComponentActivity(), BridgeHost {
         }
         webView = view; session = currentSession; bridge = null; visibleAppId = null; launchedFromLibrary = true
         root.removeAllViews(); root.addView(view, android.widget.FrameLayout.LayoutParams(-1, -1)); view.loadUrl(SUPPORT_URL)
+    }
+
+    private fun applyDisplayPolicy(manifest: PackageManifest?) {
+        keyboardOverlaysContent = manifest?.keyboardMode == "overlay"
+        window.setSoftInputMode(
+            if (keyboardOverlaysContent) WindowManager.LayoutParams.SOFT_INPUT_ADJUST_NOTHING
+            else WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
+        )
+        requestedOrientation = when (manifest?.displayOrientation) {
+            "portrait" -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            "landscape" -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            else -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+        ViewCompat.requestApplyInsets(root)
     }
 
     private fun showSupportUnavailable(message: String) {
@@ -543,6 +793,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
         session?.sessionId?.let {
             permissionBroker.clearSession(it)
             audio.cancelSession(it)
+            nativeHttp.closeAll(it)
         }
         bridge?.close()
         bridge = null
@@ -560,6 +811,10 @@ class MainActivity : ComponentActivity(), BridgeHost {
         webView = null
         releaseId?.let(hermitApp.installer::releaseRelease)
         location.cancelAll()
+        sensors.cancelAll()
+        wifi.cancelAll()
+        bluetooth.cancelAll()
+        device.cancelAll()
         tts.stop()
         speech.cancel()
     }
@@ -588,14 +843,45 @@ class MainActivity : ComponentActivity(), BridgeHost {
 
     private suspend fun dispatchHost(method: String, params: JSONObject): Any? {
         return when (method) {
-        "host.apps.list" -> JSONObject().put("apps", JSONArray(hermitApp.registry.listInstances().map { it.toJson() }))
+        "host.apps.list" -> JSONObject().put("apps", JSONArray(hermitApp.registry.listInstances().map { app ->
+            val release = app.activeReleaseId?.let(hermitApp.registry::getRelease)
+            app.toJson().put("activeVersion", if (release == null) JSONObject.NULL else JSONObject()
+                .put("code", release.versionCode ?: JSONObject.NULL)
+                .put("name", release.versionName ?: JSONObject.NULL))
+                .put("devWorkspace", hermitApp.devWorkspaces.status(app.appId))
+        }))
         "host.apps.favorite" -> withContext(Dispatchers.IO) {
             hermitApp.registry.setFavorite(params.getString("appId"), params.getBoolean("favorite")).toJson()
+        }
+        "host.apps.setNotificationEnabled" -> withContext(Dispatchers.IO) {
+            val updated = hermitApp.registry.setNotificationEnabled(params.getString("appId"), params.getBoolean("enabled"))
+            if (!updated.notificationEnabled) hermitApp.notifications.dispatcher.cancelAll(updated.appId)
+            hermitApp.notifications.scheduler.rebuild()
+            updated.toJson()
+        }
+        "host.apps.setCrossOriginNetwork" -> withContext(Dispatchers.IO) {
+            hermitApp.registry.setCrossOriginNetworkEnabled(params.getString("appId"), params.getBoolean("enabled")).toJson()
+        }
+        "host.apps.updateUrls" -> {
+            val app = hermitApp.registry.getInstance(params.getString("appId"))
+                ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "页面应用不存在")
+            val live = params.optString("liveUrl").takeIf { params.has("liveUrl") && it.isNotBlank() }?.let(::normalizeUrl)
+            val update = params.optString("updateUrl").takeIf { params.has("updateUrl") && it.isNotBlank() }?.let(::normalizeUrl)
+            if (live != null && live != app.liveUrl && Uri.parse(live).scheme.equals("http", true) && !confirmInsecureUrl(live)) {
+                return JSONObject().put("cancelled", true)
+            }
+            if (live != null && isLanUrl(live) && !ensureLanPermission()) {
+                throw HermitException(ErrorCodes.OS_PERMISSION_DENIED, "Android 未授予局域网权限")
+            }
+            val oldOrigin = app.liveUrl?.let { originOf(Uri.parse(it)) }
+            val updated = withContext(Dispatchers.IO) { hermitApp.registry.updateUrls(app.appId, live, update) }
+            if (oldOrigin != updated.liveUrl?.let { originOf(Uri.parse(it)) }) hermitApp.notifications.repository.clearEndpoint(app.appId)
+            updated.toJson().put("cancelled", false)
         }
         "host.apps.scanQr" -> scanQrLink()
         "host.apps.pickIcon" -> {
             val uri = pickIcon() ?: return JSONObject().put("cancelled", true)
-            JSONObject().put("cancelled", false).put("dataUrl", croppedIconDataUrl(uri))
+            JSONObject().put("cancelled", false).put("dataUrl", iconSourceDataUrl(uri))
         }
         "host.apps.pickDirectory" -> {
             val uri = pickTree() ?: return JSONObject().put("cancelled", true)
@@ -608,12 +894,15 @@ class MainActivity : ComponentActivity(), BridgeHost {
             val token = params.getString("token")
             val uri = pendingDirectoryImports.remove(token)
                 ?: throw HermitException(ErrorCodes.SESSION_EXPIRED, "目录选择已失效，请重新选择")
-            val result = hermitApp.installer.installTree(uri, params.optString("name").takeIf { it.isNotBlank() })
-            withContext(Dispatchers.IO) {
-                hermitApp.registry.updatePresentation(result.appId, params.optString("name", "本地应用"), params.optString("iconDataUrl").takeIf { it.isNotBlank() })
+            val result = hermitApp.installer.installTree(uri, params.optString("name").takeIf { it.isNotBlank() }, ::chooseIdentityInstall)
+            val updated = withContext(Dispatchers.IO) {
+                val installed = hermitApp.registry.getInstance(result.appId)!!
+                val icon = params.optString("iconDataUrl").takeIf { it.isNotBlank() } ?: installed.iconDataUrl
+                val presented = hermitApp.registry.updatePresentation(result.appId, params.optString("name", "本地应用"), icon)
                 hermitApp.registry.updateReleaseVersion(result.releaseId, params.optString("version").takeIf { it.isNotBlank() })
-                if (params.optBoolean("favorite")) hermitApp.registry.setFavorite(result.appId, true)
+                if (params.optBoolean("favorite")) hermitApp.registry.setFavorite(result.appId, true) else presented
             }
+            shortcuts.update(updated)
             JSONObject().put("cancelled", false).put("appId", result.appId).put("releaseId", result.releaseId)
         }
         "host.apps.installOnline" -> {
@@ -625,38 +914,41 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 throw HermitException(ErrorCodes.OS_PERMISSION_DENIED, "Android 未授予局域网权限")
             }
             val name = params.optString("name").takeIf { it.isNotBlank() }?.take(80)
-            val installed = hermitApp.remoteInstaller.installOnline(url, name)
+            val installed = hermitApp.remoteInstaller.installOnline(url, name, ::chooseIdentityInstall)
             val updated = withContext(Dispatchers.IO) {
+                val installedInstance = hermitApp.registry.getInstance(installed.appId)!!
                 val presented = hermitApp.registry.updatePresentation(
                     installed.appId,
-                    name ?: hermitApp.registry.getInstance(installed.appId)!!.name,
-                    params.optString("iconDataUrl").takeIf { it.isNotBlank() },
+                    name ?: installedInstance.name,
+                    params.optString("iconDataUrl").takeIf { it.isNotBlank() } ?: installedInstance.iconDataUrl,
                 )
                 if (params.optBoolean("favorite")) hermitApp.registry.setFavorite(installed.appId, true) else presented
             }
+            shortcuts.update(updated)
             updated.toJson().put("cancelled", false).put("installStrategy", installed.strategy)
         }
         "host.apps.importZip" -> {
             val uri = pickZip() ?: return JSONObject().put("cancelled", true)
-            val result = hermitApp.installer.installUri(uri, params.optString("name").takeIf { it.isNotBlank() })
+            val result = hermitApp.installer.installUri(uri, params.optString("name").takeIf { it.isNotBlank() }, ::chooseIdentityInstall)
             if (params.optBoolean("favorite")) withContext(Dispatchers.IO) { hermitApp.registry.setFavorite(result.appId, true) }
             JSONObject().put("cancelled", false).put("appId", result.appId).put("releaseId", result.releaseId)
         }
         "host.apps.importDirectory" -> {
             val uri = pickTree() ?: return JSONObject().put("cancelled", true)
-            val result = hermitApp.installer.installTree(uri, params.optString("name").takeIf { it.isNotBlank() })
+            val result = hermitApp.installer.installTree(uri, params.optString("name").takeIf { it.isNotBlank() }, ::chooseIdentityInstall)
             if (params.optBoolean("favorite")) withContext(Dispatchers.IO) { hermitApp.registry.setFavorite(result.appId, true) }
             JSONObject().put("cancelled", false).put("appId", result.appId).put("releaseId", result.releaseId)
         }
         "host.apps.installPackageUrl" -> {
-            val result = hermitApp.remoteInstaller.installHttps(params.getString("url"), params.optString("name").takeIf { it.isNotBlank() })
+            val result = hermitApp.remoteInstaller.installHttps(params.getString("url"), params.optString("name").takeIf { it.isNotBlank() },
+                identityChoice = ::chooseIdentityInstall)
             if (params.optBoolean("favorite")) withContext(Dispatchers.IO) { hermitApp.registry.setFavorite(result.appId, true) }
             JSONObject().put("appId", result.appId).put("releaseId", result.releaseId)
         }
         "host.apps.installGitHub" -> {
             val result = hermitApp.remoteInstaller.installGitHub(
                 params.getString("owner"), params.getString("repo"), params.optString("ref", "main"),
-                params.optString("path"), params.optString("name").takeIf { it.isNotBlank() }
+                params.optString("path"), params.optString("name").takeIf { it.isNotBlank() }, identityChoice = ::chooseIdentityInstall
             )
             if (params.optBoolean("favorite")) withContext(Dispatchers.IO) { hermitApp.registry.setFavorite(result.appId, true) }
             JSONObject().put("appId", result.appId).put("releaseId", result.releaseId)
@@ -665,23 +957,35 @@ class MainActivity : ComponentActivity(), BridgeHost {
             val result = hermitApp.remoteInstaller.update(params.getString("appId"))
             JSONObject().put("appId", result.appId).put("releaseId", result.releaseId).put("treeHash", result.treeHash)
         }
+        "host.apps.reinstall" -> {
+            val result = hermitApp.remoteInstaller.reinstall(params.getString("appId"))
+            JSONObject().put("appId", result.appId).put("releaseId", result.releaseId).put("treeHash", result.treeHash)
+        }
         "host.apps.update" -> {
             val app = hermitApp.registry.getInstance(params.getString("appId"))
                 ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "页面应用不存在")
             val name = params.optString("name", app.name).trim().takeIf { it.isNotBlank() }
                 ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "名称不能为空")
-            if (app.source == HappSource.ONLINE && app.liveUrl != null) {
-                val url = normalizeUrl(params.optString("url", app.liveUrl))
-                if (url != app.liveUrl && Uri.parse(url).scheme.equals("http", true) && !confirmInsecureUrl(url)) {
-                    return JSONObject().put("cancelled", true)
-                }
-                hermitApp.registry.updateInstance(app.appId, name, url, JSONObject().put("url", url).toString())
-                if (url != app.liveUrl) hermitApp.registry.updateSource(app.appId, "online", JSONObject().put("url", url).toString())
-            } else {
-                hermitApp.registry.updateInstance(app.appId, name, null, null)
+            val url = params.optString("url").takeIf { params.has("url") && it.isNotBlank() }?.let(::normalizeUrl) ?: app.liveUrl
+            if (url != null && url != app.liveUrl && Uri.parse(url).scheme.equals("http", true) && !confirmInsecureUrl(url)) {
+                return JSONObject().put("cancelled", true)
+            }
+            hermitApp.registry.updateInstance(app.appId, name, url, null)
+            if (url?.let { originOf(Uri.parse(it)) } != app.liveUrl?.let { originOf(Uri.parse(it)) }) {
+                hermitApp.notifications.repository.clearEndpoint(app.appId)
             }
             val updated = hermitApp.registry.getInstance(app.appId)!!
             processPendingProfileCleanup()
+            shortcuts.update(updated)
+            updated.toJson()
+        }
+        "host.apps.updatePresentation" -> {
+            val app = hermitApp.registry.getInstance(params.getString("appId"))
+                ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "页面应用不存在")
+            val name = params.optString("name", app.name).trim().takeIf { it.isNotBlank() }
+                ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "名称不能为空")
+            val iconDataUrl = if (params.has("iconDataUrl")) validateIconDataUrl(params.optString("iconDataUrl")) else app.iconDataUrl
+            val updated = withContext(Dispatchers.IO) { hermitApp.registry.updatePresentation(app.appId, name, iconDataUrl) }
             shortcuts.update(updated)
             updated.toJson()
         }
@@ -699,6 +1003,34 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 }
             ))
         }
+        "host.apps.enterDev" -> {
+            val appId = params.getString("appId")
+            withContext(Dispatchers.IO) { hermitApp.devWorkspaces.enter(appId) }
+        }
+        "host.apps.leaveDev" -> {
+            val appId = params.getString("appId")
+            withContext(Dispatchers.IO) { hermitApp.devWorkspaces.leave(appId) }
+        }
+        "host.apps.resetDev" -> {
+            val appId = params.getString("appId")
+            withContext(Dispatchers.IO) { hermitApp.devWorkspaces.reset(appId) }
+        }
+        "host.apps.exportDev" -> {
+            val appId = params.getString("appId")
+            val versionCode = params.getLong("versionCode")
+            val versionName = params.getString("versionName")
+            val status = hermitApp.registry.getDevWorkspace(appId)
+                ?: throw HermitException(ErrorCodes.DEV_MODE_REQUIRED, "开发工作副本不存在")
+            val built = withContext(Dispatchers.IO) { hermitApp.devWorkspaces.build(appId, status.revision, versionCode, versionName) }
+            val artifact = hermitApp.devWorkspaces.artifact(built.getString("buildId"))
+                ?: throw HermitException(ErrorCodes.STORAGE, "发布包生成失败")
+            val uri = createFileDocument(built.getString("fileName")) ?: return JSONObject().put("cancelled", true)
+            withContext(Dispatchers.IO) {
+                contentResolver.openOutputStream(uri, "w")?.use { output -> artifact.file.inputStream().use { it.copyTo(output) } }
+                    ?: throw HermitException(ErrorCodes.STORAGE, "无法写入发布包")
+            }
+            built.put("cancelled", false)
+        }
         "host.apps.setRuntimeMode" -> {
             val appId = params.getString("appId")
             val requested = when (params.getString("runtimeMode")) {
@@ -707,6 +1039,9 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 else -> throw HermitException(ErrorCodes.INVALID_ARGUMENT, "运行方式必须是 local 或 live")
             }
             if (requested == HappRuntimeMode.LIVE) {
+                if (hermitApp.registry.getInstance(appId)?.launchChannel == LaunchChannel.DEV) {
+                    withContext(Dispatchers.IO) { hermitApp.devWorkspaces.leave(appId) }
+                }
                 val deployStatus = hermitApp.developmentServer.status()
                 if (deployStatus.optBoolean("active") && deployStatus.optString("appId") == appId) {
                     hermitApp.developmentServer.stop("Runtime changed")
@@ -781,6 +1116,9 @@ class MainActivity : ComponentActivity(), BridgeHost {
         }
         "host.apps.remove" -> {
             val appId = params.optString("appId")
+            hermitApp.notifications.dispatcher.deleteChannel(appId)
+            withContext(Dispatchers.IO) { hermitApp.notifications.repository.deleteInstance(appId) }
+            withContext(Dispatchers.IO) { hermitApp.devWorkspaces.delete(appId) }
             val removed = withContext(Dispatchers.IO) { hermitApp.registry.deleteInstance(appId) }
                 ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "页面应用不存在")
             shortcuts.disable(appId)
@@ -788,7 +1126,19 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 hermitApp.installer.deleteAppFiles(appId)
                 hermitApp.registry.finishDelete(appId)
             }
+            hermitApp.notifications.scheduler.rebuild()
             JSONObject().put("removed", true).put("appId", removed.appId)
+        }
+        "host.apps.archive" -> {
+            val appId = params.getString("appId")
+            withContext(Dispatchers.IO) { hermitApp.devWorkspaces.delete(appId) }
+            val archived = withContext(Dispatchers.IO) { hermitApp.registry.archiveInstance(appId) }
+                ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "页面应用不存在")
+            shortcuts.disable(appId)
+            hermitApp.notifications.dispatcher.cancelAll(appId)
+            withContext(Dispatchers.IO) { hermitApp.installer.deleteAppCode(appId) }
+            hermitApp.notifications.scheduler.rebuild()
+            JSONObject().put("archived", true).put("instanceId", archived.appId)
         }
         "host.deploy.start" -> {
             val mode = params.optString("mode", "adb")
@@ -799,9 +1149,10 @@ class MainActivity : ComponentActivity(), BridgeHost {
         "host.deploy.stop" -> hermitApp.developmentServer.stop("Stopped by user")
         "host.deploy.status" -> hermitApp.developmentServer.status()
         "host.agent.start" -> {
-            if (!ensureLanPermission()) throw HermitException(ErrorCodes.OS_PERMISSION_DENIED, "Android 未授予局域网权限")
+            val usbOnly = params.optString("mode") == "usb"
+            if (!usbOnly && !ensureLanPermission()) throw HermitException(ErrorCodes.OS_PERMISSION_DENIED, "Android 未授予局域网权限")
             hermitApp.developmentServer.stop("已切换到智能体开发模式")
-            hermitApp.agentServer.start(params.optString("address").takeIf { it.isNotBlank() })
+            hermitApp.agentServer.start(if (usbOnly) "127.0.0.1" else params.optString("address").takeIf { it.isNotBlank() })
         }
         "host.agent.stop" -> hermitApp.agentServer.stop("由用户停止")
         "host.agent.status" -> hermitApp.agentServer.status()
@@ -833,6 +1184,21 @@ class MainActivity : ComponentActivity(), BridgeHost {
             .put("versionCode", BuildConfig.VERSION_CODE).put("applicationId", packageName)
             .put("author", "10knet·zhyuzh3d").put("repository", REPOSITORY_URL).put("support", SUPPORT_URL)
         "host.about.openRepository" -> JSONObject().put("opened", true).also { openExternal(Uri.parse(REPOSITORY_URL)) }
+        "host.voice.status" -> JSONObject().put("tts", tts.providerStatus()).put("speech", speech.providerStatus())
+        "host.voice.ttsVoices" -> tts.providerVoices(params.optString("engineId").takeIf { !params.isNull("engineId") && it.isNotBlank() })
+        "host.voice.configure" -> {
+            val result = JSONObject()
+            params.optJSONObject("tts")?.let { result.put("tts", tts.configure(it)) }
+            params.optJSONObject("speech")?.let { result.put("speech", speech.configure(it)) }
+            if (result.length() == 0) throw HermitException(ErrorCodes.INVALID_ARGUMENT, "没有需要保存的语音设置")
+            result
+        }
+        "host.voice.testTts" -> tts.speak(JSONObject().put("text", params.optString("text", "Hermit 系统朗读测试"))) { _, _ -> }
+        "host.voice.openSettings" -> device.openSettings(when (params.optString("type")) {
+            "tts" -> "tts"
+            "speech" -> "voiceInput"
+            else -> throw HermitException(ErrorCodes.INVALID_ARGUMENT, "语音设置类型必须是 tts 或 speech")
+        })
         "host.operations.get" -> hermitApp.registry.operationJson(params.optString("operationId"))
             ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "操作不存在")
         "host.diagnostics.info" -> {
@@ -872,20 +1238,63 @@ class MainActivity : ComponentActivity(), BridgeHost {
     private suspend fun dispatchPublic(session: RuntimeSession, method: String, params: JSONObject): Any? {
         val app = session.instance
         return when (method) {
-            "runtime.info" -> JSONObject().put("apiMajor", 1).put("apiMinor", 2)
+            "runtime.info" -> JSONObject().put("apiMajor", 1).put("apiMinor", 10)
                 .put("sessionId", session.sessionId).put("appId", session.appId)
                 .put("role", session.role.name.lowercase()).put("webViewPackage", WebViewCompat.getCurrentWebViewPackage(this)?.versionName)
                 .put("runtimeMode", app?.runtimeMode?.name?.lowercase() ?: if (storeRunningMode == "online") "live" else "local")
+                .put("launchChannel", app?.launchChannel?.name?.lowercase() ?: "stable")
+                .put("devRevision", session.devRevision ?: JSONObject.NULL)
                 .put("bridgeMode", bridgeMode()).put("isolatedProfiles", false)
                 .put("siteDataPolicy", "shared-by-origin")
             "runtime.capabilities" -> capabilityDescriptors(session)
             "app.info" -> app?.toJson() ?: JSONObject().put("appId", RuntimeSession.STORE_APP_ID).put("name", "Hermit 应用库")
-            "app.ready" -> JSONObject().put("recorded", true).put("at", System.currentTimeMillis())
-            "app.checkUpdate" -> JSONObject().put("sourceAdapter", app?.sourceAdapter ?: "host")
-                .put("canCheck", app?.sourceAdapter in setOf("online-manifest", "https-package", "github"))
+            "runtime.devReady" -> {
+                val revision = params.getLong("revision")
+                if (app?.launchChannel != LaunchChannel.DEV || session.devRevision != revision) {
+                    throw HermitException(ErrorCodes.SESSION_EXPIRED, "过期开发页面回执已忽略")
+                }
+                val url = params.optString("url", webView?.url ?: app.runtimeUrl)
+                hermitApp.agentServer.reportDevRender(app.appId, revision, url)
+                JSONObject().put("recorded", true).put("revision", revision)
+            }
+            "app.ready" -> JSONObject().put("recorded", true).put("at", System.currentTimeMillis()).also {
+                if (app != null) pendingOpenedNotification?.let { opened ->
+                    pendingOpenedNotification = null
+                    root.post { if (this.session === session) bridge?.emit("notifications.opened", opened) }
+                }
+            }
+            "app.checkUpdate" -> JSONObject().put("updateUrl", app?.updateUrl ?: JSONObject.NULL)
+                .put("canCheck", app?.updateUrl != null || app?.sourceAdapter in setOf("online-manifest", "https-package", "github"))
             "app.reload" -> {
                 root.postDelayed({ showTarget(app?.appId, launchedFromLibrary) }, 80)
                 JSONObject().put("reloading", true)
+            }
+            "app.setRuntimeMode" -> requireApp(app).let { target ->
+                val requested = when (params.getString("runtimeMode")) {
+                    "local" -> HappRuntimeMode.LOCAL
+                    "live" -> HappRuntimeMode.LIVE
+                    else -> throw HermitException(ErrorCodes.INVALID_ARGUMENT, "运行方式必须是 local 或 live")
+                }
+                val changed = target.runtimeMode != requested
+                if (changed && requested == HappRuntimeMode.LIVE) {
+                    if (target.launchChannel == LaunchChannel.DEV) {
+                        withContext(Dispatchers.IO) { hermitApp.devWorkspaces.leave(target.appId) }
+                    }
+                    val deployStatus = hermitApp.developmentServer.status()
+                    if (deployStatus.optBoolean("active") && deployStatus.optString("appId") == target.appId) {
+                        hermitApp.developmentServer.stop("Runtime changed")
+                    }
+                }
+                val updated = withContext(Dispatchers.IO) {
+                    runCatching { hermitApp.registry.setRuntimeMode(target.appId, requested) }
+                        .getOrElse { throw HermitException(ErrorCodes.CONFLICT, it.message ?: "无法切换运行方式") }
+                }
+                if (changed) {
+                    processPendingProfileCleanup()
+                    shortcuts.update(updated)
+                    root.postDelayed({ showTarget(updated.appId, launchedFromLibrary) }, 180)
+                }
+                updated.toJson()
             }
             "data.get" -> requireApp(app).let { withContext(Dispatchers.IO) {
                 records.get(it.appId, session.dataGeneration!!, params.getString("collection"), params.getString("key")) ?: JSONObject.NULL
@@ -902,10 +1311,17 @@ class MainActivity : ComponentActivity(), BridgeHost {
             "data.batch" -> requireApp(app).let { withContext(Dispatchers.IO) {
                 records.batch(it.appId, session.dataGeneration!!, params.getJSONArray("operations"))
             } }
+            "tts.availability" -> tts.availability()
+            "tts.preferences" -> tts.preferences()
             "tts.voices" -> tts.voices()
-            "tts.speak" -> tts.speak(params) { event, data -> if (this.session === session) bridge?.emit(event, data) }
+            "tts.languageAvailability" -> tts.languageAvailability(params.getString("language"))
+            "tts.speak" -> {
+                permissionBroker.require(session, "tts.speak", "使用系统 TTS 扬声器朗读文本")
+                tts.speak(params) { event, data -> if (this.session === session) bridge?.emit(event, data) }
+            }
             "tts.stop" -> tts.stop()
             "tts.export" -> requireApp(app).let {
+                permissionBroker.require(session, "tts.speak", "使用系统 TTS 生成语音文件")
                 val output = File(cacheDir, "tts-${UUID.randomUUID()}.wav")
                 try {
                     tts.synthesize(params, output)
@@ -955,17 +1371,34 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 params.optString("playbackId").takeIf { it.isNotBlank() },
             )
             "files.import" -> requireApp(app).let {
-                val uri = pickFile() ?: return JSONObject().put("cancelled", true)
+                val accept = params.optString("accept", "*/*").lowercase().trim()
+                if (!accept.matches(Regex("[a-z0-9.+-]+/(?:[a-z0-9.+-]+|\\*)"))) {
+                    throw HermitException(ErrorCodes.INVALID_ARGUMENT, "文件类型无效")
+                }
+                val uri = pickFile(accept) ?: return JSONObject().put("cancelled", true)
                 val name = queryDisplayName(uri) ?: "file"
                 val mime = contentResolver.getType(uri) ?: "application/octet-stream"
+                if (accept != "*/*" && accept.endsWith("/*") && !mime.startsWith(accept.removeSuffix("*"))) {
+                    throw HermitException(ErrorCodes.INVALID_ARGUMENT, "所选文件类型不符合要求")
+                }
+                if (accept != "*/*" && !accept.endsWith("/*") && mime != accept) {
+                    throw HermitException(ErrorCodes.INVALID_ARGUMENT, "所选文件类型不符合要求")
+                }
                 val input = contentResolver.openInputStream(uri) ?: throw HermitException(ErrorCodes.STORAGE, "无法读取文件")
-                input.use { stream -> withContext(Dispatchers.IO) { files.import(it.appId, session.dataGeneration!!, stream, name, mime) } }
+                val stored = input.use { stream -> withContext(Dispatchers.IO) { files.import(it.appId, session.dataGeneration!!, stream, name, mime) } }
+                if (mime.startsWith("video/")) {
+                    val metadata = inspectVideo(uri)
+                    metadata.keys().forEach { key -> stored.put(key, metadata.get(key)) }
+                }
+                stored
             }
+            "files.pickImage" -> requireApp(app).let { pickInlineImage(params) }
+            "files.pickInline" -> requireApp(app).let { pickInlineFile(params) }
             "files.writeText" -> requireApp(app).let { withContext(Dispatchers.IO) {
                 files.writeText(it.appId, session.dataGeneration!!, params.optString("name", "note.txt"), params.getString("text"))
             } }
             "files.readText" -> requireApp(app).let { withContext(Dispatchers.IO) {
-                files.readText(it.appId, session.dataGeneration!!, params.getString("logicalFileId"))
+                files.readText(it.appId, session.dataGeneration!!, params.getString("logicalFileId"), params.optInt("maxBytes", 256 * 1024))
             } }
             "files.list" -> requireApp(app).let { withContext(Dispatchers.IO) { files.list(it.appId, session.dataGeneration!!) } }
             "files.export" -> requireApp(app).let {
@@ -998,15 +1431,19 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 JSONObject().put("chooserOpened", true)
             }
             "speech.availability" -> speech.availability()
+            "speech.preferences" -> speech.preferences()
+            "speech.languages" -> speech.languages()
             "speech.start" -> {
-                if (!android.speech.SpeechRecognizer.isRecognitionAvailable(this)) {
-                    throw HermitException(ErrorCodes.UNSUPPORTED, "系统没有可用的语音识别服务")
-                }
                 permissionBroker.require(session, "speech", "录制声音并交给系统语音识别服务", PermissionBroker.SPEECH_PERMISSIONS)
                 speech.start(params) { event, data -> if (this.session === session) bridge?.emit(event, data) }
             }
+            "speech.recognizeOnce" -> {
+                permissionBroker.require(session, "speech", "打开系统语音识别界面")
+                recognizeSpeechOnce(session, params)
+            }
             "speech.stop" -> speech.stop(params.optString("subscriptionId").takeIf { it.isNotBlank() })
             "speech.cancel" -> speech.cancel()
+            "location.availability" -> location.availability()
             "location.getCurrent" -> {
                 val precise = params.optBoolean("precise", false)
                 permissionBroker.require(session, if (precise) "location.precise" else "location.approximate",
@@ -1022,10 +1459,26 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 location.watch(params) { event, data -> if (this.session === session) bridge?.emit(event, data) }
             }
             "location.clearWatch" -> location.clearWatch(params.getString("subscriptionId"))
+            "sensors.availability" -> sensors.availability()
+            "sensors.watch" -> {
+                val type = params.getString("type")
+                val capability = if (type in SensorController.STEP_TYPES) "sensors.steps" else "sensors.read"
+                if (!sensors.supported(type)) throw HermitException(ErrorCodes.UNSUPPORTED, "当前设备没有此传感器：$type")
+                permissionBroker.require(session, capability,
+                    if (capability == "sensors.steps") "读取设备计步传感器" else "读取设备运动、方向或环境传感器",
+                    capabilityPermissions(capability))
+                sensors.watch(params) { event, data -> if (this.session === session) bridge?.emit(event, data) }
+            }
+            "sensors.clearWatch" -> sensors.clearWatch(params.getString("subscriptionId"))
             "camera.capturePhoto" -> requireApp(app).let {
                 if (!capabilitySupported("camera.capture")) throw HermitException(ErrorCodes.UNSUPPORTED, "系统没有可用相机应用")
                 permissionBroker.require(session, "camera.capture", "打开系统相机拍摄一张照片")
                 capturePhoto(it, session)
+            }
+            "camera.torchStatus" -> device.torchStatus()
+            "camera.setTorch" -> {
+                permissionBroker.require(session, "camera.torch", "控制设备闪光灯", listOf(Manifest.permission.CAMERA))
+                device.setTorch(params.getBoolean("enabled"))
             }
             "clipboard.write" -> {
                 val text = params.getString("text")
@@ -1061,14 +1514,82 @@ class MainActivity : ComponentActivity(), BridgeHost {
                     .vibrate(android.os.VibrationEffect.createOneShot(duration, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
                 JSONObject().put("started", true)
             }
-            "network.status" -> JSONObject().put("connected",
-                (getSystemService(android.net.ConnectivityManager::class.java).activeNetwork != null))
+            "network.status" -> device.networkStatus()
+            "network.watch" -> device.watchNetwork { event, data -> if (this.session === session) bridge?.emit(event, data) }
+            "network.clearWatch" -> device.clearNetworkWatch(params.getString("subscriptionId"))
             "network.request" -> requireApp(app).let {
                 nativeHttp.request(it.appId, session.dataGeneration!!, params) { origin, addressClass ->
                     val grantScope = NativeHttpClient.AuthorizationTarget(origin, addressClass).grantScope
                     permissionBroker.require(session, "network", "通过 Hermit 访问 $origin（$addressClass 网络）", scope = grantScope)
                 }
             }
+            "network.openStream" -> requireApp(app).let {
+                nativeHttp.openStream(session.sessionId, it.appId, session.dataGeneration!!, params) { origin, addressClass ->
+                    val grantScope = NativeHttpClient.AuthorizationTarget(origin, addressClass).grantScope
+                    permissionBroker.require(session, "network", "通过 Hermit 流式访问 $origin（$addressClass 网络）", scope = grantScope)
+                }
+            }
+            "network.readStream" -> requireApp(app).let {
+                nativeHttp.readStream(session.sessionId, it.appId, session.dataGeneration!!, params)
+            }
+            "network.closeStream" -> requireApp(app).let {
+                nativeHttp.closeStream(session.sessionId, it.appId, session.dataGeneration!!, params)
+            }
+            "network.openSocket" -> requireApp(app).let {
+                nativeHttp.openSocket(session.sessionId, it.appId, session.dataGeneration!!, params) { origin, addressClass ->
+                    val grantScope = NativeHttpClient.AuthorizationTarget(origin, addressClass).grantScope
+                    permissionBroker.require(session, "network", "通过 Hermit 建立 $origin WebSocket（$addressClass 网络）", scope = grantScope)
+                }
+            }
+            "network.readSocket" -> requireApp(app).let {
+                nativeHttp.readSocket(session.sessionId, it.appId, session.dataGeneration!!, params)
+            }
+            "network.sendSocket" -> requireApp(app).let {
+                nativeHttp.sendSocket(session.sessionId, it.appId, session.dataGeneration!!, params)
+            }
+            "network.closeSocket" -> requireApp(app).let {
+                nativeHttp.closeSocket(session.sessionId, it.appId, session.dataGeneration!!, params)
+            }
+            "wifi.status" -> wifi.status()
+            "wifi.scan" -> {
+                permissionBroker.require(session, "wifi.scan", "扫描附近的 Wi-Fi 网络", wifiScanPermissions())
+                wifi.scan()
+            }
+            "wifi.requestNetwork" -> {
+                permissionBroker.require(session, "wifi.connect", "请求 Android 连接指定 Wi-Fi 网络", wifiConnectPermissions())
+                wifi.requestNetwork(params) { event, data -> if (this.session === session) bridge?.emit(event, data) }
+            }
+            "wifi.releaseNetwork" -> wifi.releaseNetwork(params.getString("connectionId"))
+            "wifi.openSettings" -> device.openSettings("wifi")
+            "bluetooth.status" -> bluetooth.status()
+            "bluetooth.paired" -> {
+                permissionBroker.require(session, "bluetooth.connect", "读取已配对蓝牙设备", bluetoothConnectPermissions())
+                bluetooth.paired()
+            }
+            "bluetooth.scan" -> {
+                permissionBroker.require(session, "bluetooth.scan", "扫描附近的低功耗蓝牙设备", bluetoothScanPermissions())
+                bluetooth.scan(params) { event, data -> if (this.session === session) bridge?.emit(event, data) }
+            }
+            "bluetooth.stopScan" -> bluetooth.stopScan(params.getString("subscriptionId"))
+            "bluetooth.connect" -> {
+                permissionBroker.require(session, "bluetooth.connect", "连接并交换低功耗蓝牙设备数据", bluetoothConnectPermissions())
+                bluetooth.connect(params) { event, data -> if (this.session === session) bridge?.emit(event, data) }
+            }
+            "bluetooth.disconnect" -> bluetooth.disconnect(params.getString("connectionId"))
+            "bluetooth.services" -> bluetooth.services(params.getString("connectionId"))
+            "bluetooth.read" -> bluetooth.read(params)
+            "bluetooth.write" -> bluetooth.write(params)
+            "bluetooth.subscribe" -> bluetooth.subscribe(params)
+            "bluetooth.openSettings" -> device.openSettings("bluetooth")
+            "infrared.status" -> infrared.status()
+            "infrared.transmit" -> {
+                permissionBroker.require(session, "infrared.transmit", "使用设备红外发射器发送脉冲")
+                infrared.transmit(params)
+            }
+            "battery.status" -> device.batteryStatus()
+            "battery.watch" -> device.watchBattery { event, data -> if (this.session === session) bridge?.emit(event, data) }
+            "battery.clearWatch" -> device.clearBatteryWatch(params.getString("subscriptionId"))
+            "system.openSettings" -> device.openSettings(params.getString("page"))
             "permissions.status" -> {
                 val capability = params.getString("capability")
                 validateGrantCapability(capability)
@@ -1092,6 +1613,57 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 JSONObject().put("capability", capability).put("scope", scope)
                     .put("addressClass", target?.addressClass ?: JSONObject.NULL).put("usable", true)
             }
+            "notifications.notify" -> requireApp(app).let { target ->
+                ensureNotifications(session)
+                val spec = NotificationSpec.fromJson(params)
+                val enabledTarget = hermitApp.registry.getInstance(target.appId) ?: target
+                JSONObject().put("posted", hermitApp.notifications.dispatcher.post(enabledTarget, spec)).put("id", spec.id)
+            }
+            "notifications.schedule" -> requireApp(app).let { target ->
+                ensureNotifications(session)
+                if (!ensureExactAlarmAccess()) throw HermitException(ErrorCodes.OS_PERMISSION_DENIED, "Android 未允许精确的闹钟和提醒")
+                val spec = NotificationSpec.fromJson(params.getJSONObject("notification"))
+                val triggerAt = params.getLong("triggerAt")
+                if (triggerAt <= System.currentTimeMillis()) throw HermitException(ErrorCodes.INVALID_ARGUMENT, "首次通知时间必须晚于当前时间")
+                val recurrence = runCatching { Recurrence.valueOf(params.optString("recurrence", "once").uppercase()) }
+                    .getOrElse { throw HermitException(ErrorCodes.INVALID_ARGUMENT, "不支持的通知重复方式") }
+                withContext(Dispatchers.IO) { hermitApp.notifications.repository.upsert(target.appId, spec, triggerAt, recurrence) }
+                if (!hermitApp.notifications.scheduler.rebuild()) throw HermitException(ErrorCodes.OS_PERMISSION_DENIED, "无法注册精确提醒")
+                JSONObject().put("scheduled", true).put("id", spec.id).put("triggerAt", triggerAt).put("recurrence", recurrence.name.lowercase())
+            }
+            "notifications.cancel" -> requireApp(app).let { target ->
+                val id = params.getString("id")
+                hermitApp.notifications.dispatcher.cancel(target.appId, id)
+                val cancelled = withContext(Dispatchers.IO) { hermitApp.notifications.repository.cancel(target.appId, id) }
+                hermitApp.notifications.scheduler.rebuild()
+                JSONObject().put("cancelled", cancelled)
+            }
+            "notifications.cancelAll" -> requireApp(app).let { target ->
+                hermitApp.notifications.dispatcher.cancelAll(target.appId)
+                val count = withContext(Dispatchers.IO) { hermitApp.notifications.repository.cancelAll(target.appId) }
+                hermitApp.notifications.scheduler.rebuild()
+                JSONObject().put("cancelled", count)
+            }
+            "notifications.getScheduled" -> requireApp(app).let { target ->
+                JSONObject().put("items", JSONArray(withContext(Dispatchers.IO) {
+                    hermitApp.notifications.repository.list(target.appId).map { item -> item.toJson() }
+                }))
+            }
+            "notifications.setEndpoint" -> requireApp(app).let { target ->
+                ensureNotifications(session)
+                if (target.liveUrl == null) throw HermitException(ErrorCodes.UNSUPPORTED, "纯本地 happ 不能登记远程通知端点")
+                val endpoint = notificationEndpoint(session, params.getString("endpoint"))
+                withContext(Dispatchers.IO) { hermitApp.notifications.repository.setEndpoint(target.appId, endpoint, session.origin) }
+                hermitApp.notifications.syncNow()
+                JSONObject().put("endpoint", endpoint).put("origin", session.origin)
+            }
+            "notifications.getStatus" -> requireApp(app).let { target ->
+                val sync = withContext(Dispatchers.IO) { hermitApp.notifications.repository.sync(target.appId) }
+                JSONObject().put("enabled", target.notificationEnabled)
+                    .put("systemPermission", Build.VERSION.SDK_INT < 33 || ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
+                    .put("exactAlarm", hermitApp.notifications.scheduler.exactAlarmAvailable())
+                    .put("endpoint", sync?.endpoint ?: JSONObject.NULL)
+            }
             else -> throw HermitException(ErrorCodes.UNSUPPORTED, "当前版本尚不支持：$method")
         }
     }
@@ -1109,14 +1681,132 @@ class MainActivity : ComponentActivity(), BridgeHost {
         zipPicker.launch("application/zip")
     }
 
-    private suspend fun pickFile(): Uri? = suspendCancellableCoroutine { continuation ->
-        if (pendingFile != null) {
+    private suspend fun pickFile(contentType: String = "*/*"): Uri? = suspendCancellableCoroutine { continuation ->
+        if (pendingFile != null || pendingImage != null) {
             continuation.resumeWith(Result.failure(HermitException(ErrorCodes.CONFLICT, "已有文件选择操作")))
             return@suspendCancellableCoroutine
         }
         pendingFile = continuation
         continuation.invokeOnCancellation { if (pendingFile === continuation) pendingFile = null }
-        filePicker.launch("*/*")
+        filePicker.launch(contentType)
+    }
+
+    private suspend fun pickImage(): Uri? = suspendCancellableCoroutine { continuation ->
+        if (pendingImage != null || pendingFile != null) {
+            continuation.resumeWith(Result.failure(HermitException(ErrorCodes.CONFLICT, "已有图片选择操作")))
+            return@suspendCancellableCoroutine
+        }
+        pendingImage = continuation
+        continuation.invokeOnCancellation { if (pendingImage === continuation) pendingImage = null }
+        imagePicker.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+    }
+
+    private suspend fun pickInlineFile(params: JSONObject): JSONObject {
+        val accept = params.optString("accept", "*/*").lowercase().trim()
+        if (!accept.matches(Regex("[a-z0-9.+-]+/(?:[a-z0-9.+-]+|\\*)"))) {
+            throw HermitException(ErrorCodes.INVALID_ARGUMENT, "文件类型无效")
+        }
+        val maxBytes = params.optInt("maxBytes", 650 * 1024).coerceIn(1, 900 * 1024)
+        val uri = pickFile(accept) ?: return JSONObject().put("cancelled", true)
+        val mime = (contentResolver.getType(uri) ?: "application/octet-stream").lowercase()
+        if (accept != "*/*" && accept.endsWith("/*") && !mime.startsWith(accept.removeSuffix("*"))) {
+            throw HermitException(ErrorCodes.INVALID_ARGUMENT, "所选文件类型不符合要求")
+        }
+        if (accept != "*/*" && !accept.endsWith("/*") && mime != accept) {
+            throw HermitException(ErrorCodes.INVALID_ARGUMENT, "所选文件类型不符合要求")
+        }
+        val bytes = withContext(Dispatchers.IO) {
+            val source = contentResolver.openInputStream(uri)
+                ?: throw HermitException(ErrorCodes.STORAGE, "无法读取所选文件")
+            source.use { input ->
+                ByteArrayOutputStream().use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    var total = 0
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        if (total > maxBytes) throw HermitException(ErrorCodes.QUOTA, "所选文件超过 ${maxBytes / 1024} KiB")
+                        output.write(buffer, 0, read)
+                    }
+                    output.toByteArray()
+                }
+            }
+        }
+        return JSONObject().put("cancelled", false)
+            .put("name", queryDisplayName(uri) ?: "file")
+            .put("mime", mime).put("size", bytes.size)
+            .put("dataUrl", "data:$mime;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP))
+    }
+
+    private suspend fun pickInlineImage(params: JSONObject): JSONObject {
+        val maxDimension = params.optInt("maxDimension", 1280).coerceIn(320, 2048)
+        val maxBytes = params.optInt("maxBytes", 420 * 1024).coerceIn(64 * 1024, 700 * 1024)
+        val uri = pickImage() ?: return JSONObject().put("cancelled", true)
+        val mime = contentResolver.getType(uri) ?: "application/octet-stream"
+        if (!mime.startsWith("image/")) throw HermitException(ErrorCodes.INVALID_ARGUMENT, "所选文件不是图片")
+        val bytes = withContext(Dispatchers.IO) {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+            if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
+                throw HermitException(ErrorCodes.INVALID_ARGUMENT, "无法识别所选图片")
+            }
+            var sample = 1
+            while (bounds.outWidth / sample > maxDimension * 2 || bounds.outHeight / sample > maxDimension * 2) sample *= 2
+            val original = contentResolver.openInputStream(uri)?.use {
+                BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample })
+            } ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "无法读取所选图片")
+            try {
+                val baseScale = minOf(1.0, maxDimension.toDouble() / maxOf(original.width, original.height).toDouble())
+                repeat(5) { attempt ->
+                    val scale = baseScale * Math.pow(0.84, attempt.toDouble())
+                    val width = maxOf(1, (original.width * scale).toInt())
+                    val height = maxOf(1, (original.height * scale).toInt())
+                    val scaled = Bitmap.createScaledBitmap(original, width, height, true)
+                    val encoded = ByteArrayOutputStream().use { output ->
+                        scaled.compress(Bitmap.CompressFormat.JPEG, 84 - attempt * 7, output)
+                        output.toByteArray()
+                    }
+                    if (scaled !== original) scaled.recycle()
+                    if (encoded.size <= maxBytes) return@withContext encoded
+                }
+                throw HermitException(ErrorCodes.QUOTA, "图片处理后仍然过大，请选择更简单的图片")
+            } finally {
+                original.recycle()
+            }
+        }
+        return JSONObject().put("cancelled", false)
+            .put("name", (queryDisplayName(uri) ?: "image").substringBeforeLast('.') + ".jpg")
+            .put("mime", "image/jpeg").put("size", bytes.size)
+            .put("dataUrl", "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP))
+    }
+
+    private suspend fun inspectVideo(uri: Uri): JSONObject = withContext(Dispatchers.IO) {
+        val output = JSONObject()
+        val retriever = MediaMetadataRetriever()
+        try {
+            retriever.setDataSource(this@MainActivity, uri)
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toLongOrNull()?.let { output.put("durationMs", it) }
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH)?.toIntOrNull()?.let { output.put("width", it) }
+            retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT)?.toIntOrNull()?.let { output.put("height", it) }
+            val frame = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            if (frame != null) {
+                try {
+                    val scale = minOf(1f, 240f / maxOf(frame.width, frame.height).toFloat())
+                    val preview = if (scale < 1f) Bitmap.createScaledBitmap(frame, maxOf(1, (frame.width * scale).toInt()), maxOf(1, (frame.height * scale).toInt()), true) else frame
+                    val bytes = ByteArrayOutputStream().use { encoded ->
+                        preview.compress(Bitmap.CompressFormat.JPEG, 68, encoded)
+                        encoded.toByteArray()
+                    }
+                    if (preview !== frame) preview.recycle()
+                    if (bytes.size <= 96 * 1024) output.put("previewDataUrl", "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP))
+                } finally { frame.recycle() }
+            }
+        } catch (_: Throwable) {
+            // A playable file remains usable even if the platform cannot
+            // extract dimensions or a thumbnail from its container.
+        } finally { try { retriever.release() } catch (_: Throwable) {} }
+        output
     }
 
     private suspend fun createFileDocument(name: String): Uri? = suspendCancellableCoroutine { continuation ->
@@ -1188,25 +1878,45 @@ class MainActivity : ComponentActivity(), BridgeHost {
     }
 
     private suspend fun croppedIconDataUrl(uri: Uri): String = withContext(Dispatchers.IO) {
+        IconProcessor.centeredPngDataUrl { contentResolver.openInputStream(uri) }
+    }
+
+    private suspend fun iconSourceDataUrl(uri: Uri): String = withContext(Dispatchers.IO) {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, bounds) }
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) throw HermitException(ErrorCodes.INVALID_ARGUMENT, "无法识别所选图片")
         var sample = 1
-        while (bounds.outWidth / sample > 1024 || bounds.outHeight / sample > 1024) sample *= 2
-        val bitmap = contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample }) }
+        while (bounds.outWidth / sample > 1536 || bounds.outHeight / sample > 1536) sample *= 2
+        val decoded = contentResolver.openInputStream(uri)?.use { BitmapFactory.decodeStream(it, null, BitmapFactory.Options().apply { inSampleSize = sample }) }
             ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "无法读取所选图片")
-        val side = minOf(bitmap.width, bitmap.height)
-        val square = Bitmap.createBitmap(bitmap, (bitmap.width - side) / 2, (bitmap.height - side) / 2, side, side)
-        val scaled = Bitmap.createScaledBitmap(square, 192, 192, true)
+        val maxDimension = 1024
+        val scale = minOf(1f, maxDimension.toFloat() / maxOf(decoded.width, decoded.height))
+        val prepared = if (scale < 1f) Bitmap.createScaledBitmap(decoded, maxOf(1, (decoded.width * scale).toInt()), maxOf(1, (decoded.height * scale).toInt()), true) else decoded
+        val hasAlpha = prepared.hasAlpha()
         val bytes = ByteArrayOutputStream().use { output ->
-            scaled.compress(Bitmap.CompressFormat.PNG, 100, output)
+            prepared.compress(if (hasAlpha) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG, 90, output)
             output.toByteArray()
         }
-        if (square !== bitmap) square.recycle()
-        if (scaled !== square) scaled.recycle()
-        bitmap.recycle()
-        if (bytes.size > 512 * 1024) throw HermitException(ErrorCodes.QUOTA, "图标处理后仍然过大，请选择较简单的图片")
-        "data:image/png;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
+        if (prepared !== decoded) prepared.recycle()
+        decoded.recycle()
+        if (bytes.size > 2 * 1024 * 1024) throw HermitException(ErrorCodes.QUOTA, "图片处理后仍然过大，请选择较简单的图片")
+        "data:image/${if (hasAlpha) "png" else "jpeg"};base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
+    }
+
+    private fun validateIconDataUrl(value: String): String? {
+        val dataUrl = value.trim()
+        if (dataUrl.isEmpty()) return null
+        val prefix = "data:image/png;base64,"
+        if (!dataUrl.startsWith(prefix)) throw HermitException(ErrorCodes.INVALID_ARGUMENT, "图标格式无效")
+        val bytes = try { Base64.decode(dataUrl.removePrefix(prefix), Base64.NO_WRAP) }
+        catch (_: IllegalArgumentException) { throw HermitException(ErrorCodes.INVALID_ARGUMENT, "图标格式无效") }
+        if (bytes.isEmpty() || bytes.size > 512 * 1024) throw HermitException(ErrorCodes.QUOTA, "图标文件过大")
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bounds.outWidth != 192 || bounds.outHeight != 192) {
+            throw HermitException(ErrorCodes.INVALID_ARGUMENT, "图标尺寸无效，请重新选择图片")
+        }
+        return dataUrl
     }
 
     private suspend fun capturePhoto(app: WebAppInstance, runtime: RuntimeSession): JSONObject {
@@ -1255,28 +1965,85 @@ class MainActivity : ComponentActivity(), BridgeHost {
         backupImportLauncher.launch("application/zip")
     }
 
+    private suspend fun recognizeSpeechOnce(runtime: RuntimeSession, params: JSONObject): JSONObject {
+        if (pendingSpeechActivity != null) throw HermitException(ErrorCodes.CONFLICT, "已有系统语音识别界面")
+        val intent = speech.activityIntent(params)
+        val result = suspendCancellableCoroutine<JSONObject> { continuation ->
+            pendingSpeechActivity = continuation
+            continuation.invokeOnCancellation { if (pendingSpeechActivity === continuation) pendingSpeechActivity = null }
+            try { speechActivityLauncher.launch(intent) }
+            catch (error: Throwable) {
+                pendingSpeechActivity = null
+                continuation.resumeWith(Result.failure(HermitException(ErrorCodes.UNSUPPORTED,
+                    "系统语音识别界面无法打开：${error.message ?: "未知错误"}", true)))
+            }
+        }
+        if (!runtime.alive || session !== runtime) throw HermitException(ErrorCodes.SESSION_EXPIRED, "语音识别期间页面会话已结束")
+        return result
+    }
+
     private fun safeDocumentName(value: String): String = value.replace(Regex("[^A-Za-z0-9._\\-\\u4e00-\\u9fff]+"), "-").take(60).ifBlank { "hermit-app" }
 
     private fun capabilityDescriptors(runtime: RuntimeSession): JSONObject {
-        val names = listOf("runtime", "app", "data", "files", "audio", "tts", "speech", "location", "camera", "share", "clipboard", "haptics", "network")
+        val names = listOf("runtime", "app", "data", "files", "audio", "tts", "speech", "location", "sensors", "camera",
+            "share", "clipboard", "haptics", "network", "wifi", "bluetooth", "infrared", "battery", "system")
         return JSONObject().put("capabilities", JSONArray(names.map { name ->
             val supported = when (name) {
                 "audio" -> audio.microphoneAvailable() || audio.audioOutputAvailable()
                 "tts" -> tts.isAvailable()
-                "speech" -> android.speech.SpeechRecognizer.isRecognitionAvailable(this)
+                "speech" -> speech.availability().optBoolean("available")
                 "location" -> getSystemService(android.location.LocationManager::class.java).allProviders.isNotEmpty()
+                "sensors" -> sensors.availability().optBoolean("available")
                 "camera" -> packageManager.resolveActivity(Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE), PackageManager.MATCH_DEFAULT_ONLY) != null
+                "wifi" -> packageManager.hasSystemFeature("android.hardware.wifi")
+                "bluetooth" -> packageManager.hasSystemFeature("android.hardware.bluetooth")
+                "infrared" -> infrared.status().optBoolean("supported")
                 else -> true
             }
             JSONObject().put("name", name).put("implemented", true).put("supported", supported)
                 .put("usable", supported && (runtime.role == RuntimeRole.WEB_APP || name in setOf("runtime", "app")))
-                .put("lifecycle", if (name in setOf("audio", "speech", "location", "tts")) "foreground-session" else "request")
+                .put("lifecycle", if (name in setOf("audio", "speech", "location", "sensors", "tts", "wifi", "bluetooth", "battery", "network")) "foreground-session" else "request")
                 .also { descriptor ->
-                    if (name == "audio") descriptor.put("features", JSONObject()
-                        .put("microphoneRecording", audio.microphoneAvailable())
-                        .put("speakerPlayback", audio.audioOutputAvailable()))
+                    authorizationDescriptors(runtime, name).takeIf { it.length() > 0 }?.let { descriptor.put("authorization", it) }
+                    when (name) {
+                        "audio" -> descriptor.put("features", JSONObject()
+                            .put("microphoneRecording", audio.microphoneAvailable())
+                            .put("speakerPlayback", audio.audioOutputAvailable()))
+                        "tts" -> descriptor.put("features", tts.capabilitySnapshot())
+                        "speech" -> descriptor.put("features", speech.availability())
+                        "location" -> descriptor.put("features", location.availability())
+                        "sensors" -> descriptor.put("features", sensors.availability())
+                        "wifi" -> descriptor.put("features", wifi.status())
+                        "bluetooth" -> descriptor.put("features", bluetooth.status())
+                        "infrared" -> descriptor.put("features", infrared.status())
+                        "camera" -> descriptor.put("features", JSONObject().put("photo", supported).put("torch", device.torchStatus().optBoolean("supported")))
+                    }
                 }
         }))
+    }
+
+    private fun authorizationDescriptors(runtime: RuntimeSession, namespace: String): JSONObject {
+        val capabilities = when (namespace) {
+            "audio" -> listOf("microphone.record")
+            "tts" -> listOf("tts.speak")
+            "speech" -> listOf("speech")
+            "location" -> listOf("location.approximate", "location.precise")
+            "sensors" -> listOf("sensors.read", "sensors.steps")
+            "camera" -> listOf("camera.capture", "camera.torch")
+            "wifi" -> listOf("wifi.scan", "wifi.connect")
+            "bluetooth" -> listOf("bluetooth.scan", "bluetooth.connect")
+            "infrared" -> listOf("infrared.transmit")
+            "clipboard" -> listOf("clipboard.read")
+            "notifications" -> listOf("notifications")
+            else -> emptyList()
+        }
+        return JSONObject().also { result -> capabilities.forEach { capability ->
+            val supported = capabilitySupported(capability)
+            val status = JSONObject(permissionBroker.status(runtime, capability, capabilityPermissions(capability)))
+                .put("supported", supported)
+            status.put("usable", supported && status.optBoolean("usable"))
+            result.put(capability, status)
+        } }
     }
 
     private fun queryDisplayName(uri: Uri): String? = contentResolver.query(
@@ -1288,6 +2055,13 @@ class MainActivity : ComponentActivity(), BridgeHost {
         "microphone.record" -> PermissionBroker.MICROPHONE_PERMISSIONS
         "location.approximate" -> PermissionBroker.COARSE_LOCATION
         "location.precise" -> PermissionBroker.FINE_LOCATION
+        "sensors.steps" -> listOf(Manifest.permission.ACTIVITY_RECOGNITION)
+        "wifi.scan" -> wifiScanPermissions()
+        "wifi.connect" -> wifiConnectPermissions()
+        "bluetooth.scan" -> bluetoothScanPermissions()
+        "bluetooth.connect" -> bluetoothConnectPermissions()
+        "camera.torch" -> listOf(Manifest.permission.CAMERA)
+        "notifications" -> if (Build.VERSION.SDK_INT >= 33) listOf(Manifest.permission.POST_NOTIFICATIONS) else emptyList()
         else -> emptyList()
     }
 
@@ -1296,21 +2070,56 @@ class MainActivity : ComponentActivity(), BridgeHost {
         "microphone.record" -> "使用麦克风录制音频"
         "location.approximate" -> "读取设备的大致位置"
         "location.precise" -> "读取设备的精确位置"
+        "tts.speak" -> "使用系统 TTS 朗读或生成语音"
+        "sensors.read" -> "读取设备运动、方向和环境传感器"
+        "sensors.steps" -> "读取设备计步传感器"
+        "wifi.scan" -> "扫描附近的 Wi-Fi 网络"
+        "wifi.connect" -> "通过 Android 系统确认连接指定 Wi-Fi 网络"
+        "bluetooth.scan" -> "扫描附近的低功耗蓝牙设备"
+        "bluetooth.connect" -> "连接并交换低功耗蓝牙设备数据"
+        "infrared.transmit" -> "使用设备红外发射器发送脉冲"
+        "camera.torch" -> "控制设备闪光灯"
         "clipboard.read" -> "读取当前剪贴板内容"
         "network" -> "通过 Hermit 原生网络连接访问已确认的目标"
+        "notifications" -> "在 Android 通知栏显示此 happ 的提醒"
         else -> "允许页面使用 $capability"
     }
 
     private fun capabilitySupported(capability: String): Boolean = when (capability) {
-        "speech" -> android.speech.SpeechRecognizer.isRecognitionAvailable(this)
+        "speech" -> speech.availability().optBoolean("available")
         "microphone.record" -> audio.microphoneAvailable()
         "location.approximate", "location.precise" ->
             getSystemService(android.location.LocationManager::class.java).allProviders.isNotEmpty()
+        "tts.speak" -> tts.isAvailable()
+        "sensors.read" -> sensors.availability().optBoolean("available")
+        "sensors.steps" -> SensorController.STEP_TYPES.any(sensors::supported)
+        "wifi.scan" -> packageManager.hasSystemFeature("android.hardware.wifi")
+        "wifi.connect" -> Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && packageManager.hasSystemFeature("android.hardware.wifi")
+        "bluetooth.scan", "bluetooth.connect" -> packageManager.hasSystemFeature("android.hardware.bluetooth")
+        "infrared.transmit" -> infrared.status().optBoolean("supported")
         "camera.capture" ->
             packageManager.resolveActivity(Intent(android.provider.MediaStore.ACTION_IMAGE_CAPTURE), PackageManager.MATCH_DEFAULT_ONLY) != null
-        "clipboard.read", "network" -> true
+        "camera.torch" -> device.torchStatus().optBoolean("supported")
+        "clipboard.read", "network", "notifications" -> true
         else -> false
     }
+
+    private fun wifiScanPermissions(): List<String> = buildList {
+        add(Manifest.permission.ACCESS_FINE_LOCATION)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) add(Manifest.permission.NEARBY_WIFI_DEVICES)
+    }
+
+    private fun wifiConnectPermissions(): List<String> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+        listOf(Manifest.permission.NEARBY_WIFI_DEVICES)
+    } else PermissionBroker.FINE_LOCATION
+
+    private fun bluetoothScanPermissions(): List<String> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        listOf(Manifest.permission.BLUETOOTH_SCAN, Manifest.permission.ACCESS_FINE_LOCATION)
+    } else PermissionBroker.FINE_LOCATION
+
+    private fun bluetoothConnectPermissions(): List<String> = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        listOf(Manifest.permission.BLUETOOTH_CONNECT)
+    } else emptyList()
 
     private fun validateGrantCapability(capability: String) {
         if (capability !in GRANT_CAPABILITIES) {
@@ -1349,6 +2158,46 @@ class MainActivity : ComponentActivity(), BridgeHost {
             permissionLauncher.launch(names)
         }
 
+    private suspend fun ensureNotifications(runtime: RuntimeSession) {
+        val permissions = if (Build.VERSION.SDK_INT >= 33) listOf(Manifest.permission.POST_NOTIFICATIONS) else emptyList()
+        permissionBroker.require(runtime, "notifications", "在 Android 通知栏显示此 happ 的提醒", permissions)
+        val app = runtime.instance ?: return
+        if (!app.notificationEnabled) hermitApp.registry.setNotificationEnabled(app.appId, true)
+    }
+
+    private suspend fun ensureExactAlarmAccess(): Boolean {
+        if (hermitApp.notifications.scheduler.exactAlarmAvailable()) return true
+        if (Build.VERSION.SDK_INT < 31) return true
+        return suspendCancellableCoroutine { continuation ->
+            if (pendingExactAlarm != null) {
+                continuation.resumeWith(Result.failure(HermitException(ErrorCodes.CONFLICT, "已有精确提醒授权请求")))
+                return@suspendCancellableCoroutine
+            }
+            pendingExactAlarm = continuation
+            continuation.invokeOnCancellation { if (pendingExactAlarm === continuation) pendingExactAlarm = null }
+            runCatching {
+                exactAlarmLauncher.launch(Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM, Uri.parse("package:$packageName")))
+            }.onFailure {
+                pendingExactAlarm = null
+                if (continuation.isActive) continuation.resume(false)
+            }
+        }
+    }
+
+    private fun notificationEndpoint(runtime: RuntimeSession, raw: String): String {
+        if (raw.length > MAX_URL_LENGTH || raw.any { it <= '\u001f' }) throw HermitException(ErrorCodes.INVALID_ARGUMENT, "通知端点无效")
+        val resolved = runtime.instance!!.runtimeUrl.toHttpUrl().resolve(raw)
+            ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "通知端点无效")
+        val normalized = resolved.toString()
+        if (originOf(Uri.parse(normalized)) != runtime.origin) throw HermitException(ErrorCodes.ORIGIN_DENIED, "通知端点必须与当前 happ 同源")
+        val host = resolved.host.lowercase()
+        if (host == "localhost" || host.endsWith(".localhost") || runCatching { InetAddress.getByName(host) }
+                .getOrNull()?.let { it.isLoopbackAddress || it.isAnyLocalAddress } == true) {
+            throw HermitException(ErrorCodes.ORIGIN_DENIED, "通知端点不能指向本机")
+        }
+        return normalized
+    }
+
     private suspend fun ensureLanPermission(): Boolean {
         if (Build.VERSION.SDK_INT < 37) return true
         val permission = Manifest.permission.ACCESS_LOCAL_NETWORK
@@ -1365,7 +2214,15 @@ class MainActivity : ComponentActivity(), BridgeHost {
             add(Manifest.permission.RECORD_AUDIO)
             add(Manifest.permission.ACCESS_COARSE_LOCATION)
             add(Manifest.permission.ACCESS_FINE_LOCATION)
+            add(Manifest.permission.CAMERA)
+            add(Manifest.permission.ACTIVITY_RECOGNITION)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                add(Manifest.permission.BLUETOOTH_SCAN)
+                add(Manifest.permission.BLUETOOTH_CONNECT)
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) add(Manifest.permission.NEARBY_WIFI_DEVICES)
             if (Build.VERSION.SDK_INT >= 37) add(Manifest.permission.ACCESS_LOCAL_NETWORK)
+            if (Build.VERSION.SDK_INT >= 33) add(Manifest.permission.POST_NOTIFICATIONS)
         }
         permissions.forEach { permission ->
             hermitApp.registry.observeSystemPermission(
@@ -1551,7 +2408,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
                         if (isLanUrl(candidate) && !ensureLanPermission()) {
                             throw HermitException(ErrorCodes.OS_PERMISSION_DENIED, "Android 未授予局域网权限")
                         }
-                        hermitApp.remoteInstaller.installOnline(candidate, Uri.parse(candidate).host ?: "线上 happ")
+                        hermitApp.remoteInstaller.installOnline(candidate, Uri.parse(candidate).host ?: "线上 happ", ::chooseIdentityInstall)
                         showTarget(null, false)
                     } catch (error: Throwable) {
                         Toast.makeText(this@MainActivity, error.message ?: "happ 添加失败", Toast.LENGTH_LONG).show()
@@ -1570,6 +2427,25 @@ class MainActivity : ComponentActivity(), BridgeHost {
             .create()
         continuation.invokeOnCancellation { dialog.dismiss() }
         dialog.show()
+    }
+
+    private suspend fun chooseIdentityInstall(existing: WebAppInstance, incomingPublisherKeyId: String?): IdentityInstallChoice = withContext(Dispatchers.Main) {
+        suspendCancellableCoroutine { continuation ->
+            val verified = incomingPublisherKeyId != null && existing.publisherKeyId == incomingPublisherKeyId
+            val publisherChanged = existing.publisherKeyId != incomingPublisherKeyId
+            val dialog = AlertDialog.Builder(this@MainActivity)
+                .setTitle(if (verified) "已安装同一签名的 happ" else "发现相同 happId 的实例")
+                .setMessage(if (verified) "“${existing.name}”具有相同 happId 和发布者公钥。更新原实例会保留它的数据、设置和授权；全新安装会创建相互隔离的新实例。"
+                    else if (publisherChanged) "“${existing.name}”使用相同 happId，但发布者公钥与当前包不同或缺失。只有你确认这是同一 happ 时才更新原实例；更新会采用新包的发布者信息并保留数据与授权。"
+                    else "“${existing.name}”使用相同 happId，但双方都没有可验证的发布者签名。仅在你确认它们是同一 happ 时更新原实例；也可以创建隔离的新实例。")
+                .setNegativeButton("取消") { _, _ -> if (continuation.isActive) continuation.resume(IdentityInstallChoice.CANCEL) }
+                .setNeutralButton("全新安装") { _, _ -> if (continuation.isActive) continuation.resume(IdentityInstallChoice.NEW_INSTANCE) }
+                .setPositiveButton("更新原实例") { _, _ -> if (continuation.isActive) continuation.resume(IdentityInstallChoice.UPDATE) }
+                .setOnCancelListener { if (continuation.isActive) continuation.resume(IdentityInstallChoice.CANCEL) }
+                .create()
+            continuation.invokeOnCancellation { dialog.dismiss() }
+            dialog.show()
+        }
     }
 
     @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
@@ -1597,9 +2473,11 @@ class MainActivity : ComponentActivity(), BridgeHost {
         audio.shutdown()
         tts.shutdown()
         speech.shutdown()
+        device.shutdown()
         pendingZip?.cancel()
         pendingTree?.cancel()
         pendingFile?.cancel()
+        pendingImage?.cancel()
         pendingFileExport?.cancel()
         pendingPermissions?.cancel()
         pendingCamera?.cancel()
@@ -1608,13 +2486,21 @@ class MainActivity : ComponentActivity(), BridgeHost {
         pendingBackupImport?.cancel()
         pendingQrScan?.cancel()
         pendingIcon?.cancel()
+        pendingExactAlarm?.cancel()
+        pendingSpeechActivity?.cancel()
         pendingDirectoryImports.clear()
         super.onDestroy()
     }
 
     override fun onStop() {
+        hermitApp.developmentServer.stop("Hermit entered background")
+        hermitApp.agentServer.stop("Hermit 已进入后台")
         session?.sessionId?.let(audio::cancelSession)
         location.cancelAll()
+        sensors.cancelAll()
+        wifi.cancelAll()
+        bluetooth.cancelAll()
+        device.cancelAll()
         tts.stop()
         speech.cancel()
         super.onStop()
@@ -1627,8 +2513,12 @@ class MainActivity : ComponentActivity(), BridgeHost {
 
     companion object {
         const val EXTRA_APP_ID = "io.github.zhyuzh3d.hermit.APP_ID"
+        const val EXTRA_NOTIFICATION_ID = "io.github.zhyuzh3d.hermit.NOTIFICATION_ID"
+        const val EXTRA_NOTIFICATION_DATA = "io.github.zhyuzh3d.hermit.NOTIFICATION_DATA"
         private val GRANT_CAPABILITIES = setOf(
-            "speech", "microphone.record", "location.approximate", "location.precise", "camera.capture", "clipboard.read", "network"
+            "speech", "microphone.record", "tts.speak", "location.approximate", "location.precise",
+            "sensors.read", "sensors.steps", "wifi.scan", "wifi.connect", "bluetooth.scan", "bluetooth.connect",
+            "infrared.transmit", "camera.capture", "camera.torch", "clipboard.read", "network", "notifications"
         )
         private const val STORE_ORIGIN = "https://store.hermit.invalid"
         private const val STORE_URL = "$STORE_ORIGIN/index.html"

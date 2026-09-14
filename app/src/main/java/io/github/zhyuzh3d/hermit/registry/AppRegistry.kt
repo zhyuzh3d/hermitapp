@@ -9,6 +9,8 @@ import android.net.Uri
 import io.github.zhyuzh3d.hermit.model.CodeRelease
 import io.github.zhyuzh3d.hermit.model.HappRuntimeMode
 import io.github.zhyuzh3d.hermit.model.HappSource
+import io.github.zhyuzh3d.hermit.model.LaunchChannel
+import io.github.zhyuzh3d.hermit.model.DevWorkspace
 import io.github.zhyuzh3d.hermit.model.WebAppInstance
 import org.json.JSONArray
 import org.json.JSONObject
@@ -27,6 +29,7 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
               mode TEXT NOT NULL CHECK(mode IN ('ONLINE','LOCAL')),
               source_kind TEXT NOT NULL CHECK(source_kind IN ('ONLINE','LOCAL')),
               runtime_mode TEXT NOT NULL CHECK(runtime_mode IN ('LOCAL','LIVE')),
+              launch_channel TEXT NOT NULL DEFAULT 'STABLE' CHECK(launch_channel IN ('STABLE','DEV')),
               start_url TEXT NOT NULL, primary_origin TEXT NOT NULL,
               live_url TEXT,
               web_profile_name TEXT NOT NULL UNIQUE, trust_revision INTEGER NOT NULL,
@@ -35,6 +38,15 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
               developer_enabled INTEGER NOT NULL DEFAULT 0,
               favorite INTEGER NOT NULL DEFAULT 0,
               icon_data_url TEXT,
+              default_icon_data_url TEXT,
+              happ_id TEXT,
+              publisher_key_id TEXT,
+              download_url TEXT,
+              download_version_code INTEGER,
+              download_version_name TEXT,
+              update_url TEXT,
+              notification_enabled INTEGER NOT NULL DEFAULT 0,
+              allow_cross_origin_network INTEGER NOT NULL DEFAULT 0,
               state TEXT NOT NULL DEFAULT 'ready',
               created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
             )
@@ -46,11 +58,15 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
               tree_hash TEXT NOT NULL, provenance TEXT NOT NULL,
               version_code INTEGER, version_name TEXT, source_revision TEXT,
               entry_path TEXT NOT NULL DEFAULT 'index.html',
+              routing TEXT NOT NULL DEFAULT 'hash',
+              happ_id TEXT,
+              publisher_key_id TEXT,
               relative_root TEXT NOT NULL, created_at INTEGER NOT NULL,
               UNIQUE(app_id, tree_hash)
             )
         """.trimIndent())
         db.execSQL("CREATE INDEX releases_by_app_time ON releases(app_id, created_at DESC)")
+        createDevWorkspaces(db)
         db.execSQL("""
             CREATE TABLE grants (
               app_id TEXT NOT NULL REFERENCES instances(app_id) ON DELETE CASCADE,
@@ -108,12 +124,83 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
                   live_url = CASE WHEN mode = 'ONLINE' THEN start_url ELSE NULL END
             """.trimIndent())
         }
+        if (oldVersion < 7) {
+            db.execSQL("ALTER TABLE instances ADD COLUMN happ_id TEXT")
+            db.execSQL("ALTER TABLE instances ADD COLUMN publisher_key_id TEXT")
+            db.execSQL("ALTER TABLE instances ADD COLUMN download_url TEXT")
+            db.execSQL("ALTER TABLE instances ADD COLUMN download_version_code INTEGER")
+            db.execSQL("ALTER TABLE instances ADD COLUMN download_version_name TEXT")
+            db.execSQL("ALTER TABLE instances ADD COLUMN update_url TEXT")
+            db.execSQL("ALTER TABLE instances ADD COLUMN notification_enabled INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE instances ADD COLUMN allow_cross_origin_network INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("ALTER TABLE releases ADD COLUMN routing TEXT NOT NULL DEFAULT 'hash'")
+            db.execSQL("ALTER TABLE releases ADD COLUMN happ_id TEXT")
+            db.execSQL("ALTER TABLE releases ADD COLUMN publisher_key_id TEXT")
+            db.execSQL("DELETE FROM grants WHERE rowid NOT IN (SELECT MAX(rowid) FROM grants GROUP BY app_id, capability, resource_scope)")
+            db.execSQL("UPDATE grants SET trust_revision = 0")
+        }
+        if (oldVersion < 8) {
+            db.execSQL("ALTER TABLE instances ADD COLUMN default_icon_data_url TEXT")
+            // Older databases did not distinguish a package default from a
+            // user override. Copying the value preserves the visible icon;
+            // the next package install refreshes the real default.
+            db.execSQL("UPDATE instances SET default_icon_data_url = icon_data_url")
+        }
+        if (oldVersion < 9) {
+            db.execSQL("ALTER TABLE instances ADD COLUMN launch_channel TEXT NOT NULL DEFAULT 'STABLE'")
+            createDevWorkspaces(db)
+        }
         if (newVersion > VERSION) throw IllegalStateException("Unsupported registry version $newVersion")
     }
 
     fun listInstances(): List<WebAppInstance> =
         readableDatabase.query("instances", null, "state = ?", arrayOf("ready"), null, null, "created_at ASC")
             .use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.toInstance()) } }
+
+    fun listAllInstances(): List<WebAppInstance> =
+        readableDatabase.query("instances", null, "state IN ('ready','archived')", null, null, null, "created_at ASC")
+            .use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.toInstance()) } }
+
+    fun findArchived(happId: String, publisherKeyId: String): WebAppInstance? = readableDatabase.query(
+        "instances", null, "state = 'archived' AND happ_id = ? AND publisher_key_id = ?",
+        arrayOf(happId, publisherKeyId), null, null, "updated_at DESC", "2"
+    ).use { cursor ->
+        if (!cursor.moveToFirst()) null else cursor.toInstance().takeUnless { cursor.moveToNext() }
+    }
+
+    fun findReady(happId: String, publisherKeyId: String): WebAppInstance? = readableDatabase.query(
+        "instances", null, "state = 'ready' AND happ_id = ? AND publisher_key_id = ?",
+        arrayOf(happId, publisherKeyId), null, null, "updated_at DESC", "2"
+    ).use { cursor ->
+        if (!cursor.moveToFirst()) null else cursor.toInstance().takeUnless { cursor.moveToNext() }
+    }
+
+    fun findUnsignedReady(happId: String): WebAppInstance? = findUniqueByIdentity("ready", happId)
+    fun findUnsignedArchived(happId: String): WebAppInstance? = findUniqueByIdentity("archived", happId)
+    fun findAnyReady(happId: String): WebAppInstance? = findUniqueByHappId("ready", happId)
+    fun findAnyArchived(happId: String): WebAppInstance? = findUniqueByHappId("archived", happId)
+
+    private fun findUniqueByIdentity(state: String, happId: String): WebAppInstance? = readableDatabase.query(
+        "instances", null, "state = ? AND happ_id = ? AND publisher_key_id IS NULL",
+        arrayOf(state, happId), null, null, "updated_at DESC", "2"
+    ).use { cursor ->
+        if (!cursor.moveToFirst()) null else cursor.toInstance().takeUnless { cursor.moveToNext() }
+    }
+
+    private fun findUniqueByHappId(state: String, happId: String): WebAppInstance? = readableDatabase.query(
+        "instances", null, "state = ? AND happ_id = ?", arrayOf(state, happId), null, null, "updated_at DESC", "2"
+    ).use { cursor ->
+        if (!cursor.moveToFirst()) null else cursor.toInstance().takeUnless { cursor.moveToNext() }
+    }
+
+    fun updatePackageIdentity(appId: String, happId: String?, publisherKeyId: String?) {
+        val changed = writableDatabase.update("instances", ContentValues().apply {
+            if (happId == null) putNull("happ_id") else put("happ_id", happId)
+            if (publisherKeyId == null) putNull("publisher_key_id") else put("publisher_key_id", publisherKeyId)
+            put("updated_at", System.currentTimeMillis())
+        }, "app_id = ? AND state = 'ready'", arrayOf(appId))
+        check(changed == 1) { "App not found" }
+    }
 
     fun getInstance(appId: String): WebAppInstance? =
         readableDatabase.query("instances", null, "app_id = ? AND state = ?", arrayOf(appId, "ready"), null, null, null)
@@ -136,6 +223,21 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
         }
     }
 
+    fun restoreArchivedWithRelease(instanceId: String, release: CodeRelease) {
+        require(instanceId == release.appId)
+        writableDatabase.inTransaction {
+            insertOrThrow("releases", null, release.values())
+            val current = query("instances", arrayOf("live_url"), "app_id = ? AND state = 'archived'", arrayOf(instanceId), null, null, null)
+                .use { if (it.moveToFirst()) if (it.isNull(0)) null else it.getString(0) else throw IllegalStateException("Archived app not found") }
+            val target = current ?: "${localOrigin(instanceId)}/"
+            check(update("instances", ContentValues().apply {
+                put("state", "ready"); put("active_release_id", release.releaseId); put("runtime_mode", "LOCAL"); put("mode", "LOCAL")
+                put("start_url", target); put("primary_origin", originOf(target)); put("notification_enabled", 0)
+                put("updated_at", System.currentTimeMillis())
+            }, "app_id = ? AND state = 'archived'", arrayOf(instanceId)) == 1)
+        }
+    }
+
     fun commitRelease(release: CodeRelease, expectedActive: String?) {
         writableDatabase.inTransaction {
             insertOrThrow("releases", null, release.values())
@@ -144,9 +246,11 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
             val values = ContentValues().apply {
                 put("active_release_id", release.releaseId)
                 if (runtimeMode == HappRuntimeMode.LOCAL) {
-                    val origin = localOrigin(release.appId)
-                    put("start_url", "$origin/${release.entryPath}")
-                    put("primary_origin", origin)
+                    val liveUrl = query("instances", arrayOf("live_url"), "app_id = ?", arrayOf(release.appId), null, null, null)
+                        .use { if (it.moveToFirst() && !it.isNull(0)) it.getString(0) else null }
+                    val target = liveUrl ?: "${localOrigin(release.appId)}/"
+                    put("start_url", target)
+                    put("primary_origin", originOf(target))
                 }
                 put("updated_at", System.currentTimeMillis())
             }
@@ -170,17 +274,19 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
 
     fun activateRelease(appId: String, releaseId: String, expectedActive: String?) {
         writableDatabase.inTransaction {
-            val releaseEntry = query("releases", arrayOf("entry_path"), "app_id = ? AND release_id = ?",
-                arrayOf(appId, releaseId), null, null, null).use { if (it.moveToFirst()) it.getString(0) else null }
-                ?: throw IllegalArgumentException("Release does not belong to app")
+            val releaseExists = query("releases", arrayOf("release_id"), "app_id = ? AND release_id = ?",
+                arrayOf(appId, releaseId), null, null, null).use { it.moveToFirst() }
+            if (!releaseExists) throw IllegalArgumentException("Release does not belong to app")
             val runtimeMode = query("instances", arrayOf("runtime_mode"), "app_id = ?", arrayOf(appId), null, null, null)
                 .use { cursor -> if (cursor.moveToFirst()) HappRuntimeMode.valueOf(cursor.getString(0)) else throw IllegalArgumentException("App not found") }
             val values = ContentValues().apply {
                 put("active_release_id", releaseId)
                 if (runtimeMode == HappRuntimeMode.LOCAL) {
-                    val origin = localOrigin(appId)
-                    put("start_url", "$origin/$releaseEntry")
-                    put("primary_origin", origin)
+                    val liveUrl = query("instances", arrayOf("live_url"), "app_id = ?", arrayOf(appId), null, null, null)
+                        .use { if (it.moveToFirst() && !it.isNull(0)) it.getString(0) else null }
+                    val target = liveUrl ?: "${localOrigin(appId)}/"
+                    put("start_url", target)
+                    put("primary_origin", originOf(target))
                 }
                 put("updated_at", System.currentTimeMillis())
             }
@@ -204,31 +310,26 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
         val current = getInstance(appId) ?: throw IllegalArgumentException("App not found")
         val nextLiveOrigin = liveUrl?.let(::originOf)
         val previousLiveOrigin = current.liveUrl?.let(::originOf)
-        val originChanged = nextLiveOrigin != null && nextLiveOrigin != previousLiveOrigin
+        val originChanged = nextLiveOrigin != previousLiveOrigin
         writableDatabase.inTransaction {
             val now = System.currentTimeMillis()
             val changed = update("instances", ContentValues().apply {
                 put("name", name.take(80))
-                liveUrl?.let {
-                    put("live_url", it)
-                    if (current.runtimeMode == HappRuntimeMode.LIVE) {
-                        put("start_url", it)
-                        put("primary_origin", nextLiveOrigin)
-                    }
+                if (liveUrl == null) putNull("live_url") else put("live_url", liveUrl)
+                val target = if (current.runtimeMode == HappRuntimeMode.LIVE) liveUrl else liveUrl ?: current.localUrl
+                if (target != null) {
+                    put("start_url", target)
+                    put("primary_origin", originOf(target))
                 }
                 sourceSpec?.let { put("source_spec", it) }
                 if (originChanged) {
                     put("trust_revision", current.trustRevision + 1)
-                    put("web_profile_name", "app-${UUID.randomUUID().toString().replace("-", "")}")
                 }
                 put("updated_at", now)
             }, "app_id = ? AND state = 'ready'", arrayOf(appId))
             check(changed == 1) { "App changed while updating" }
             if (originChanged) {
-                insertWithOnConflict("profile_cleanup", null, ContentValues().apply {
-                    put("profile_name", current.webProfileName); put("app_id", appId); put("state", "pending")
-                    put("created_at", now); put("updated_at", now)
-                }, SQLiteDatabase.CONFLICT_REPLACE)
+                delete("grants", "app_id = ? AND resource_scope != ''", arrayOf(appId))
             }
         }
     }
@@ -239,14 +340,13 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
         val targetUrl: String
         val targetOrigin: String
         if (requested == HappRuntimeMode.LIVE) {
-            check(current.source == HappSource.ONLINE) { "本地 happ 只能本地运行" }
             targetUrl = current.liveUrl ?: throw IllegalStateException("此线上 happ 没有可实时运行的页面地址")
             targetOrigin = originOf(targetUrl)
         } else {
-            val release = current.activeReleaseId?.let(::getRelease)
+            current.activeReleaseId?.let(::getRelease)
                 ?: throw IllegalStateException("此 happ 没有可用的本地代码")
-            targetOrigin = localOrigin(appId)
-            targetUrl = "$targetOrigin/${release.entryPath}"
+            targetUrl = current.liveUrl ?: "${localOrigin(appId)}/"
+            targetOrigin = originOf(targetUrl)
         }
         writableDatabase.inTransaction {
             val now = System.currentTimeMillis()
@@ -255,16 +355,10 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
                 put("mode", if (requested == HappRuntimeMode.LIVE) "ONLINE" else "LOCAL")
                 put("start_url", targetUrl)
                 put("primary_origin", targetOrigin)
-                put("trust_revision", current.trustRevision + 1)
-                put("web_profile_name", "app-${UUID.randomUUID().toString().replace("-", "")}")
                 put("developer_enabled", 0)
                 put("updated_at", now)
             }, "app_id = ? AND state = 'ready' AND runtime_mode = ?", arrayOf(appId, current.runtimeMode.name))
             check(changed == 1) { "运行方式已发生变化" }
-            insertWithOnConflict("profile_cleanup", null, ContentValues().apply {
-                put("profile_name", current.webProfileName); put("app_id", appId); put("state", "pending")
-                put("created_at", now); put("updated_at", now)
-            }, SQLiteDatabase.CONFLICT_REPLACE)
         }
         return getInstance(appId) ?: error("App not found")
     }
@@ -301,6 +395,63 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
         }, "app_id = ?", arrayOf(appId))
     }
 
+    fun setLaunchChannel(appId: String, channel: LaunchChannel): WebAppInstance {
+        writableDatabase.inTransaction {
+            if (channel == LaunchChannel.DEV) {
+                val workspace = query("dev_workspaces", arrayOf("app_id"), "app_id = ?", arrayOf(appId), null, null, null)
+                    .use { it.moveToFirst() }
+                if (!workspace) throw IllegalStateException("开发工作副本不存在")
+            }
+            val current = getInstance(appId) ?: throw IllegalArgumentException("App not found")
+            val values = ContentValues().apply {
+                put("launch_channel", channel.name)
+                if (channel == LaunchChannel.DEV) {
+                    put("runtime_mode", HappRuntimeMode.LOCAL.name)
+                    put("mode", "LOCAL")
+                    val target = current.liveUrl ?: current.localUrl
+                    put("start_url", target)
+                    put("primary_origin", originOf(target))
+                }
+                put("updated_at", System.currentTimeMillis())
+            }
+            check(update("instances", values, "app_id = ? AND state = 'ready'", arrayOf(appId)) == 1) { "App not found" }
+        }
+        return getInstance(appId) ?: error("App not found")
+    }
+
+    fun getDevWorkspace(appId: String): DevWorkspace? = readableDatabase.query(
+        "dev_workspaces", null, "app_id = ?", arrayOf(appId), null, null, null
+    ).use { cursor -> if (cursor.moveToFirst()) cursor.toDevWorkspace() else null }
+
+    fun insertDevWorkspace(workspace: DevWorkspace): DevWorkspace {
+        writableDatabase.insertOrThrow("dev_workspaces", null, workspace.values())
+        return getDevWorkspace(workspace.appId) ?: error("Unable to create dev workspace")
+    }
+
+    fun commitDevWorkspace(appId: String, expectedRevision: Long, generation: String, treeHash: String,
+        dirty: Boolean, baseReleaseId: String? = null): DevWorkspace {
+        val values = ContentValues().apply {
+            put("generation", generation)
+            put("revision", expectedRevision + 1)
+            put("tree_hash", treeHash)
+            put("dirty", if (dirty) 1 else 0)
+            baseReleaseId?.let { put("base_release_id", it) }
+            put("updated_at", System.currentTimeMillis())
+        }
+        val changed = writableDatabase.update("dev_workspaces", values,
+            "app_id = ? AND revision = ?", arrayOf(appId, expectedRevision.toString()))
+        if (changed != 1) throw IllegalStateException("Dev workspace revision changed")
+        return getDevWorkspace(appId) ?: error("Dev workspace disappeared")
+    }
+
+    fun deleteDevWorkspace(appId: String) {
+        writableDatabase.inTransaction {
+            update("instances", ContentValues().apply { put("launch_channel", LaunchChannel.STABLE.name) },
+                "app_id = ?", arrayOf(appId))
+            delete("dev_workspaces", "app_id = ?", arrayOf(appId))
+        }
+    }
+
     fun setFavorite(appId: String, favorite: Boolean): WebAppInstance {
         val changed = writableDatabase.update("instances", ContentValues().apply {
             put("favorite", if (favorite) 1 else 0)
@@ -310,10 +461,73 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
         return getInstance(appId) ?: error("App not found")
     }
 
+    fun setNotificationEnabled(appId: String, enabled: Boolean): WebAppInstance {
+        val changed = writableDatabase.update("instances", ContentValues().apply {
+            put("notification_enabled", if (enabled) 1 else 0)
+            put("updated_at", System.currentTimeMillis())
+        }, "app_id = ? AND state = 'ready'", arrayOf(appId))
+        check(changed == 1) { "App not found" }
+        return getInstance(appId) ?: error("App not found")
+    }
+
+    fun setCrossOriginNetworkEnabled(appId: String, enabled: Boolean): WebAppInstance {
+        val changed = writableDatabase.update("instances", ContentValues().apply {
+            put("allow_cross_origin_network", if (enabled) 1 else 0)
+            put("updated_at", System.currentTimeMillis())
+        }, "app_id = ? AND state = 'ready'", arrayOf(appId))
+        check(changed == 1) { "App not found" }
+        return getInstance(appId) ?: error("App not found")
+    }
+
+    fun updateUrls(appId: String, liveUrl: String?, updateUrl: String?): WebAppInstance {
+        val current = getInstance(appId) ?: throw IllegalArgumentException("App not found")
+        if (current.runtimeMode == HappRuntimeMode.LIVE && liveUrl == null && current.activeReleaseId == null) {
+            throw IllegalStateException("实时运行实例不能删除唯一入口")
+        }
+        val nextMode = if (liveUrl == null && current.runtimeMode == HappRuntimeMode.LIVE) HappRuntimeMode.LOCAL else current.runtimeMode
+        val previousOrigin = current.liveUrl?.let(::originOf)
+        val nextOrigin = liveUrl?.let(::originOf)
+        writableDatabase.inTransaction {
+            val values = ContentValues().apply {
+                if (liveUrl == null) putNull("live_url") else put("live_url", liveUrl)
+                if (updateUrl == null) putNull("update_url") else put("update_url", updateUrl)
+                put("runtime_mode", nextMode.name)
+                put("mode", if (nextMode == HappRuntimeMode.LIVE) "ONLINE" else "LOCAL")
+                val target = if (nextMode == HappRuntimeMode.LIVE) requireNotNull(liveUrl) else liveUrl ?: current.localUrl
+                put("start_url", target)
+                put("primary_origin", originOf(target))
+                if (previousOrigin != nextOrigin) put("trust_revision", current.trustRevision + 1)
+                put("updated_at", System.currentTimeMillis())
+            }
+            check(update("instances", values, "app_id = ? AND state = 'ready'", arrayOf(appId)) == 1)
+            if (previousOrigin != nextOrigin) delete("grants", "app_id = ? AND resource_scope != ''", arrayOf(appId))
+        }
+        return getInstance(appId) ?: error("App not found")
+    }
+
+    fun recordDownload(appId: String, url: String, versionCode: Long?, versionName: String?) {
+        writableDatabase.update("instances", ContentValues().apply {
+            put("download_url", url)
+            if (versionCode == null) putNull("download_version_code") else put("download_version_code", versionCode)
+            if (versionName == null) putNull("download_version_name") else put("download_version_name", versionName)
+            put("updated_at", System.currentTimeMillis())
+        }, "app_id = ?", arrayOf(appId))
+    }
+
     fun updatePresentation(appId: String, name: String, iconDataUrl: String?): WebAppInstance {
         val changed = writableDatabase.update("instances", ContentValues().apply {
             put("name", name.trim().take(80))
             if (iconDataUrl == null) putNull("icon_data_url") else put("icon_data_url", iconDataUrl)
+            put("updated_at", System.currentTimeMillis())
+        }, "app_id = ? AND state = 'ready'", arrayOf(appId))
+        check(changed == 1) { "App not found" }
+        return getInstance(appId) ?: error("App not found")
+    }
+
+    fun updateDefaultIcon(appId: String, defaultIconDataUrl: String?): WebAppInstance {
+        val changed = writableDatabase.update("instances", ContentValues().apply {
+            if (defaultIconDataUrl == null) putNull("default_icon_data_url")
+            else put("default_icon_data_url", defaultIconDataUrl)
             put("updated_at", System.currentTimeMillis())
         }, "app_id = ? AND state = 'ready'", arrayOf(appId))
         check(changed == 1) { "App not found" }
@@ -328,13 +542,14 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
 
     fun getGrant(appId: String, trustRevision: Long, capability: String, scope: String = ""): String? =
         readableDatabase.query("grants", arrayOf("decision"),
-            "app_id = ? AND trust_revision = ? AND capability = ? AND resource_scope = ?",
-            arrayOf(appId, trustRevision.toString(), capability, scope), null, null, null
+            "app_id = ? AND capability = ? AND resource_scope = ?",
+            arrayOf(appId, capability, scope), null, null, "updated_at DESC", "1"
         ).use { if (it.moveToFirst()) it.getString(0) else null }
 
     fun putGrant(appId: String, trustRevision: Long, capability: String, decision: String, scope: String = "") {
+        writableDatabase.delete("grants", "app_id = ? AND capability = ? AND resource_scope = ?", arrayOf(appId, capability, scope))
         val values = ContentValues().apply {
-            put("app_id", appId); put("trust_revision", trustRevision); put("capability", capability)
+            put("app_id", appId); put("trust_revision", 0); put("capability", capability)
             put("resource_scope", scope); put("decision", decision); put("updated_at", System.currentTimeMillis())
         }
         writableDatabase.insertWithOnConflict("grants", null, values, SQLiteDatabase.CONFLICT_REPLACE)
@@ -343,7 +558,7 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
     fun grantsJson(appId: String, trustRevision: Long): JSONObject {
         val items = JSONArray()
         readableDatabase.query("grants", arrayOf("capability", "resource_scope", "decision", "updated_at"),
-            "app_id = ? AND trust_revision = ?", arrayOf(appId, trustRevision.toString()), null, null, "capability, resource_scope"
+            "app_id = ?", arrayOf(appId), null, null, "capability, resource_scope"
         ).use { c ->
             while (c.moveToNext()) items.put(JSONObject()
                 .put("capability", c.getString(0)).put("scope", c.getString(1))
@@ -353,8 +568,8 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
     }
 
     fun clearGrant(appId: String, trustRevision: Long, capability: String, scope: String = ""): Boolean =
-        writableDatabase.delete("grants", "app_id = ? AND trust_revision = ? AND capability = ? AND resource_scope = ?",
-            arrayOf(appId, trustRevision.toString(), capability, scope)) > 0
+        writableDatabase.delete("grants", "app_id = ? AND capability = ? AND resource_scope = ?",
+            arrayOf(appId, capability, scope)) > 0
 
     fun observeSystemPermission(permission: String, granted: Boolean) {
         writableDatabase.insertWithOnConflict("system_permission_observations", null, ContentValues().apply {
@@ -443,6 +658,18 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
         return instance
     }
 
+    fun archiveInstance(appId: String): WebAppInstance? {
+        val instance = getInstance(appId) ?: return null
+        writableDatabase.inTransaction {
+            delete("releases", "app_id = ?", arrayOf(appId))
+            check(update("instances", ContentValues().apply {
+                put("state", "archived"); putNull("active_release_id"); put("runtime_mode", "LOCAL"); put("mode", "LOCAL")
+                put("notification_enabled", 0); put("updated_at", System.currentTimeMillis())
+            }, "app_id = ? AND state = 'ready'", arrayOf(appId)) == 1)
+        }
+        return instance
+    }
+
     fun finishDelete(appId: String) {
         writableDatabase.delete("instances", "app_id = ? AND state = 'deleting'", arrayOf(appId))
     }
@@ -466,6 +693,7 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
         put("app_id", appId); put("name", name)
         put("mode", if (runtimeMode == HappRuntimeMode.LIVE) "ONLINE" else "LOCAL")
         put("source_kind", source.name); put("runtime_mode", runtimeMode.name)
+        put("launch_channel", launchChannel.name)
         put("start_url", startUrl); put("live_url", liveUrl)
         put("primary_origin", primaryOrigin); put("web_profile_name", webProfileName); put("trust_revision", trustRevision)
         put("active_release_id", activeReleaseId); put("active_data_generation", activeDataGeneration)
@@ -473,6 +701,12 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
         put("developer_enabled", if (developerEnabled) 1 else 0); put("state", "ready")
         put("favorite", if (favorite) 1 else 0)
         put("icon_data_url", iconDataUrl)
+        put("default_icon_data_url", defaultIconDataUrl)
+        put("happ_id", happId); put("publisher_key_id", publisherKeyId)
+        put("download_url", downloadUrl); put("download_version_code", downloadVersionCode)
+        put("download_version_name", downloadVersionName); put("update_url", updateUrl)
+        put("notification_enabled", if (notificationEnabled) 1 else 0)
+        put("allow_cross_origin_network", if (allowCrossOriginNetwork) 1 else 0)
         put("created_at", createdAt); put("updated_at", updatedAt)
     }
 
@@ -480,12 +714,14 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
         put("release_id", releaseId); put("app_id", appId); put("tree_hash", treeHash); put("provenance", provenance)
         put("version_code", versionCode); put("version_name", versionName); put("source_revision", sourceRevision)
         put("entry_path", entryPath)
+        put("routing", routing); put("happ_id", happId); put("publisher_key_id", publisherKeyId)
         put("relative_root", relativeRoot); put("created_at", createdAt)
     }
 
     private fun Cursor.toInstance() = WebAppInstance(
         appId = string("app_id"), name = string("name"), source = HappSource.valueOf(string("source_kind")),
         runtimeMode = HappRuntimeMode.valueOf(string("runtime_mode")),
+        launchChannel = LaunchChannel.valueOf(string("launch_channel")),
         startUrl = string("start_url"), liveUrl = stringOrNull("live_url"),
         primaryOrigin = string("primary_origin"), webProfileName = string("web_profile_name"),
         trustRevision = long("trust_revision"), activeReleaseId = stringOrNull("active_release_id"),
@@ -493,7 +729,13 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
         sourceSpec = string("source_spec"), developerEnabled = int("developer_enabled") != 0,
         favorite = int("favorite") != 0,
         iconDataUrl = stringOrNull("icon_data_url"),
-        createdAt = long("created_at"), updatedAt = long("updated_at")
+        createdAt = long("created_at"), updatedAt = long("updated_at"),
+        happId = stringOrNull("happ_id"), publisherKeyId = stringOrNull("publisher_key_id"),
+        downloadUrl = stringOrNull("download_url"), downloadVersionCode = longOrNull("download_version_code"),
+        downloadVersionName = stringOrNull("download_version_name"), updateUrl = stringOrNull("update_url"),
+        notificationEnabled = int("notification_enabled") != 0,
+        allowCrossOriginNetwork = int("allow_cross_origin_network") != 0,
+        defaultIconDataUrl = stringOrNull("default_icon_data_url"),
     )
 
     private fun Cursor.toRelease() = CodeRelease(
@@ -501,7 +743,20 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
         provenance = string("provenance"), versionCode = longOrNull("version_code"),
         versionName = stringOrNull("version_name"), sourceRevision = stringOrNull("source_revision"),
         entryPath = string("entry_path"),
-        relativeRoot = string("relative_root"), createdAt = long("created_at")
+        relativeRoot = string("relative_root"), createdAt = long("created_at"),
+        routing = string("routing"), happId = stringOrNull("happ_id"), publisherKeyId = stringOrNull("publisher_key_id")
+    )
+
+    private fun DevWorkspace.values() = ContentValues().apply {
+        put("app_id", appId); put("base_release_id", baseReleaseId); put("generation", generation)
+        put("revision", revision); put("tree_hash", treeHash); put("dirty", if (dirty) 1 else 0)
+        put("created_at", createdAt); put("updated_at", updatedAt)
+    }
+
+    private fun Cursor.toDevWorkspace() = DevWorkspace(
+        appId = string("app_id"), baseReleaseId = string("base_release_id"), generation = string("generation"),
+        revision = long("revision"), treeHash = string("tree_hash"), dirty = int("dirty") != 0,
+        createdAt = long("created_at"), updatedAt = long("updated_at"),
     )
 
     private fun Cursor.string(name: String) = getString(getColumnIndexOrThrow(name))
@@ -525,6 +780,21 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
         """.trimIndent())
     }
 
+    private fun createDevWorkspaces(db: SQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS dev_workspaces (
+              app_id TEXT PRIMARY KEY REFERENCES instances(app_id) ON DELETE CASCADE,
+              base_release_id TEXT NOT NULL,
+              generation TEXT NOT NULL,
+              revision INTEGER NOT NULL,
+              tree_hash TEXT NOT NULL,
+              dirty INTEGER NOT NULL CHECK(dirty IN (0,1)),
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL
+            )
+        """.trimIndent())
+    }
+
     private fun localOrigin(appId: String) = "https://$appId.apps.hermit.invalid"
 
     private fun originOf(url: String): String {
@@ -535,5 +805,5 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
         return "${uri.scheme!!.lowercase()}://${uri.host!!.lowercase()}$port"
     }
 
-    companion object { private const val VERSION = 6 }
+    companion object { private const val VERSION = 9 }
 }

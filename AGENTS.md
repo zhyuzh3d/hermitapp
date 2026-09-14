@@ -1,55 +1,54 @@
-# Hermit 项目关键原则
+# HermitApp 开发总则
 
-本文件约束本项目后续设计、开发、示例、测试和文档维护。任何任务开始时，先用一句话确定用户本轮要求的对象、动作和明确验收点；只处理这个边界。仅在将要修改相关文件且存在覆盖风险时检查对应文件或局部工作区，并保留用户已有修改。不得把“先检查工作区”解释为全仓检查，也不得把代码交付要求套用到文档、回答或其他无需构建的任务。
+本文件约束 HermitApp 的设计、开发、测试、发布和文档维护。开始任务时，先用一句话明确本轮对象、动作与验收点；只处理这个边界。必须独立判断用户设想的真实性、正确性和可行性，发现问题时直接说明并给出明确方案，不能机械附和，也不能为了形式严谨而扩张任务。
 
-## 仓库身份与提交边界
+## 工作与仓库边界
 
-- `hermitapp/` 是独立 Git 仓库，唯一规范远程为 `git@github.com:zhyuzh3d/hermitapp.git`；同级 `hermitweb/` 是另一个独立仓库，唯一规范远程为 `git@github.com:zhyuzh3d/hermitweb.git`。共同父目录不是仓库，不得在父目录初始化 Git，也不得把两个目录合并提交、互相嵌套、改作 subtree 或 submodule。
-- 同一任务修改两个仓库时，必须分别检查、暂存、提交和推送。每次提交或推送前都必须执行 `git rev-parse --show-toplevel` 与 `git remote get-url origin`，确认顶层目录以 `/hermitapp` 结尾且 `origin` 精确等于 HermitApp 远程；不匹配时立即停止，不得猜测或自动改写远程。变更远程、迁移仓库或强制推送必须由用户明确授权。
+- 默认流程是“理解边界 → 最少必要分析 → 修改目标 → 直接相关的最小检查”。只读取本轮必需文件；保留用户已有改动，不清理、覆盖或顺手修改无关内容。
+- 只有用户明确要求部署，或本轮交付本身就是指定环境中的运行产物时，才安装 APK、发布网站、操作 Mutagen 或修改服务器状态。
+- `hermitapp/` 与同级 `hermitweb/` 是两个独立仓库。HermitApp 唯一规范远程是 `git@github.com:zhyuzh3d/hermitapp.git`，HermitWeb 唯一规范远程是 `git@github.com:zhyuzh3d/hermitweb.git`。共同父目录不得初始化 Git，两个仓库不得合并、嵌套、改作 subtree 或 submodule。
+- 跨仓任务必须分别检查、暂存、提交和推送。每次提交或推送 HermitApp 前，执行 `git rev-parse --show-toplevel` 与 `git remote get-url origin`，确认顶层目录以 `/hermitapp` 结尾且远程精确匹配；不匹配立即停止。修改远程、迁移仓库和强制推送必须另有明确授权。
+- 进入 HermitWeb 工作前先读取其 `AGENTS.md`。HermitWeb 的修改、验证和发布遵循其仓库规则，不能借 HermitApp 任务自动获得授权。
 
-## 统一术语（用户于 2026-09-12 明确确认）
+## 统一术语与领域不变量
 
-- “Hermit 项目”指同一 Codex 项目中的全部内容，包括 `hermitapp`、`hermitweb` 及以后新增的同项目目录；不能用它单指 APK。
-- `hermitapp`、`hermitapk`、APK 均指 `hermitapp` 目录对应的 Android 宿主应用。
-- `hermitweb`、Web 均指 `hermitweb` 目录，包括官网与 HermitUI。
-- HermitUI、UI、Shell、原生 UI、原生 happ、官方 app 均指 `hermitweb/public/shell/` 对应的官方管理 happ。它是 HermitApp 默认加载、并由 Native 授予宿主管理权限的唯一 happ；源码所有者在 HermitWeb，APK 内只保存生成快照。
-- happ、WebApp，以及上下文明确指页面应用时的 app，均指由 HermitApp 加载的页面应用。不要再用 Web App 指 Hermit 项目或 APK。
-- “本地 happ / 线上 happ”只描述来源：手机本地文件或目录导入的是本地来源；HTTP(S) URL、HTTPS 包和 GitHub 等 URL 来源的是线上来源。线上 happ 下载到手机后仍是线上来源。
-- “本地运行 / 线上实时运行”只描述当前执行方式：本地运行读取手机内已安装的不可变代码版本；线上实时运行直接加载页面 URL。来源与运行方式是两个独立维度，代码和接口分别使用 `source` 与 `runtimeMode`，禁止再用一个 `mode` 混合表达。
-- 本地 happ 只能本地运行。线上 happ 有安装清单和 ZIP 时默认下载后本地运行；没有本地代码时实时运行；只有同时具有页面 URL 和本地代码的线上 happ 才能在设置中切换两种运行方式。
+- “Hermit 项目”指包含 `hermitapp`、`hermitweb` 及后续同项目目录的整体；HermitApp、HermitAPK、APK 只指本仓库的 Android 宿主。
+- HermitWeb、Web 指同级 `hermitweb/` 仓库。HermitUI、UI、Shell、原生 UI、原生 happ、官方 app 均指 `hermitweb/public/shell/` 的官方管理 happ。它是默认加载且唯一具有宿主管理权限的 happ。
+- happ、WebApp，以及上下文明确指页面应用时的 app，均指 HermitApp 加载的页面应用；不得用 Web App 指整个 Hermit 项目或 APK。
+- “本地 happ / 线上 happ”只描述来源，代码和接口使用 `source`；“本地运行 / 线上实时运行”只描述当前执行方式，使用 `runtimeMode`。两者正交，禁止用一个 `mode` 混合表达。
+- 来源不决定能力：有 `activeReleaseId` 才能本地运行，有 `liveUrl` 才能线上实时运行，有 `updateUrl` 才能一键更新，有 `downloadUrl` 才能从原地址重装。URL 来源的 happ 下载到手机后仍是线上来源。
+- `happId` 是发布包声明的稳定身份，`instanceId` 是 Native 为本机实例生成的唯一身份。显示名、URL、代码版本和运行方式变化不得隐式改变实例、数据或普通授权。
+- Origin 不是可独立编辑的配置，必须按浏览器规则从完整 URL 推导为协议、主机和有效端口。路径不属于 Origin，不同子域名也不是同一 Origin。
+- 本地代码以不可变 release 管理。更新先生成新 release，再原子切换指针；动态配置和用户数据不得写入 release。来源、版本、摘要和用户设置必须各自表达事实，禁止互相猜测。
 
-## 默认快速迭代规则（用户于 2026-09-11 明确确认）
+## 产品与实现边界
 
-用户未明确要求复杂检查时，固定执行“理解本轮边界 → 做必要的最少分析 → 修改目标内容 → 与本次修改直接相关的最小技术检查”。只有用户明确要求部署，或本轮目标本身就是把运行产物交付到指定环境时，才执行快速部署。默认目标是尽快完成本轮任务，而不是自行证明整个项目的完整质量。
+- HermitApp 是 happ 容器与 Native Bridge，负责实例、安装、版本、数据、授权和系统能力。它不为 happ 执行后台 JavaScript，不允许 happ 创建常驻服务或定时执行任意代码；happ 对自己的代码、服务器、账号、令牌和业务内容负责。
+- 有 `liveUrl` 的本地 release 在该真实 URL 空间内运行：包内存在的 GET/HEAD 资源由本地只读 release 优先响应，缺失资源和动态请求交给网络。没有 `liveUrl` 的纯本地 happ 使用 Native 派生地址，只能访问包内资源和已授权 Bridge 能力。
+- 页面能力必须通过公开 Bridge 合同提供，并按 `instanceId` 隔离 Hermit 数据、文件、grant、通知和运行会话。Android 系统权限与 Hermit 的逐 happ 授权是两层独立决定；宿主已获系统权限也不能替页面授权。
+- 通知只提供系统通知转接、设备端单次/每日/每周/每月/每年计划，以及按规范轮询的服务器通知。通知需要逐 happ 用户授权；HermitApp 不因通知能力承担 happ 服务端内容或凭据设计责任。
+- WebView 站点数据遵循标准同源规则并使用共享资料空间；Hermit 自有记录继续按实例隔离。不同路径不能被描述成安全隔离。Bridge 优先使用可校验 Origin 和主 frame 的 WebMessage 能力，旧 provider 回退传统 `JavascriptInterface`，并如实显示其 iframe 风险。
+- 安装、解压、URL、文件路径、大小、数量、摘要和事务边界由 Native 校验。安全机制保护 HermitApp 自身及用户明确授予的数据，不为 happ 建立超出容器职责的内容审查或复杂信任体系。
 
-任务规模由用户本轮请求决定，不由项目历史规模、既有“产品级/商用级”目标或此前未完成事项决定。单文件和小范围任务不得自动升级为项目审计、架构复盘、发布验收或历史上下文重建。已有上下文足以执行时直接执行；只读取完成本轮修改必需的文件，不为形式完整重复搜索、重复解释或重复确认。
+## 页面与 HermitUI 规则
 
-验证范围必须严格等于当前修改范围。不得因为“顺便”“更严谨”“产品级”“商用级”或工具方便而扩大验证对象，也不得把历史未验收项、其他模块、设备矩阵或发布流程擅自并入当前任务。最小检查若发现范围外风险，只报告具体问题并停止扩展；没有用户新指示，不得自行追加检查或修复。
+- happ 默认并首选纯原生 HTML、JavaScript、CSS，源文件就是可运行页面；不假定 React、Vue、Vite、Webpack、转译器、包管理器或编译步骤。Hermit 不为第三方框架建立特殊分支，但接受其已经生成的最终静态产物。
+- 页面创作不要求 Node/npm。ZIP 只是归档传输格式，不是构建产物；官方示例、模板、教程与验收夹具遵守同一原则。公共图标通过 APK 内置 Font Awesome Free 使用，不依赖运行时 CDN。
+- HermitUI 的语义源码只在 `hermitweb/public/shell/` 编辑；`app/src/main/assets/store/` 是 APK 内置快照，不允许两边手工修改。需要更新快照时运行 `node tools/sync-shell-assets.mjs`，然后校验源文件、清单、版本和发布 ZIP 一致。
+- Host API、Bridge、权限和 Android 生命周期属于 HermitApp；HermitUI 只消费公开合同。普通 happ 永远不能获得 HermitUI 的宿主管理权限。
+- 新增页面合同、示例或依赖前，确认仅含 `index.html`、`app.js`、`style.css` 的目录仍可直接使用。以 `docs/webapp-authoring.md`、`docs/hermitapp-product-technical-design.md`、`api/` 与 `sdk/` 的当前合同为准。
+- 文档或旧计划与本总则、用户最新明确指示冲突时，以后两者为准；同步修正文档，不能在代码中继续扩大冲突语义。
 
-网页资源改动默认只做语法检查及与改动直接对应的少量契约检查；局部 Kotlin 改动默认只编译受影响变体，只有存在直接相关测试时才运行该测试；文档改动不触发构建。用户要求更新真机时，只生成必要安装包、覆盖安装并确认进程可启动，不附带视觉检查、全量回归或报告撰写。同一批代码没有变化时不得重复构建、校验、安装或启动。
+## 国内设备与运行环境
 
-除非用户明确提出“全面检查”“复杂检查”“完整验收”“视觉检查”等要求，禁止自行执行全量 instrumentation、全项目 lint、完整设备测试、反复 release 校验、截图分析、设备矩阵验证、长篇验证报告、发布打包或任何当前修改范围之外的功能验证。构建和安装属于交付动作，不构成扩大检查范围的理由。
+- 核心链路以国内销售、无 GMS 的 Android 手机及普通国内网络为基线。安装、启动、应用库、本地页面、扫码、数据、备份和局域网开发不得依赖 Google Play 服务、Firebase、海外 CDN、海外账号、在线许可校验或运行时下载模块。
+- 随 APK 打包的开源库必须锁定版本、校验构建输入并保留许可。GitHub 等海外来源只作为可选适配器，失败不得阻断本地目录/ZIP、局域网开发或通用 HTTP(S) 包。
+- Android 版本不能替代 WebView 能力检测。必须在实际 provider 上检测所需 WebKit 能力并按受支持路径降级；旧 provider 的页面可用性优先，但不得伪装不存在的安全边界。
 
-## 页面开发基线（用户于 2026-09-11 明确确认）
+## 验证、设备与发布
 
-所有 happ 均以纯原生 HTML + JavaScript + CSS 直接编写作为默认和首选模式，源文件就是可运行页面。不假定 React、Vue 或类似前端框架，也不依赖 Vite、Webpack、打包器、转译器、包管理器或编译步骤。HermitUI、官方示例、模板、教程、开发接口和验收夹具遵守同一原则。
-
-Hermit 不为第三方框架或构建工具增加专门支持：不生成框架工程、不运行 npm、不自动构建源码、不提供框架插件、专属路由/HMR/开发服务器适配，也不要求维护框架兼容矩阵。
-
-不拒绝第三方工具已经生成的最终静态 HTML/JS/CSS 产物。它们与手写页面走同一套入口、资源加载、授权、存储、安装和更新规则；能否运行取决于标准 WebView 能力及 Hermit 的公开边界。不得检测、禁止框架签名，也不得为了某个框架增加特殊分支。此原则是“原生优先、产物中立”，不是“禁止一切第三方资源”。
-
-WebApp 创作不需要 Node/npm。仓库中用于自动检查、固定版本图标资源同步的 Node 脚本，以及用于构建宿主 APK 的 Gradle/JDK/Android SDK，属于宿主维护工具，不得变成页面作者的前置依赖。TypeScript 的 .d.ts 仅提供可选编辑器提示，不要求作者编写或编译 TypeScript。
-
-开发主链是：编辑原生页面文件 → 导入文件夹/ZIP 或推送文件快照 → 刷新查看。ZIP 只作文件归档传输，不是前端编译；源目录不叫作必须生成的 dist。公共图标使用 APK 内置 Font Awesome Free 的 HTML 类名或原生 JS 接口，不要求页面单独 npm install 或访问 CDN。
-
-新增方案、依赖或示例时，先检查它是否仍能让一个只有 index.html、app.js、style.css 的目录直接使用。相关合同见 docs/webapp-authoring.md 和 docs/hermitapp-product-technical-design.md；旧稿与本原则冲突时，以本原则及用户最新指示为准。
-
-## 国内设备与网络基线（用户于 2026-09-11 明确确认）
-
-Hermit 的安装、启动、应用库、本地页面、二维码扫描、数据、备份和局域网开发不得依赖 Google Play 服务、Firebase、海外 CDN、海外账号、远程配置、在线许可校验或运行时下载模型/模块。核心链路以国内销售的无 GMS Android 手机和国内普通网络为设计、开发与真机验收基线。
-
-随 APK 打包并离线运行的开源库不等同于外网服务，但必须锁定版本、校验构建输入并纳入许可。构建环境应支持依赖缓存或国内镜像，不能把开发机器临时能访问海外仓库当作用户运行条件。
-
-本地目录/ZIP、局域网智能体开发和通用 HTTPS 包是首要安装与更新方式。GitHub 等海外来源只能是明确标记的可选适配器，失败不能阻断其他功能；Hermit 官方运行端点应部署在国内可访问域名并始终提供本地失败页。用户自行添加的页面或 API 属于用户选择，Hermit 不宣称其在国内可达。
-
-Android 大版本不是 WebView 兼容性的替代指标。Hermit 默认使用 WebView 共享资料空间，并遵守浏览器同源规则：协议、主机、端口都相同的页面可共享 Cookie/localStorage/IndexedDB，路径不构成隔离边界；不同子域名不是同一 Origin。Hermit 自身的记录、文件和能力授权继续按 appId 隔离。`MULTI_PROFILE` 只作为未来可选的“强隔离应用”能力，不再决定基本运行等级。必须在华为/荣耀、小米、OPPO、vivo 等实际 provider 上检测 `WEB_MESSAGE_LISTENER`、`DOCUMENT_START_SCRIPT`，按“共享安全消息模式 → 共享传统桥接模式”运行；旧 provider 的页面可用性优先，但传统桥接的 iframe 风险必须如实显示。
+- 验证范围严格等于修改范围。网页资源默认做语法和直接合同检查；局部 Kotlin 修改编译受影响变体并运行直接相关测试；文档修改不触发构建。同一批代码未变化时不得重复构建、安装或验收。
+- 除非用户明确要求全面检查，不执行全项目 lint、完整 instrumentation、设备矩阵、截图分析、视觉验收、反复 release 校验或长篇报告。发现范围外风险时只报告，不擅自扩修。
+- 用户要求真机更新时，生成必要 APK、使用覆盖安装，并确认版本和进程可启动；安装包生成不等于设备交付，`adb install` 成功也不等于功能或视觉验收。
+- 正式包名固定为 `io.github.zhyuzh3d.hermit`。发布签名、口令、token、`local.properties` 和私有路径配置不得进入 Git、日志或文档。发布产物使用 `hermit-v<version>-release.apk`，版本化产物发布后不得覆盖。
+- HermitUI 上线属于 HermitWeb 发布。发布前确认 Mutagen Alpha 精确指向 `hermitweb/public/`、同步模式为本机到服务器的单向副本且状态正常；上线后核对 `/shell/manifest.json` 的版本、包路径和 SHA-256，并确认公开 Shell 资源可访问。APK 内置 Shell 不得高于尚未发布且不可用的线上版本。

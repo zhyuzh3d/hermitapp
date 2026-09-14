@@ -6,12 +6,14 @@ import java.util.UUID
 
 enum class HappSource { ONLINE, LOCAL }
 enum class HappRuntimeMode { LOCAL, LIVE }
+enum class LaunchChannel { STABLE, DEV }
 
 data class WebAppInstance(
     val appId: String,
     val name: String,
     val source: HappSource,
     val runtimeMode: HappRuntimeMode,
+    val launchChannel: LaunchChannel,
     val startUrl: String,
     val liveUrl: String?,
     val primaryOrigin: String,
@@ -26,41 +28,88 @@ data class WebAppInstance(
     val iconDataUrl: String?,
     val createdAt: Long,
     val updatedAt: Long,
+    val happId: String? = null,
+    val publisherKeyId: String? = null,
+    val downloadUrl: String? = null,
+    val downloadVersionCode: Long? = null,
+    val downloadVersionName: String? = null,
+    val updateUrl: String? = null,
+    val notificationEnabled: Boolean = false,
+    val allowCrossOriginNetwork: Boolean = false,
+    val defaultIconDataUrl: String? = null,
 ) {
+    val instanceId: String get() = appId
+    val dataGenerationId: String get() = activeDataGeneration
+    val localUrl: String get() = "https://$appId.apps.hermit.invalid/"
+    val runtimeUrl: String get() = if (launchChannel == LaunchChannel.DEV) {
+        liveUrl ?: localUrl
+    } else if (runtimeMode == HappRuntimeMode.LIVE) {
+        requireNotNull(liveUrl)
+    } else liveUrl ?: localUrl
+    val runtimeOrigin: String get() = originOf(runtimeUrl)
+    val effectiveIconDataUrl: String? get() = iconDataUrl ?: defaultIconDataUrl
+
     fun toJson(): JSONObject = JSONObject()
         .put("appId", appId)
+        .put("instanceId", instanceId)
+        .put("happId", happId ?: JSONObject.NULL)
         .put("name", name)
         .put("source", source.name.lowercase())
         .put("runtimeMode", runtimeMode.name.lowercase())
+        .put("launchChannel", launchChannel.name.lowercase())
         // Compatibility for already published HermitUI versions. New code must
         // use source and runtimeMode instead of this overloaded field.
         .put("mode", if (runtimeMode == HappRuntimeMode.LIVE) "online" else "local")
-        .put("startUrl", startUrl)
+        .put("startUrl", runtimeUrl)
         .put("liveUrl", liveUrl ?: JSONObject.NULL)
-        .put("origin", primaryOrigin)
+        .put("origin", runtimeOrigin)
         .put("trustRevision", trustRevision)
         .put("activeReleaseId", activeReleaseId)
         .put("localAvailable", activeReleaseId != null)
-        .put("liveAvailable", source == HappSource.ONLINE && liveUrl != null)
+        .put("liveAvailable", liveUrl != null)
+        .put("downloadUrl", downloadUrl ?: JSONObject.NULL)
+        .put("downloadVersion", versionJson(downloadVersionCode, downloadVersionName))
+        .put("updateUrl", updateUrl ?: JSONObject.NULL)
+        .put("notificationEnabled", notificationEnabled)
+        .put("allowCrossOriginNetwork", allowCrossOriginNetwork)
         .put("sourceAdapter", sourceAdapter)
         .put("developerEnabled", developerEnabled)
         .put("favorite", favorite)
-        .put("iconDataUrl", iconDataUrl)
+        // iconDataUrl remains the effective presentation for older HermitUI
+        // versions. The explicit fields let current clients edit only the user
+        // override without losing the package-provided default.
+        .put("iconDataUrl", effectiveIconDataUrl)
+        .put("customIconDataUrl", iconDataUrl ?: JSONObject.NULL)
+        .put("defaultIconDataUrl", defaultIconDataUrl ?: JSONObject.NULL)
+        .put("hasCustomIcon", iconDataUrl != null)
         .put("createdAt", createdAt)
         .put("updatedAt", updatedAt)
 
     companion object {
+        fun originOf(url: String): String {
+            val uri = Uri.parse(url)
+            require(uri.scheme.equals("http", true) || uri.scheme.equals("https", true)) { "页面地址无效" }
+            require(!uri.host.isNullOrBlank()) { "页面地址无效" }
+            val defaultPort = (uri.scheme.equals("https", true) && uri.port == 443) ||
+                (uri.scheme.equals("http", true) && uri.port == 80)
+            val port = if (uri.port != -1 && !defaultPort) ":${uri.port}" else ""
+            return "${uri.scheme!!.lowercase()}://${uri.host!!.lowercase()}$port"
+        }
+
+        private fun versionJson(code: Long?, name: String?): Any = if (code == null && name == null) {
+            JSONObject.NULL
+        } else JSONObject().put("code", code ?: JSONObject.NULL).put("name", name ?: JSONObject.NULL)
+
         fun newOnlineLive(name: String, url: String, favorite: Boolean = false): WebAppInstance {
             val appId = UUID.randomUUID().toString()
             val now = System.currentTimeMillis()
-            val uri = Uri.parse(url)
-            val port = if (uri.port != -1 && !((uri.scheme.equals("https", true) && uri.port == 443) || (uri.scheme.equals("http", true) && uri.port == 80))) ":${uri.port}" else ""
-            val origin = "${uri.scheme!!.lowercase()}://${uri.host!!.lowercase()}$port"
+            val origin = originOf(url)
             return WebAppInstance(
                 appId = appId,
                 name = name,
                 source = HappSource.ONLINE,
                 runtimeMode = HappRuntimeMode.LIVE,
+                launchChannel = LaunchChannel.STABLE,
                 startUrl = url,
                 liveUrl = url,
                 primaryOrigin = origin,

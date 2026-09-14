@@ -2,6 +2,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import hashlib
 import os
 from pathlib import Path
 import tempfile
@@ -68,6 +69,7 @@ class AgentHelperTest(unittest.TestCase):
             file = Path(result["installed"])
             self.assertIn("Before every task", file.read_text())
             self.assertIn("/.well-known/hermit-agent", file.read_text())
+            self.assertIn("hermit_enter_dev_mode", file.read_text())
             helper.install_skill(temp)
             file.write_text("user-owned skill")
             with self.assertRaises(RuntimeError): helper.install_skill(temp)
@@ -98,6 +100,35 @@ class AgentHelperTest(unittest.TestCase):
             def tool(self, *_): return {"activeReleaseId": "newer-release"}
         with self.assertRaisesRegex(RuntimeError, "Another computer"):
             helper.deploy(OtherComputer(), "app-id", "/unused", "my-release")
+
+    def test_dev_sync_sends_only_changed_text_and_deletions(self):
+        class Device:
+            def __init__(self): self.calls = []
+            def tool(self, name, arguments):
+                self.calls.append((name, arguments))
+                if name == "hermit_list_dev_files":
+                    same = hashlib.sha256(b"same").hexdigest()
+                    return {"revision": 7, "treeHash": "old", "files": [
+                        {"path": "index.html", "sha256": same},
+                        {"path": "removed.css", "sha256": "0" * 64},
+                    ]}
+                if name == "hermit_sync_dev_changes":
+                    return {"revision": 8, "changedPaths": [item["path"] for item in arguments["files"]]}
+                raise AssertionError(name)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "index.html").write_text("same")
+            (root / "app.js").write_text("changed")
+            device = Device()
+            result = helper.dev_sync(device, "app-id", root)
+            self.assertEqual(8, result["revision"])
+            name, arguments = device.calls[-1]
+            self.assertEqual("hermit_sync_dev_changes", name)
+            self.assertEqual(7, arguments["expectedDevRevision"])
+            self.assertEqual([
+                {"path": "app.js", "content": "changed"},
+                {"path": "removed.css", "delete": True},
+            ], arguments["files"])
 
 
 if __name__ == "__main__": unittest.main()

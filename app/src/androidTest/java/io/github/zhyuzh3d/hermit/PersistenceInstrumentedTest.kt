@@ -6,6 +6,7 @@ import io.github.zhyuzh3d.hermit.data.FileStore
 import io.github.zhyuzh3d.hermit.data.RecordsStore
 import io.github.zhyuzh3d.hermit.backup.BackupCoordinator
 import io.github.zhyuzh3d.hermit.install.InstallCoordinator
+import io.github.zhyuzh3d.hermit.install.IdentityInstallChoice
 import io.github.zhyuzh3d.hermit.model.ErrorCodes
 import io.github.zhyuzh3d.hermit.model.HappRuntimeMode
 import io.github.zhyuzh3d.hermit.model.HappSource
@@ -42,9 +43,12 @@ import javax.net.ssl.TrustManager
 import javax.net.ssl.X509TrustManager
 import io.github.zhyuzh3d.hermit.capability.NativeHttpClient
 import io.github.zhyuzh3d.hermit.runtime.LocalContentGateway
+import io.github.zhyuzh3d.hermit.runtime.RuntimeNetworkPolicy
 import android.net.Uri
 import android.webkit.WebResourceRequest
 import io.github.zhyuzh3d.hermit.model.WebAppInstance
+import io.github.zhyuzh3d.hermit.notification.NotificationSpec
+import io.github.zhyuzh3d.hermit.notification.Recurrence
 
 @RunWith(AndroidJUnit4::class)
 class PersistenceInstrumentedTest {
@@ -95,7 +99,7 @@ class PersistenceInstrumentedTest {
         assertEquals("hello", store.readText(appId, generation, saved.getString("logicalFileId")).getString("text"))
     }
 
-    @Test fun onlineOriginChangeRotatesTrustAndWebProfileButPathChangeDoesNot() {
+    @Test fun onlineOriginChangeRotatesScopedTrustButKeepsSharedWebProfile() {
         val app = context.applicationContext as HermitApplication
         val instance = WebAppInstance.newOnlineLive("Online fixture", "https://example.test/one")
         app.registry.insertInstance(instance)
@@ -109,8 +113,7 @@ class PersistenceInstrumentedTest {
         app.registry.updateInstance(instance.appId, instance.name, "https://other.test/", null)
         val changed = app.registry.getInstance(instance.appId)!!
         assertEquals(instance.trustRevision + 1, changed.trustRevision)
-        assertFalse(instance.webProfileName == changed.webProfileName)
-        assertTrue(app.registry.pendingProfileCleanup().any { it.first == instance.webProfileName })
+        assertEquals(instance.webProfileName, changed.webProfileName)
 
         app.installer.recoverStorage()
         assertNotNull(app.registry.getInstance(instance.appId))
@@ -145,12 +148,11 @@ class PersistenceInstrumentedTest {
         val live = app.registry.setRuntimeMode(onlineLocal.appId, HappRuntimeMode.LIVE)
         assertEquals(HappRuntimeMode.LIVE, live.runtimeMode)
         assertEquals("https://example.test/app/", live.startUrl)
-        assertTrue(live.trustRevision > packaged.trustRevision)
+        assertEquals(packaged.trustRevision, live.trustRevision)
 
         val localAgain = app.registry.setRuntimeMode(onlineLocal.appId, HappRuntimeMode.LOCAL)
         assertEquals(HappRuntimeMode.LOCAL, localAgain.runtimeMode)
-        assertTrue(localAgain.startUrl.endsWith("/index.html"))
-        assertTrue(localAgain.startUrl.contains(".apps.hermit.invalid"))
+        assertEquals("https://example.test/app/", localAgain.startUrl)
     }
 
     @Test fun onlineUrlUsesSameOriginManifestAndDefaultsToLocalRuntime() = runBlocking {
@@ -239,7 +241,8 @@ class PersistenceInstrumentedTest {
         ))
         val updated = installer.installZip(ByteArrayInputStream(updatedBytes), null, result.appId,
             idempotencyKey = "install-idempotency-v2", expectedReleaseId = result.releaseId)
-        assertTrue(registry.getInstance(result.appId)!!.startUrl.endsWith("/start.html"))
+        assertEquals(registry.getInstance(result.appId)!!.localUrl, registry.getInstance(result.appId)!!.runtimeUrl)
+        assertEquals("start.html", registry.getRelease(updated.releaseId)!!.entryPath)
         val replayed = installer.installZip(ByteArrayInputStream(updatedBytes), null, result.appId,
             idempotencyKey = "install-idempotency-v2", expectedReleaseId = result.releaseId)
         assertEquals(updated.releaseId, replayed.releaseId)
@@ -247,11 +250,109 @@ class PersistenceInstrumentedTest {
             expectedReleaseId = updated.releaseId)
         assertEquals(result.releaseId, reactivated.releaseId)
         assertEquals(result.releaseId, registry.getInstance(result.appId)?.activeReleaseId)
-        assertTrue(registry.getInstance(result.appId)!!.startUrl.endsWith("/index.html"))
+        assertEquals("index.html", registry.getRelease(result.releaseId)!!.entryPath)
         val invalid = zipOf(mapOf("../escape.txt" to "bad"))
         val error = assertThrows(HermitException::class.java) { runBlocking { installer.installZip(ByteArrayInputStream(invalid), null) } }
         assertEquals(ErrorCodes.INVALID_ARGUMENT, error.code)
         assertTrue(!java.io.File(context.filesDir.parentFile, "escape.txt").exists())
+    }
+
+    @Test fun schemaTwoManifestCreatesStableIdentityAndUrls() = runBlocking {
+        val app = context.applicationContext as HermitApplication
+        val manifest = """{"schema":2,"happId":"com.example.notes","name":"Notes","version":{"code":2,"name":"2.0.0"},"entry":"web/index.html","routing":"history","icon":"assets/icon.png","liveUrl":"https://example.test/apps/notes/","updateUrl":"https://example.test/apps/notes/latest.json"}"""
+        val installed = app.installer.installZip(ByteArrayInputStream(zipBytesOf(mapOf(
+            "hermit.json" to manifest.toByteArray(),
+            "web/index.html" to "<h1>notes</h1>".toByteArray(),
+            "assets/icon.png" to pngIcon(96, 48, android.graphics.Color.BLUE),
+        ))), null)
+        createdApps += installed.appId
+        val instance = app.registry.getInstance(installed.appId)!!
+        val release = app.registry.getRelease(installed.releaseId)!!
+        assertEquals("com.example.notes", instance.happId)
+        assertEquals("https://example.test/apps/notes/", instance.liveUrl)
+        assertEquals("https://example.test/apps/notes/latest.json", instance.updateUrl)
+        assertEquals("history", release.routing)
+        assertEquals("web/index.html", release.entryPath)
+        assertEquals(null, instance.iconDataUrl)
+        val encodedIcon = instance.defaultIconDataUrl!!.removePrefix("data:image/png;base64,")
+        val iconBytes = android.util.Base64.decode(encodedIcon, android.util.Base64.NO_WRAP)
+        val iconBounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        android.graphics.BitmapFactory.decodeByteArray(iconBytes, 0, iconBytes.size, iconBounds)
+        assertEquals(192, iconBounds.outWidth)
+        assertEquals(192, iconBounds.outHeight)
+
+        val customIcon = "data:image/png;base64," + android.util.Base64.encodeToString(
+            pngIcon(192, 192, android.graphics.Color.RED), android.util.Base64.NO_WRAP,
+        )
+        app.registry.updatePresentation(installed.appId, instance.name, customIcon)
+        val updateManifest = manifest.replace("\"code\":2", "\"code\":3").replace("2.0.0", "3.0.0")
+        app.installer.installZip(ByteArrayInputStream(zipBytesOf(mapOf(
+            "hermit.json" to updateManifest.toByteArray(),
+            "web/index.html" to "<h1>updated</h1>".toByteArray(),
+            "assets/icon.png" to pngIcon(64, 96, android.graphics.Color.GREEN),
+        ))), null, installed.appId, expectedReleaseId = installed.releaseId)
+        assertEquals(customIcon, app.registry.getInstance(installed.appId)!!.iconDataUrl)
+        val afterUpdate = app.registry.getInstance(installed.appId)!!
+        assertTrue(afterUpdate.defaultIconDataUrl != null)
+        assertTrue(afterUpdate.defaultIconDataUrl != customIcon)
+        assertEquals(customIcon, afterUpdate.effectiveIconDataUrl)
+        app.registry.updatePresentation(installed.appId, instance.name, null)
+        val reset = app.registry.getInstance(installed.appId)!!
+        assertEquals(null, reset.iconDataUrl)
+        assertEquals(reset.defaultIconDataUrl, reset.effectiveIconDataUrl)
+    }
+
+    @Test fun repeatedHappIdNeedsAnExplicitInstanceChoice() = runBlocking {
+        val app = context.applicationContext as HermitApplication
+        fun archive(version: Int) = zipOf(mapOf(
+            "hermit.json" to """{"schema":2,"happId":"com.example.identity","name":"Identity","version":{"code":$version,"name":"$version.0.0"}}""",
+            "index.html" to "<h1>$version</h1>",
+        ))
+        val first = app.installer.installZip(ByteArrayInputStream(archive(1)), null)
+        createdApps += first.appId
+        var prompted = false
+        val second = app.installer.installZip(ByteArrayInputStream(archive(2)), null, identityChoice = { existing, incomingPublisher ->
+            prompted = true
+            assertEquals(first.appId, existing.appId)
+            assertEquals(null, incomingPublisher)
+            IdentityInstallChoice.UPDATE
+        })
+        assertTrue(prompted)
+        assertEquals(first.appId, second.appId)
+        assertEquals(2L, app.registry.getRelease(second.releaseId)!!.versionCode)
+    }
+
+    @Test fun notificationSchedulesAreIsolatedByInstance() {
+        val repository = (context.applicationContext as HermitApplication).notifications.repository
+        val first = UUID.randomUUID().toString()
+        val second = UUID.randomUUID().toString()
+        val spec = NotificationSpec("same-id", "提醒", "内容", JSONObject().put("value", 1))
+        val triggerAt = System.currentTimeMillis() + 60_000
+        try {
+            repository.upsert(first, spec, triggerAt, Recurrence.DAILY)
+            repository.upsert(second, spec, triggerAt, Recurrence.WEEKLY)
+            assertEquals(Recurrence.DAILY, repository.list(first).single().recurrence)
+            assertEquals(Recurrence.WEEKLY, repository.list(second).single().recurrence)
+            assertTrue(repository.cancel(first, spec.id))
+            assertTrue(repository.list(first).isEmpty())
+            assertEquals(1, repository.list(second).size)
+        } finally {
+            repository.deleteInstance(first)
+            repository.deleteInstance(second)
+        }
+    }
+
+    @Test fun removingLiveUrlFallsBackToLocalWithoutChangingGrant() = runBlocking {
+        val app = context.applicationContext as HermitApplication
+        val installed = app.installer.installZip(ByteArrayInputStream(zipOf(mapOf("index.html" to "ok"))), "URL fixture",
+            source = HappSource.ONLINE, liveUrl = "https://example.test/app/")
+        createdApps += installed.appId
+        val live = app.registry.setRuntimeMode(installed.appId, HappRuntimeMode.LIVE)
+        app.registry.putGrant(live.appId, live.trustRevision, "notifications", "allow")
+        val updated = app.registry.updateUrls(live.appId, null, null)
+        assertEquals(HappRuntimeMode.LOCAL, updated.runtimeMode)
+        assertTrue(updated.runtimeUrl.contains(".apps.hermit.invalid"))
+        assertEquals("allow", app.registry.getGrant(updated.appId, updated.trustRevision, "notifications"))
     }
 
     @Test fun treeHashEncodesFileBoundariesUnambiguously() = runBlocking {
@@ -325,7 +426,7 @@ class PersistenceInstrumentedTest {
         assertEquals(targetInstall.releaseId, targetAfter.activeReleaseId)
         assertFalse(targetBefore.activeDataGeneration == targetAfter.activeDataGeneration)
         assertEquals(targetBefore.trustRevision + 1, targetAfter.trustRevision)
-        assertEquals(null, app.registry.getGrant(targetAfter.appId, targetAfter.trustRevision, "speech"))
+        assertEquals("allow", app.registry.getGrant(targetAfter.appId, targetAfter.trustRevision, "speech"))
         assertEquals(null, records.get(targetAfter.appId, targetAfter.activeDataGeneration, "notes", "old"))
         assertEquals("kept", records.get(targetAfter.appId, targetAfter.activeDataGeneration, "notes", "one")!!.getJSONObject("value").getString("text"))
         assertEquals("attachment", fileStore.readText(targetAfter.appId, targetAfter.activeDataGeneration, originalFile.getString("logicalFileId")).getString("text"))
@@ -429,7 +530,8 @@ class PersistenceInstrumentedTest {
         java.io.File(root, "index.html").writeText("home")
         java.io.File(root, "asset.js").writeText("0123456789")
         try {
-            val gateway = LocalContentGateway.forRelease(context, "fixture.apps.hermit.invalid", root, false)
+            val gateway = LocalContentGateway.forRelease(context, "https://fixture.apps.hermit.invalid/", root, "index.html", false,
+                allowNetworkFallback = false)
             val full = gateway.intercept(request("https://fixture.apps.hermit.invalid/asset.js"))!!
             assertEquals(200, full.statusCode)
             assertEquals("text/javascript", full.mimeType)
@@ -438,24 +540,60 @@ class PersistenceInstrumentedTest {
             val partial = gateway.intercept(request("https://fixture.apps.hermit.invalid/asset.js", mapOf("Range" to "bytes=2-5")))!!
             assertEquals(206, partial.statusCode)
             assertEquals("2345", partial.data.reader().readText())
-            assertEquals(404, gateway.intercept(request("https://fixture.apps.hermit.invalid/missing.js"))!!.statusCode)
+            assertEquals(403, gateway.intercept(request("https://fixture.apps.hermit.invalid/missing.js"))!!.statusCode)
         } finally { root.deleteRecursively() }
     }
 
-    private fun request(value: String, headers: Map<String, String> = emptyMap()) = object : WebResourceRequest {
+    @Test fun localGatewayOverlaysMountedPathAndFallsThroughToNetwork() {
+        val root = java.io.File(context.cacheDir, "gateway-live-${UUID.randomUUID()}").apply { mkdirs() }
+        java.io.File(root, "index.html").writeText("home")
+        java.io.File(root, "app.js").writeText("local")
+        try {
+            val gateway = LocalContentGateway.forRelease(context, "https://example.test/apps/one/", root, "index.html", false,
+                allowNetworkFallback = true)
+            assertEquals("home", gateway.intercept(request("https://example.test/apps/one/"))!!.data.reader().readText())
+            assertEquals("local", gateway.intercept(request("https://example.test/apps/one/app.js"))!!.data.reader().readText())
+            assertEquals(null, gateway.intercept(request("https://example.test/api/info")))
+            assertEquals(null, gateway.intercept(request("https://example.test/apps/one/api", method = "POST")))
+        } finally { root.deleteRecursively() }
+    }
+
+    @Test fun networkPolicyAllowsPassiveAssetsButBlocksActiveCrossOriginRequests() {
+        val policy = RuntimeNetworkPolicy("https://example.test/app/", false)
+        assertEquals(null, policy.intercept(request("https://example.test/api")))
+        assertEquals(null, policy.intercept(request("https://cdn.test/image.png", mapOf("Sec-Fetch-Dest" to "image"))))
+        assertEquals(403, policy.intercept(request("https://api.other.test/data", mapOf("Sec-Fetch-Dest" to "empty")))!!.statusCode)
+    }
+
+    private fun request(value: String, headers: Map<String, String> = emptyMap(), method: String = "GET") = object : WebResourceRequest {
         override fun getUrl(): Uri = Uri.parse(value)
         override fun isForMainFrame() = true
         override fun isRedirect() = false
         override fun hasGesture() = false
-        override fun getMethod() = "GET"
+        override fun getMethod() = method
         override fun getRequestHeaders(): Map<String, String> = headers
     }
 
     private fun zipOf(files: Map<String, String>): ByteArray {
+        return zipBytesOf(files.mapValues { it.value.toByteArray() })
+    }
+
+    private fun zipBytesOf(files: Map<String, ByteArray>): ByteArray {
         val bytes = ByteArrayOutputStream()
         ZipOutputStream(bytes).use { zip -> files.forEach { (name, content) ->
-            zip.putNextEntry(ZipEntry(name)); zip.write(content.toByteArray()); zip.closeEntry()
+            zip.putNextEntry(ZipEntry(name)); zip.write(content); zip.closeEntry()
         } }
         return bytes.toByteArray()
+    }
+
+    private fun pngIcon(width: Int, height: Int, color: Int): ByteArray {
+        val bitmap = android.graphics.Bitmap.createBitmap(width, height, android.graphics.Bitmap.Config.ARGB_8888)
+        bitmap.eraseColor(color)
+        return try {
+            ByteArrayOutputStream().use { output ->
+                assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, output))
+                output.toByteArray()
+            }
+        } finally { bitmap.recycle() }
     }
 }

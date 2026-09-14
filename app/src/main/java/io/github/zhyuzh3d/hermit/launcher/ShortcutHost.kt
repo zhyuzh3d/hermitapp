@@ -4,7 +4,9 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
+import android.graphics.BitmapFactory
 import android.graphics.drawable.Icon
+import android.util.Base64
 import io.github.zhyuzh3d.hermit.MainActivity
 import io.github.zhyuzh3d.hermit.R
 import io.github.zhyuzh3d.hermit.model.WebAppInstance
@@ -17,7 +19,7 @@ class ShortcutHost(private val context: Context) {
         val shortcut = ShortcutInfo.Builder(context, shortcutId(instance.appId))
             .setShortLabel(instance.name.take(10))
             .setLongLabel(instance.name.take(25))
-            .setIcon(Icon.createWithResource(context, R.mipmap.ic_launcher))
+            .setIcon(iconFor(instance))
             .setIntent(Intent(context, MainActivity::class.java).apply {
                 action = Intent.ACTION_VIEW
                 putExtra(MainActivity.EXTRA_APP_ID, instance.appId)
@@ -29,7 +31,7 @@ class ShortcutHost(private val context: Context) {
     fun update(instance: WebAppInstance) {
         manager.updateShortcuts(listOf(ShortcutInfo.Builder(context, shortcutId(instance.appId))
             .setShortLabel(instance.name.take(10)).setLongLabel(instance.name.take(25))
-            .setIcon(Icon.createWithResource(context, R.mipmap.ic_launcher))
+            .setIcon(iconFor(instance))
             .setIntent(Intent(context, MainActivity::class.java).apply {
                 action = Intent.ACTION_VIEW
                 putExtra(MainActivity.EXTRA_APP_ID, instance.appId)
@@ -41,4 +43,12 @@ class ShortcutHost(private val context: Context) {
     }
 
     private fun shortcutId(appId: String) = "webapp-$appId"
+
+    private fun iconFor(instance: WebAppInstance): Icon {
+        val prefix = "data:image/png;base64,"
+        val encoded = instance.effectiveIconDataUrl?.takeIf { it.startsWith(prefix) }?.removePrefix(prefix)
+        val bitmap = encoded?.let { runCatching { Base64.decode(it, Base64.NO_WRAP) }.getOrNull() }
+            ?.let { bytes -> BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }
+        return bitmap?.let(Icon::createWithBitmap) ?: Icon.createWithResource(context, R.mipmap.ic_launcher)
+    }
 }

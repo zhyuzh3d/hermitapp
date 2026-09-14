@@ -33,6 +33,29 @@ class ActivitySmokeTest {
         }
     }
 
+    @Test fun publicBridgeReportsRealSystemCapabilityDetails() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val app = context.applicationContext as HermitApplication
+        val installed = app.installer.installZip(ByteArrayInputStream(appZip("Capabilities", 1)), "Capability fixture")
+        try {
+            ActivityScenario.launch<MainActivity>(Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_APP_ID, installed.appId)).use { scenario ->
+                assertTrue(waitUntilReady(scenario))
+                val result = evaluateAsync(scenario, "Promise.all([hermit.runtime.info(),hermit.runtime.capabilities(),hermit.speech.availability(),hermit.tts.availability(),hermit.sensors.availability(),hermit.wifi.status(),hermit.bluetooth.status(),hermit.infrared.status(),hermit.battery.status(),hermit.network.status(),hermit.camera.torchStatus()]).then(x=>({minor:x[0].apiMinor,names:x[1].capabilities.map(c=>c.name),speech:typeof x[2].streamingAvailable==='boolean'&&!('services'in x[2])&&!('providerManagedByUser'in x[2]),tts:typeof x[3].operational==='boolean'&&!('services'in x[3])&&!('engines'in x[3])&&!('providerManagedByUser'in x[3]),sensors:Array.isArray(x[4].sensors),wifi:typeof x[5].supported==='boolean',bluetooth:typeof x[6].supported==='boolean',infrared:typeof x[7].supported==='boolean',battery:typeof x[8].charging==='boolean',network:Array.isArray(x[9].transports),torch:typeof x[10].supported==='boolean'}))")
+                assertTrue(result?.contains("\"minor\":10") == true)
+                for (name in listOf("sensors", "wifi", "bluetooth", "infrared", "battery", "system")) {
+                    assertTrue("Missing $name in $result", result?.contains("\"$name\"") == true)
+                }
+                for (field in listOf("speech", "tts", "sensors", "wifi", "bluetooth", "infrared", "battery", "network", "torch")) {
+                    assertTrue("Capability probe failed: $field in $result", result?.contains("\"$field\":true") == true)
+                }
+            }
+        } finally {
+            app.registry.deleteInstance(installed.appId)
+            app.installer.deleteAppFiles(installed.appId)
+            app.registry.finishDelete(installed.appId)
+        }
+    }
+
     @Test fun storeLoadsInjectedBridgeAndCompletesHandshake() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         ActivityScenario.launch<MainActivity>(Intent(context, MainActivity::class.java)).use { scenario ->
@@ -159,13 +182,13 @@ class ActivitySmokeTest {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         ActivityScenario.launch<MainActivity>(Intent(context, MainActivity::class.java)).use { scenario ->
             assertTrue(waitUntilReady(scenario))
-            val font = evaluateAsync(scenario, "hermit.icons.load().then(()=>document.fonts.load('900 16px \\\"Font Awesome 7 Free\\\"')).then(fonts=>({loaded:fonts.length>0,family:getComputedStyle(document.querySelector('.fa-plus')).fontFamily}))")
+            val font = evaluateAsync(scenario, "hermit.icons.load().then(()=>document.fonts.load('900 16px \\\"Font Awesome 7 Free\\\"')).then(fonts=>({loaded:fonts.length>0,family:getComputedStyle(document.querySelector('#addFolder .fa-folder-open')).fontFamily}))")
             assertTrue("Font result: $font", font?.contains("\"loaded\":true") == true)
             assertTrue(font?.contains("Font Awesome 7 Free") == true)
             assertFalse(evaluate(scenario, "getComputedStyle(document.querySelector('.fa-plus'),'::before').content") in setOf("none", "normal", "\"\""))
-            evaluate(scenario, "document.querySelector('#addButton').click(); 'opened'")
+            evaluate(scenario, "document.querySelector('#addUrl').click(); 'opened'")
             assertEquals("true", evaluate(scenario, "String(document.querySelector('#shell').inert && !document.querySelector('#addPanel').classList.contains('hidden'))"))
-            scenario.onActivity { it.onBackPressedDispatcher.onBackPressed() }
+            evaluate(scenario, "String(window.hermitStoreBack())")
             repeat(10) { if (evaluate(scenario, "String(document.querySelector('#addPanel').classList.contains('hidden'))") != "true") android.os.SystemClock.sleep(100) }
             assertEquals("false", evaluate(scenario, "String(document.querySelector('#shell').inert)"))
             evaluate(scenario, "document.querySelector('[data-view=icons]').click(); 'icons'")
@@ -217,20 +240,17 @@ class ActivitySmokeTest {
         ActivityScenario.launch<MainActivity>(Intent(context, MainActivity::class.java)).use { scenario ->
             assertTrue(waitUntilReady(scenario))
             evaluate(scenario, "document.querySelector('[data-view=development]').click();'opened'")
-            for (i in 0 until 20) {
-                if (evaluate(scenario, "String(!document.querySelector('#developmentView').classList.contains('hidden'))") == "true") break
+            for (i in 0 until 30) {
+                if (evaluate(scenario, "String(/^[0-9]{6}$/.test(document.querySelector('#agentPassword').value))") == "true") break
                 android.os.SystemClock.sleep(100)
             }
-            assertEquals("true", evaluate(scenario, "String(/^[0-9]{6}$/.test(document.querySelector('#agentPassword').textContent))"))
+            assertEquals("true", evaluate(scenario, "String(/^[0-9]{6}$/.test(document.querySelector('#agentPassword').value))"))
             val previous = app.agentServer.passwordForUi()
-            evaluate(scenario, "document.querySelector('#resetAgentPassword').click();'confirm'")
-            assertEquals("false", evaluate(scenario, "String(document.querySelector('#confirmPanel').classList.contains('hidden'))"))
-            evaluate(scenario, "document.querySelector('#cancelConfirm').click();'cancel'")
-            assertTrue(previous == app.agentServer.passwordForUi())
-            evaluate(scenario, "document.querySelector('#resetAgentPassword').click();document.querySelector('#acceptConfirm').click();'rotate'")
+            val replacement = if (previous == "654321") "123456" else "654321"
+            evaluate(scenario, "const p=document.querySelector('#agentPassword');p.value='$replacement';p.dispatchEvent(new Event('input'));document.querySelector('#saveAgentPassword').click();'rotate'")
             for (i in 0 until 20) { if (previous != app.agentServer.passwordForUi()) break; android.os.SystemClock.sleep(100) }
-            assertTrue(previous != app.agentServer.passwordForUi())
-            assertEquals("true", evaluateAsync(scenario, "hermit.host.agent.status().then(s=>s.password===document.querySelector('#agentPassword').textContent)"))
+            assertEquals(replacement, app.agentServer.passwordForUi())
+            assertEquals("true", evaluateAsync(scenario, "hermit.host.agent.status().then(s=>s.password===document.querySelector('#agentPassword').value)"))
         }
     }
 
@@ -257,8 +277,8 @@ class ActivitySmokeTest {
                 assertTrue(geometry?.contains("\"count\":5") == true)
                 assertTrue(geometry?.contains("\"offsets\":[0,0,0,0,0]") == true)
                 assertEquals("\"10knet·zhyuzh3d\"", evaluateAsync(scenario, "hermit.host.about.info({}).then(x=>x.author)"))
-                evaluate(scenario, "window.hermitSupportUnavailable('offline test');'fallback'")
-                assertEquals("offline test", evaluate(scenario, "document.querySelector('#supportError').textContent"))
+                evaluate(scenario, "window.hermitShellUnavailable('offline test');'fallback'")
+                assertEquals("offline test", evaluate(scenario, "document.querySelector('#noticeText').textContent"))
             }
         } finally {
             app.registry.deleteInstance(instance.appId)

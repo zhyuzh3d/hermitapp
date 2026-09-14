@@ -38,6 +38,12 @@ class OfficialShellManager(private val context: Context) {
         return selected
     }
 
+    /** APK replacement restores the embedded control plane without touching ordinary happs or their data. */
+    fun resetToEmbedded() {
+        downloadedRoot.deleteRecursively()
+        setMode(Mode.LOCAL.value)
+    }
+
     suspend fun activateOnline(): Mode = withContext(Dispatchers.IO) {
         val remoteVersion = fetchManifest().optLong("version", -1)
         val embeddedVersion = readEmbeddedMetadata()?.optLong("version", -1) ?: -1

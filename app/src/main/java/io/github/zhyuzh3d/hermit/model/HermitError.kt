@@ -20,4 +20,6 @@ object ErrorCodes {
     const val STORAGE = "E_STORAGE"
     const val NETWORK = "E_NETWORK"
     const val INTERNAL = "E_INTERNAL"
+    const val DEV_MODE_REQUIRED = "E_DEV_MODE_REQUIRED"
+    const val PROTECTED_TARGET = "E_PROTECTED_TARGET"
 }

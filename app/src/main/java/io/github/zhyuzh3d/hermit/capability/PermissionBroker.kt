@@ -20,28 +20,14 @@ class PermissionBroker(
     private val systemRequest: suspend (Array<String>) -> Map<String, Boolean>,
 ) {
     private val mutex = Mutex()
-    private val sessionAllows = HashSet<String>()
-
     suspend fun require(session: RuntimeSession, capability: String, rationale: String, permissions: List<String> = emptyList(), scope: String = "") {
         if (!session.alive) throw HermitException(ErrorCodes.SESSION_EXPIRED, "页面会话已经结束")
         val app = session.instance ?: throw HermitException(ErrorCodes.ORIGIN_DENIED, "应用库无需页面能力授权")
-        val key = "${session.sessionId}|$capability|$scope"
         mutex.withLock {
             when (registry.getGrant(app.appId, app.trustRevision, capability, scope)) {
                 "deny" -> throw HermitException(ErrorCodes.CAPABILITY_DENIED, "此页面应用的能力已被拒绝")
                 "allow" -> Unit
-                null -> if (!sessionAllows.contains(key)) {
-                    val decision = ask(app.name, capability, rationale)
-                    if (!session.alive) throw HermitException(ErrorCodes.SESSION_EXPIRED, "授权期间页面会话已经结束")
-                    when (decision) {
-                        Decision.ONCE -> sessionAllows.add(key)
-                        Decision.ALWAYS -> registry.putGrant(app.appId, app.trustRevision, capability, "allow", scope)
-                        Decision.DENY -> {
-                            registry.putGrant(app.appId, app.trustRevision, capability, "deny", scope)
-                            throw HermitException(ErrorCodes.CAPABILITY_DENIED, "用户拒绝了此能力")
-                        }
-                    }
-                }
+                null -> Unit
             }
             val missing = permissions.filter {
                 val granted = ContextCompat.checkSelfPermission(activity, it) == PackageManager.PERMISSION_GRANTED
@@ -55,19 +41,21 @@ class PermissionBroker(
                 if (missing.any { result[it] != true }) {
                     throw HermitException(ErrorCodes.OS_PERMISSION_DENIED, "Android 系统权限未授予")
                 }
+                registry.putGrant(app.appId, app.trustRevision, capability, "allow", scope)
+            } else if (registry.getGrant(app.appId, app.trustRevision, capability, scope) == null) {
+                val allowed = ask(app.name, capability, rationale)
+                if (!session.alive) throw HermitException(ErrorCodes.SESSION_EXPIRED, "授权期间页面会话已经结束")
+                registry.putGrant(app.appId, app.trustRevision, capability, if (allowed) "allow" else "deny", scope)
+                if (!allowed) throw HermitException(ErrorCodes.CAPABILITY_DENIED, "用户拒绝了此能力")
             }
         }
     }
 
-    fun clearSession(sessionId: String) {
-        sessionAllows.removeAll { it.startsWith("$sessionId|") }
-    }
+    fun clearSession(sessionId: String) = Unit
 
     fun status(session: RuntimeSession, capability: String, permissions: List<String>, scope: String = ""): Map<String, Any?> {
         val app = session.instance ?: return mapOf("implemented" to true, "grant" to "host", "system" to "not-required", "usable" to true)
-        val key = "${session.sessionId}|$capability|$scope"
-        val grant = registry.getGrant(app.appId, app.trustRevision, capability, scope)
-            ?: if (sessionAllows.contains(key)) "once" else "ask"
+        val grant = registry.getGrant(app.appId, app.trustRevision, capability, scope) ?: "ask"
         val missing = permissions.filter {
             val granted = ContextCompat.checkSelfPermission(activity, it) == PackageManager.PERMISSION_GRANTED
             registry.observeSystemPermission(it, granted)
@@ -78,25 +66,22 @@ class PermissionBroker(
             "grant" to grant,
             "system" to if (missing.isEmpty()) "granted" else "missing",
             "missingPermissions" to missing,
-            "usable" to ((grant == "allow" || grant == "once") && missing.isEmpty()),
+            "usable" to (grant == "allow" && missing.isEmpty()),
         )
     }
 
-    private suspend fun ask(appName: String, capability: String, rationale: String): Decision =
+    private suspend fun ask(appName: String, capability: String, rationale: String): Boolean =
         suspendCancellableCoroutine { continuation ->
             val dialog = AlertDialog.Builder(activity)
                 .setTitle("允许“$appName”使用此能力？")
                 .setMessage("$rationale\n\n能力：$capability")
-                .setNegativeButton("拒绝") { _, _ -> if (continuation.isActive) continuation.resume(Decision.DENY) }
-                .setNeutralButton("仅本次") { _, _ -> if (continuation.isActive) continuation.resume(Decision.ONCE) }
-                .setPositiveButton("始终允许") { _, _ -> if (continuation.isActive) continuation.resume(Decision.ALWAYS) }
-                .setOnCancelListener { if (continuation.isActive) continuation.resume(Decision.DENY) }
+                .setNegativeButton("拒绝") { _, _ -> if (continuation.isActive) continuation.resume(false) }
+                .setPositiveButton("允许") { _, _ -> if (continuation.isActive) continuation.resume(true) }
+                .setOnCancelListener { if (continuation.isActive) continuation.resume(false) }
                 .create()
             continuation.invokeOnCancellation { dialog.dismiss() }
             dialog.show()
         }
-
-    enum class Decision { ONCE, ALWAYS, DENY }
 
     companion object {
         val SPEECH_PERMISSIONS = listOf(Manifest.permission.RECORD_AUDIO)

@@ -14,6 +14,13 @@
   let sequence = 0;
   const MAX_PENDING = 16;
 
+  function requestTimeout(method, params) {
+    if (!/^network\.(?:request|openStream|readStream|openSocket|readSocket)$/.test(method)) return 60000;
+    const requested = Number(params && params.timeoutMs);
+    if (!Number.isFinite(requested)) return /^network\.read(?:Stream|Socket)$/.test(method) ? 195000 : 60000;
+    return Math.min(195000, Math.max(60000, requested + 15000));
+  }
+
   function send(message) { transport.postMessage(JSON.stringify(message)); }
   function request(method, params) {
     if (pending.size >= MAX_PENDING) {
@@ -29,7 +36,7 @@
         const error = new Error("Hermit request timed out");
         error.code = "E_TIMEOUT";
         reject(error);
-      }, 60000);
+      }, requestTimeout(method, params));
       const item = { id, resolve, reject, timeout, message: {
         kind: "request", v: 1, id, documentId, sessionId, documentEpoch,
         method, params: params || {}
@@ -122,11 +129,18 @@
     tts: namespace("tts"),
     speech: namespace("speech"),
     location: namespace("location"),
+    sensors: namespace("sensors"),
     camera: namespace("camera"),
     share: namespace("share"),
     clipboard: namespace("clipboard"),
     haptics: namespace("haptics"),
     network: namespace("network"),
+    wifi: namespace("wifi"),
+    bluetooth: namespace("bluetooth"),
+    infrared: namespace("infrared"),
+    battery: namespace("battery"),
+    system: namespace("system"),
+    notifications: namespace("notifications"),
     host: {
       apps: namespace("host.apps"),
       deploy: namespace("host.deploy"),
@@ -138,7 +152,8 @@
       permissions: namespace("host.permissions"),
       diagnostics: namespace("host.diagnostics"),
       shell: namespace("host.shell"),
-      licenses: namespace("host.licenses")
+      licenses: namespace("host.licenses"),
+      voice: namespace("host.voice")
     },
     on(name, listener) {
       if (!listeners.has(name)) listeners.set(name, new Set());

@@ -7,8 +7,10 @@ import io.github.zhyuzh3d.hermit.model.CodeRelease
 import io.github.zhyuzh3d.hermit.model.ErrorCodes
 import io.github.zhyuzh3d.hermit.model.HappRuntimeMode
 import io.github.zhyuzh3d.hermit.model.HappSource
+import io.github.zhyuzh3d.hermit.model.LaunchChannel
 import io.github.zhyuzh3d.hermit.model.HermitException
 import io.github.zhyuzh3d.hermit.model.WebAppInstance
+import io.github.zhyuzh3d.hermit.launcher.ShortcutHost
 import io.github.zhyuzh3d.hermit.registry.AppRegistry
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -36,12 +38,15 @@ data class InstallResult(
     val treeHash: String,
 )
 
+enum class IdentityInstallChoice { UPDATE, NEW_INSTANCE, CANCEL }
+
 class InstallCoordinator(
     private val context: Context,
     private val registry: AppRegistry,
 ) {
     private val locks = ConcurrentHashMap<String, Mutex>()
     private val releaseLeases = ConcurrentHashMap<String, AtomicInteger>()
+    private val shortcuts = ShortcutHost(context)
     private val appsRoot get() = File(context.filesDir, "instances")
 
     suspend fun installZip(
@@ -56,11 +61,14 @@ class InstallCoordinator(
         fallbackName: String? = null,
         source: HappSource = HappSource.LOCAL,
         liveUrl: String? = null,
+        downloadUrl: String? = null,
+        identityChoice: suspend (WebAppInstance, String?) -> IdentityInstallChoice = { _, _ -> IdentityInstallChoice.NEW_INSTANCE },
         commitGuard: (() -> Unit) -> Unit = { it() },
     ): InstallResult = withContext(Dispatchers.IO) {
-        val appId = existingAppId ?: UUID.randomUUID().toString()
+        val provisionalAppId = existingAppId ?: UUID.randomUUID().toString()
+        var appId = provisionalAppId
         locks.computeIfAbsent(appId) { Mutex() }.withLock {
-            val instance = existingAppId?.let {
+            var instance = existingAppId?.let {
                 registry.getInstance(it) ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "页面应用不存在")
             }
             val incomingDir = File(appsRoot, "$appId/incoming").apply { mkdirs() }
@@ -115,8 +123,10 @@ class InstallCoordinator(
             val staging = File(appsRoot, "$appId/staging/$operationId")
             var finalDir: File? = null
             var registryCommitted = false
+            var archivedInstance: WebAppInstance? = null
+            var replacePackageIdentity = false
             try {
-                val currentInstance = existingAppId?.let {
+                var currentInstance = existingAppId?.let {
                     registry.getInstance(it) ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "页面应用不存在")
                 }
                 if (expectedReleaseId != null && currentInstance?.activeReleaseId != expectedReleaseId) {
@@ -127,11 +137,60 @@ class InstallCoordinator(
                 val webRoot = File(staging, "web").apply { mkdirs() }
                 registry.updateOperation(operationId, "validating")
                 extractValidated(zipFile, webRoot)
-                val metadata = readManifest(webRoot)
-                val entry = metadata?.optString("entry", "index.html")?.ifBlank { "index.html" } ?: "index.html"
+                val metadata = PackageManifestReader.read(webRoot)
+                val entry = metadata?.entry ?: "index.html"
                 validateRelativePath(entry)
                 check(File(webRoot, entry).isFile) { "入口文件不存在：$entry" }
                 val treeHash = treeHash(webRoot)
+                val publisher = PackageManifestReader.verifyPublisher(webRoot, treeHash)
+                val packageIconDataUrl = metadata?.icon?.let { icon ->
+                    val iconFile = File(webRoot, icon)
+                    if (!iconFile.isFile || iconFile.length() > MAX_ICON_BYTES || icon.substringAfterLast('.', "").lowercase() !in IMAGE_EXTENSIONS) {
+                        throw HermitException(ErrorCodes.INVALID_ARGUMENT, "hermit.json 的 icon 文件无效")
+                    }
+                    IconProcessor.centeredPngDataUrl { iconFile.inputStream() }
+                }
+                if (currentInstance != null) {
+                    if (currentInstance.happId != null && metadata?.happId != currentInstance.happId) {
+                        throw HermitException(ErrorCodes.CONFLICT, "更新包的 happId 与当前实例不一致")
+                    }
+                    if (currentInstance.publisherKeyId != null && publisher?.keyId != currentInstance.publisherKeyId) {
+                        throw HermitException(ErrorCodes.CONFLICT, "更新包的发布者签名与当前实例不一致")
+                    }
+                }
+                if (existingAppId == null && metadata?.happId != null) {
+                    val ready = if (publisher != null) registry.findReady(metadata.happId, publisher.keyId)
+                        ?: registry.findAnyReady(metadata.happId) else registry.findAnyReady(metadata.happId)
+                    if (ready != null) {
+                        when (identityChoice(ready, publisher?.keyId)) {
+                            IdentityInstallChoice.UPDATE -> {
+                                appId = ready.appId
+                                instance = ready
+                                currentInstance = ready
+                                replacePackageIdentity = ready.publisherKeyId != publisher?.keyId
+                            }
+                            IdentityInstallChoice.NEW_INSTANCE -> Unit
+                            IdentityInstallChoice.CANCEL -> throw HermitException(ErrorCodes.CANCELLED, "用户取消安装")
+                        }
+                    } else {
+                        val verifiedArchive = publisher?.let { registry.findArchived(metadata.happId, it.keyId) }
+                        if (verifiedArchive != null) {
+                            archivedInstance = verifiedArchive
+                            appId = verifiedArchive.appId
+                        } else {
+                            val archived = registry.findAnyArchived(metadata.happId)
+                            if (archived != null) when (identityChoice(archived, publisher?.keyId)) {
+                                IdentityInstallChoice.UPDATE -> {
+                                    archivedInstance = archived
+                                    appId = archived.appId
+                                    replacePackageIdentity = archived.publisherKeyId != publisher?.keyId
+                                }
+                                IdentityInstallChoice.NEW_INSTANCE -> Unit
+                                IdentityInstallChoice.CANCEL -> throw HermitException(ErrorCodes.CANCELLED, "用户取消安装")
+                            }
+                        }
+                    }
+                }
                 if (instance != null) {
                     val duplicate = registry.findReleaseByTreeHash(appId, treeHash)
                     if (duplicate != null) {
@@ -139,6 +198,9 @@ class InstallCoordinator(
                         if (duplicate.releaseId != currentInstance?.activeReleaseId) {
                             commitGuard { registry.activateRelease(appId, duplicate.releaseId, currentInstance?.activeReleaseId) }
                         }
+                        if (replacePackageIdentity) registry.updatePackageIdentity(appId, metadata?.happId, publisher?.keyId)
+                        registry.updateDefaultIcon(appId, packageIconDataUrl)
+                        refreshShortcut(appId)
                         registry.updateOperation(operationId, "succeeded", duplicate.releaseId)
                         pruneReleases(appId, duplicate.releaseId)
                         return@withLock InstallResult(operationId, appId, duplicate.releaseId, duplicate.treeHash)
@@ -156,26 +218,40 @@ class InstallCoordinator(
                     appId = appId,
                     treeHash = treeHash,
                     provenance = provenance,
-                    versionCode = metadata?.optJSONObject("version")?.optLong("code")?.takeIf { it >= 0 },
-                    versionName = metadata?.optJSONObject("version")?.optString("name")?.takeIf { it.isNotBlank() },
+                    versionCode = metadata?.versionCode,
+                    versionName = metadata?.versionName,
                     sourceRevision = sourceRevision,
                     entryPath = entry,
                     relativeRoot = "instances/$appId/releases/$releaseId/web",
                     createdAt = now,
+                    routing = metadata?.routing ?: "hash",
+                    happId = metadata?.happId,
+                    publisherKeyId = publisher?.keyId,
                 )
                 registry.updateOperation(operationId, "committing")
-                if (instance == null) {
+                if (archivedInstance != null) {
+                    commitGuard { registry.restoreArchivedWithRelease(appId, release) }
+                    registryCommitted = true
+                    if (replacePackageIdentity) registry.updatePackageIdentity(appId, metadata?.happId, publisher?.keyId)
+                } else if (instance == null) {
                     val name = suggestedName?.trim()?.takeIf { it.isNotBlank() }
-                        ?: metadata?.optString("name")?.takeIf { it.isNotBlank() }
+                        ?: metadata?.name?.takeIf { it.isNotBlank() }
                         ?: fallbackName?.takeIf { it.isNotBlank() } ?: "本地应用"
-                    val origin = "https://$appId.apps.hermit.invalid"
+                    val initialLiveUrl = liveUrl ?: metadata?.liveUrl
+                    val startUrl = initialLiveUrl ?: "https://$appId.apps.hermit.invalid/"
+                    val origin = originOf(startUrl)
                     val app = WebAppInstance(
                         appId = appId, name = name.take(80), source = source, runtimeMode = HappRuntimeMode.LOCAL,
-                        startUrl = "$origin/$entry", liveUrl = liveUrl, primaryOrigin = origin,
+                        launchChannel = LaunchChannel.STABLE,
+                        startUrl = startUrl, liveUrl = initialLiveUrl, primaryOrigin = origin,
                         webProfileName = "app-${appId.replace("-", "")}", trustRevision = 1,
                         activeReleaseId = null, activeDataGeneration = UUID.randomUUID().toString(),
                         sourceAdapter = provenance, sourceSpec = JSONObject().put("kind", provenance).toString(),
                         developerEnabled = false, favorite = false, iconDataUrl = null, createdAt = now, updatedAt = now,
+                        happId = metadata?.happId, publisherKeyId = publisher?.keyId,
+                        downloadUrl = downloadUrl, downloadVersionCode = metadata?.versionCode?.takeIf { downloadUrl != null },
+                        downloadVersionName = metadata?.versionName?.takeIf { downloadUrl != null }, updateUrl = metadata?.updateUrl,
+                        defaultIconDataUrl = packageIconDataUrl,
                     )
                     commitGuard { registry.insertLocalWithRelease(app, release) }
                     registryCommitted = true
@@ -183,13 +259,19 @@ class InstallCoordinator(
                     try {
                         commitGuard { registry.commitRelease(release, currentInstance?.activeReleaseId) }
                         registryCommitted = true
+                        if (replacePackageIdentity) registry.updatePackageIdentity(appId, metadata?.happId, publisher?.keyId)
                     } catch (e: Throwable) {
                         destination.deleteRecursively()
                         throw HermitException(ErrorCodes.CONFLICT, "活动版本在提交时发生变化")
                     }
                 }
+                val installedInstance = archivedInstance ?: currentInstance
+                if (installedInstance != null) registry.updateDefaultIcon(appId, packageIconDataUrl)
+                makeReleaseReadOnly(File(destination, "web"))
+                refreshShortcut(appId)
                 registry.updateOperation(operationId, "succeeded", releaseId)
                 pruneReleases(appId, releaseId)
+                if (provisionalAppId != appId) File(appsRoot, provisionalAppId).deleteRecursively()
                 InstallResult(operationId, appId, releaseId, treeHash)
             } catch (e: Throwable) {
                 staging.deleteRecursively()
@@ -197,7 +279,7 @@ class InstallCoordinator(
                 val mapped = e as? HermitException
                     ?: HermitException(ErrorCodes.INVALID_ARGUMENT, e.message ?: "本地包校验失败")
                 registry.updateOperation(operationId, "failed", errorCode = mapped.code, errorMessage = mapped.message)
-                cleanupProvisionalRoot(appId, existingAppId)
+                cleanupProvisionalRoot(provisionalAppId, existingAppId)
                 throw mapped
             } finally {
                 zipFile.delete()
@@ -205,13 +287,15 @@ class InstallCoordinator(
         }
     }
 
-    suspend fun installUri(uri: Uri, suggestedName: String?): InstallResult {
+    suspend fun installUri(uri: Uri, suggestedName: String?,
+        identityChoice: suspend (WebAppInstance, String?) -> IdentityInstallChoice = { _, _ -> IdentityInstallChoice.NEW_INSTANCE }): InstallResult {
         val stream = context.contentResolver.openInputStream(uri)
             ?: throw HermitException(ErrorCodes.STORAGE, "无法读取所选文件")
-        stream.use { return installZip(it, suggestedName) }
+        stream.use { return installZip(it, suggestedName, identityChoice = identityChoice) }
     }
 
-    suspend fun installTree(uri: Uri, suggestedName: String?): InstallResult = withContext(Dispatchers.IO) {
+    suspend fun installTree(uri: Uri, suggestedName: String?,
+        identityChoice: suspend (WebAppInstance, String?) -> IdentityInstallChoice = { _, _ -> IdentityInstallChoice.NEW_INSTANCE }): InstallResult = withContext(Dispatchers.IO) {
         val tree = DocumentFile.fromTreeUri(context, uri)
             ?: throw HermitException(ErrorCodes.STORAGE, "无法读取所选目录")
         val temporary = File(context.cacheDir, "tree-${UUID.randomUUID()}.zip")
@@ -256,7 +340,7 @@ class InstallCoordinator(
                 append(tree, "", 0)
                 if (files == 0) throw HermitException(ErrorCodes.INVALID_ARGUMENT, "目录为空")
             }
-            FileInputStream(temporary).use { installZip(it, suggestedName, provenance = "directory") }
+            FileInputStream(temporary).use { installZip(it, suggestedName, provenance = "directory", identityChoice = identityChoice) }
         } finally {
             temporary.delete()
         }
@@ -285,8 +369,16 @@ class InstallCoordinator(
         return !dir.exists() || dir.deleteRecursively()
     }
 
+    fun deleteAppCode(appId: String): Boolean {
+        require(appId.matches(Regex("[0-9a-fA-F-]{36}")))
+        val appRoot = File(appsRoot, appId).canonicalFile
+        check(appRoot.path.startsWith(appsRoot.canonicalPath + File.separator))
+        listOf("incoming", "staging", "releases").forEach { File(appRoot, it).deleteRecursively() }
+        return listOf("incoming", "staging", "releases").none { File(appRoot, it).exists() }
+    }
+
     fun recoverStorage() {
-        val instances = registry.listInstances().associateBy { it.appId }
+        val instances = registry.listAllInstances().associateBy { it.appId }
         appsRoot.mkdirs()
         appsRoot.listFiles()?.filter { it.isDirectory }?.forEach { appRoot ->
             val instance = instances[appRoot.name]
@@ -361,49 +453,11 @@ class InstallCoordinator(
         if (fileCount == 0) throw HermitException(ErrorCodes.INVALID_ARGUMENT, "ZIP 为空")
     }
 
-    private fun readManifest(root: File): JSONObject? {
-        val file = File(root, "hermit.json")
-        if (!file.exists()) return null
-        if (file.length() > MAX_MANIFEST_BYTES) throw HermitException(ErrorCodes.QUOTA, "hermit.json 过大")
-        val json = JSONObject(file.readText(Charsets.UTF_8))
-        if (json.optInt("schema", -1) != 1) throw HermitException(ErrorCodes.UNSUPPORTED, "不支持的 hermit.json 版本")
-        val allowed = setOf("schema", "name", "entry", "routing", "version")
-        if (json.keys().asSequence().any { it !in allowed }) {
-            throw HermitException(ErrorCodes.INVALID_ARGUMENT, "hermit.json 包含未知字段")
-        }
-        if (json.has("name")) {
-            val name = json.opt("name")
-            if (name !is String || name.isBlank() || name.length > 80) {
-                throw HermitException(ErrorCodes.INVALID_ARGUMENT, "hermit.json 的 name 无效")
-            }
-        }
-        if (json.has("entry") && json.opt("entry") !is String) {
-            throw HermitException(ErrorCodes.INVALID_ARGUMENT, "hermit.json 的 entry 无效")
-        }
-        if (json.has("routing") && json.optString("routing") !in setOf("hash", "history")) {
-            throw HermitException(ErrorCodes.INVALID_ARGUMENT, "hermit.json 的 routing 无效")
-        }
-        json.optJSONObject("version")?.let { version ->
-            if (version.keys().asSequence().any { it !in setOf("code", "name") }) {
-                throw HermitException(ErrorCodes.INVALID_ARGUMENT, "hermit.json 的 version 包含未知字段")
-            }
-            if (version.has("code") && (version.opt("code") !is Number || version.getLong("code") < 0)) {
-                throw HermitException(ErrorCodes.INVALID_ARGUMENT, "hermit.json 的 version.code 无效")
-            }
-            if (version.has("name") && (version.opt("name") !is String || version.getString("name").length > 80)) {
-                throw HermitException(ErrorCodes.INVALID_ARGUMENT, "hermit.json 的 version.name 无效")
-            }
-        }
-        if (json.has("version") && json.optJSONObject("version") == null) {
-            throw HermitException(ErrorCodes.INVALID_ARGUMENT, "hermit.json 的 version 无效")
-        }
-        return json
-    }
-
     private fun treeHash(root: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
         digest.update("hermit-tree-v1\u0000".toByteArray(Charsets.UTF_8))
-        root.walkTopDown().filter { it.isFile }.map { it.relativeTo(root).invariantSeparatorsPath to it }
+        root.walkTopDown().filter { it.isFile && it.relativeTo(root).invariantSeparatorsPath != "hermit.sig" }
+            .map { it.relativeTo(root).invariantSeparatorsPath to it }
             .sortedBy { it.first }.forEach { (path, file) ->
                 val pathBytes = path.toByteArray(Charsets.UTF_8)
                 digest.update(ByteBuffer.allocate(Int.SIZE_BYTES).putInt(pathBytes.size).array())
@@ -422,13 +476,28 @@ class InstallCoordinator(
     }
 
     private fun validateRelativePath(path: String) {
-        if (path.isBlank() || path.length > 512 || path.startsWith("/") || path.contains("\u0000")) {
+        if (path.isBlank() || path.length > 512 || path.startsWith("/") || path.contains('\\') || path.contains("\u0000")) {
             throw HermitException(ErrorCodes.INVALID_ARGUMENT, "非法路径")
         }
         if (path.split('/').any { it.isBlank() || it == "." || it == ".." }) {
             throw HermitException(ErrorCodes.INVALID_ARGUMENT, "非法路径：$path")
         }
         if (path.startsWith("__hermit/")) throw HermitException(ErrorCodes.INVALID_ARGUMENT, "路径使用了保留命名空间")
+    }
+
+    private fun makeReleaseReadOnly(root: File) {
+        root.walkBottomUp().forEach { file ->
+            file.setReadable(true, true)
+            file.setWritable(false, false)
+            file.setExecutable(file.isDirectory, true)
+        }
+    }
+
+    private fun originOf(url: String): String {
+        val uri = Uri.parse(url)
+        val port = if (uri.port != -1 && !((uri.scheme.equals("https", true) && uri.port == 443) ||
+                    (uri.scheme.equals("http", true) && uri.port == 80))) ":${uri.port}" else ""
+        return "${uri.scheme!!.lowercase()}://${uri.host!!.lowercase()}$port"
     }
 
     private fun pruneReleases(appId: String, activeReleaseId: String) {
@@ -446,6 +515,10 @@ class InstallCoordinator(
         registry.deleteReleaseRows(appId, removed)
     }
 
+    private fun refreshShortcut(appId: String) {
+        registry.getInstance(appId)?.let { instance -> runCatching { shortcuts.update(instance) } }
+    }
+
     private fun ByteArray.hex() = joinToString("") { "%02x".format(it) }
 
     companion object {
@@ -453,7 +526,8 @@ class InstallCoordinator(
         private const val MAX_EXPANDED_BYTES = 256L * 1024 * 1024
         private const val MAX_SINGLE_FILE = 64L * 1024 * 1024
         private const val MAX_FILES = 10_000
-        private const val MAX_MANIFEST_BYTES = 64L * 1024
+        private const val MAX_ICON_BYTES = 2L * 1024 * 1024
         private const val MAX_TREE_DEPTH = 32
+        private val IMAGE_EXTENSIONS = setOf("png", "jpg", "jpeg", "webp", "gif")
     }
 }

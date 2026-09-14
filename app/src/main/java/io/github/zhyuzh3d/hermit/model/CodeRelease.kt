@@ -11,4 +11,7 @@ data class CodeRelease(
     val entryPath: String,
     val relativeRoot: String,
     val createdAt: Long,
+    val routing: String = "hash",
+    val happId: String? = null,
+    val publisherKeyId: String? = null,
 )

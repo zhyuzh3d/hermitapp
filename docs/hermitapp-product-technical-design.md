@@ -48,7 +48,7 @@ Android 最低安装基线为 Android 10 / API 29，compileSdk / targetSdk 为 3
 
 v1 完成上述四条场景的闭环，包括在线与本地安装、通用 HTTPS 包、可选公开 GitHub 来源、桌面入口、按应用授权、持久数据、必要原生能力、开发部署、更新、备份和恢复。应用库不建设公共应用市场、账号体系、收费体系或云同步。
 
-不在 v1 建设浏览器标签页、手机端 npm/Git 构建、独立 APK 生成、多窗口、后台录音定位、任意 Intent/系统插件执行、蓝牙/NFC/无障碍服务。私有仓库、差分包、云发布和动态原生插件留作扩展；扫码只识别 HTTP(S) URL，不允许二维码直接执行或静默安装。
+不在 v1 建设浏览器标签页、手机端 npm/Git 构建、独立 APK 生成、多窗口、后台录音定位或传感器采集、任意 Intent/系统插件执行、NFC/无障碍服务。私有仓库、差分包、云发布和动态原生插件留作扩展；扫码只识别 HTTP(S) URL，不允许二维码直接执行或静默安装。蓝牙只提供前台 BLE 扫描与通用 GATT 连接，经典蓝牙配对和设备专属协议仍交给系统设置与 happ 自身。
 
 成功以“桌面工具可以稳定使用和更新”验收，不以 API 数量验收。四条参考用户任务、负面隔离测试、故障恢复、APK 覆盖升级必须通过；构建成功或生成 debug APK 不代表产品完成。
 
@@ -80,7 +80,7 @@ v1.3 采用黑白与中性灰主题，蓝、紫、橙、绿功能图标用于区
 
 本地导入的名称优先级为：用户明确填写的名称 → 包内 manifest 名称 → 来源默认名（如 GitHub 仓库名）→ 本地应用。代码更新不改已有实例名称。
 
-同一来源可安装多个实例，分别拥有 Hermit 身份、授权和原生数据；它们的网页站点数据则遵守标准同源规则。修改展示名、在线入口的同 Origin 路径或更新代码不改变 appId。修改在线 Origin 或切换本地/实时运行是信任关系变化：提升 trustRevision、清除敏感授权并保留 Hermit 管理的业务数据。
+同一来源可安装多个实例，分别拥有 Hermit 身份、授权和原生数据；它们的网页站点数据则遵守标准同源规则。修改展示名、更新代码或切换本地/实时运行不改变实例、数据和普通授权。修改 `liveUrl` 导致 Origin 改变时，仅清除旧 endpoint 与按 Origin 保存的范围授权；普通 grant 保留。
 
 ### 2.3 启动、导航和返回
 
@@ -96,33 +96,33 @@ v1.3 采用黑白与中性灰主题，蓝、紫、橙、绿功能图标用于区
 
 是否可回滚由 `activeReleaseId` 决定，而不是由来源决定。有本地代码的 happ 显示当前版本和上一保留版本；采用线上实时运行时仍保留本地版本，切回本地即可使用。没有本地代码的线上 happ 只提供重新加载。下载与校验不打断正在使用的版本，新包失败时保留旧版和数据。
 
-v1 删除统一为“删除此应用及本机数据”，先提供备份入口，不实现模糊的“删身份但保留目录”回收站。逻辑删除立即禁用启动、授权、部署和快捷方式；后台完成代码、数据、Web Profile 清理，保留最小删除任务直至完成。Launcher 残留图标可能需用户自行移除。
+应用详情明确区分两种操作：“卸载并保留数据”删除本地代码、归档实例并暂停通知；重新安装同一 `happId` 时，签名一致可自动恢复，未签名包必须由用户确认。“彻底删除”才级联清理代码、数据、授权和通知且不可恢复。Launcher 残留图标可能需用户自行移除。
 
 ## 3. 统一领域模型
 
-来源与运行方式是两个正交维度，不能再压入一个 `mode`：
+来源只作审计记录，不决定能力；运行能力直接由字段决定：
 
 ```text
-本地文件 / SAF目录 ───────────────→ source=local ─→ runtimeMode=local
-页面URL + 安装清单 ───────────────→ source=online ─→ 默认 runtimeMode=local
-页面URL（无本地包）───────────────→ source=online ─→ runtimeMode=live
-HTTPS包 / GitHub ─────────────────→ source=online ─→ runtimeMode=local
+activeReleaseId != null ──────────→ 可以本地运行
+liveUrl != null ──────────────────→ 可以线上实时运行
+updateUrl != null ────────────────→ 可以一键更新
+downloadUrl != null ──────────────→ 可以从原地址重装
 ```
 
 `WebAppInstance` 是长期身份；`CodeRelease` 是不可变本地代码；`RuntimeSession` 是一次运行；`Operation` 是一次可追踪操作。不要再用一个含糊的“Profile”同时指业务身份和 WebView 存储。
 
 | 对象 | 关键字段 | 唯一职责 |
 | --- | --- | --- |
-| WebAppInstance | appId、name、source、runtimeMode、liveUrl、trustRevision、activeReleaseId、favorite、iconDataUrl | 身份、来源、当前运行方式、收藏状态、图标与当前代码指针；旧 `mode` 与 `webProfileName` 仅作迁移兼容 |
+| WebAppInstance | instanceId、happId、displayName、runtimeMode、liveUrl、updateUrl、downloadUrl、activeReleaseId、favorite | 本机身份、用户设置、当前运行方式与代码指针；旧 `appId/mode/startUrl/primaryOrigin` 仅作内部迁移兼容 |
 | SourceBinding | appId、adapter、spec、updatePolicy | 用户认可的上游来源和更新方式 |
 | CodeRelease | releaseId、appId、treeHash、entryPath、版本、provenance、sourceRevision | 一次完整且不可变的本地代码 |
 | RuntimeSession | sessionId、appId、role、releaseId、dataGeneration、documentEpoch | 当前运行上下文；由 Native 创建；WebView 使用共享默认 Profile |
-| CapabilityGrant | appId、trustRevision、capability、resourceScope、decision | Hermit 层的持久授权意图 |
+| CapabilityGrant | instanceId、capability、resourceScope、decision | Hermit 层的持久授权意图 |
 | Operation | operationId、appId、kind、state、idempotencyKey、result | 安装、更新、备份、删除、部署的状态和恢复 |
 | FileHandle | opaqueId、appId、logicalFileId、access、expiry | 对受控文件的引用 |
 | DevelopmentSession | targetAppId、transport、expiresAt、autoReload | 显式开启且短期存活的开发连接 |
 
-appId 采用 Native 生成的 UUID，发布方声明的 ID 只作元数据，不自动合并实例。releaseId 也由 Native 生成；规范化文件树摘要用于识别相同内容。treeHash 使用固定域标识，并逐文件编码 UTF-8 路径长度、路径、内容长度和内容，避免不同文件边界得到同一摘要输入。ZIP 文件摘要与展开后 treeHash 是不同值，不能混用。
+instanceId 采用 Native 生成的 UUID；发布方声明的 `happId` 只用于识别候选，只有一致的发布者签名才能自动恢复，未签名包必须由用户确认。releaseId 也由 Native 生成；规范化文件树摘要用于识别相同内容。treeHash 使用固定域标识，并逐文件编码 UTF-8 路径长度、路径、内容长度和内容，避免不同文件边界得到同一摘要输入。ZIP 文件摘要与展开后 treeHash 是不同值，不能混用。
 
 当前版本号、来源、摘要只从 activeReleaseId 关联得到，不在实例表重复存多份“当前版本”字段。SourceBinding 与 release.provenance 分离：一次 curl 覆盖不修改原 GitHub 上游；界面显示开发覆盖，再从上游更新需明确说明会覆盖该版本。
 
@@ -371,24 +371,25 @@ Hermit 保存自身声明权限的最近观测状态，也保存每个 Web App �
 
 权限表达式可为 ALL/ANY/精度条件，不能一律要求所有声明权限同时存在。例如近似定位只需 coarse；只有明确请求精确位置才要求 fine，用户拒绝精确而授予近似时应返回实际精度或可操作错误。
 
-首次敏感调用显示 Hermit 原生授权界面，写明 Web App 名称、来源、能力与用途。若 Hermit 已有系统权限，不再弹 Android 系统框；当前 Web App 仍单独获得并记录 Hermit grant。若系统层缺失，由 Hermit 代为请求，获准后生效。拒绝、永久拒绝、仅本次、系统撤销、服务不可用是不同状态。
+首次敏感调用显示 Hermit 原生授权界面，写明 happ 名称、能力与用途。若 APK 已有系统权限，Hermit 仍要求用户确认当前 happ 的 grant；若系统层缺失，Hermit 先请求 Android 系统权限，成功后直接记录当前 happ 的允许意图。系统权限的“仅本次、使用时或长期”等生命周期完全由 Android 决定。
 
-“仅本次”属于当前运行会话，切换实例或结束会话后失效；“始终允许”按 appId + trustRevision + capability + resourceScope 持久化。拒绝后不反复弹窗，由用户在应用详情重新开启。撤销 app 授权不撤销整个 APK 的系统权限；撤销系统权限使所有依赖它的调用失效，但可保留用户对各 app 的意图。
+Hermit 不再自创“仅本次”级别；grant 按 `instanceId + capability + resourceScope` 持久化为 allow 或 deny。拒绝后不反复弹窗，由用户在应用详情重置。撤销 happ 授权不撤销整个 APK 的系统权限；撤销系统权限使所有依赖它的调用暂不可用，但保留用户对各 happ 的意图。
 
 | 能力类别 | 默认 Hermit 决策 | 系统层 |
 | --- | --- | --- |
 | 运行信息、自有记录和文件 | 自动允许，受配额限制 | 无 runtime permission |
-| 前台朗读、震动、剪贴板写入 | 自动允许，限制频率；剪贴板写入需明确交互 | 按 Adapter 实际所需 |
+| 前台朗读、传感器、Wi-Fi/BLE、红外 | 按实例首次询问，限制订阅数、频率与会话时长 | 麦克风、位置、附近设备、活动识别等按实际调用请求 |
+| 震动、剪贴板写入、电池/网络状态 | 自动允许，限制频率；剪贴板写入需明确交互 | 按 Adapter 实际所需 |
 | 选择文件、分享、系统拍照 | 允许发起可信系统 UI，用户可取消 | SAF/授权 URI；系统 Camera Intent 不为此预申请 CAMERA |
 | 语音识别、定位、剪贴板读取 | 按实例首次询问 | 麦克风/精度等实际需求 |
 | Native 网络请求 | 按实例与明确目标 Origin 询问，默认无目标 | INTERNET；局域网按系统版本另检查 |
 | 安装、删除、授权管理、开发连接 | Store 角色专属 | 不向普通 Web App 暴露 |
 
-系统授权 UI 由串行 PermissionBroker 协调。同一能力请求合并，最多一个系统弹窗；返回时核对原 appId、trustRevision、session 和 documentEpoch。Android 可能已经授予整个 APK 权限，但页面已离开时不能把结果误发或授予新页面。
+系统授权 UI 由串行 PermissionBroker 协调，最多一个系统弹窗；返回时核对原 instanceId、session 和 documentEpoch。Android 可能已经授予整个 APK 权限，但页面已离开时不能把结果误发或授予新页面。
 
-Android Manifest 只声明实际实现所需权限与组件。语音使用 RECORD_AUDIO；定位使用 coarse/fine；网络声明 INTERNET/ACCESS_NETWORK_STATE；TTS/识别/拍照按需配置 package visibility；FileProvider 仅暴露专用分享目录；不申请 all-files，也不预声明后台高权限。
+Android Manifest 只声明实际实现所需权限与组件。语音使用 RECORD_AUDIO；定位和 Wi-Fi 扫描使用 coarse/fine；Android 12+ 蓝牙使用 nearby scan/connect，Android 13+ Wi-Fi 连接使用 nearby Wi-Fi，计步使用 ACTIVITY_RECOGNITION；红外仅声明普通 TRANSMIT_IR。TTS/识别/拍照按需配置 package visibility；FileProvider 仅暴露专用分享目录；不申请 all-files、后台位置或传感器高采样率权限。
 
-Android 17、target 37 的 LAN 访问需检查并请求 ACCESS_LOCAL_NETWORK，WebView 的 LAN 流量继承 APK 的系统权限。这意味着 Hermit 的 Native fetch 目标限制不等于全部网页网络防火墙；普通网页 fetch、WebSocket、Service Worker 网络仍遵循 WebView/Android 规则。v1 明确不承诺逐 Web App 的全网络出口隔离。若未来要求此能力，需要新的网络隔离架构，不能用 shouldInterceptRequest 的局部拦截冒充。[Android 局域网权限](https://developer.android.com/privacy-and-security/local-network-permission)
+Android 17、target 37 的 LAN 访问需检查并请求 ACCESS_LOCAL_NETWORK，WebView 的 LAN 流量继承 APK 的系统权限。有 `liveUrl` 时，同 Origin 请求正常执行，被动图片、样式、字体与音视频可跨 Origin；脚本、接口、iframe、Worker、表单和顶层导航默认阻止，只有用户开启逐 happ 的“允许跨 Origin 网络”后放行并持续显示提示。纯本地实例的页面网络始终关闭。具体运行和通知合同以 [统一开发计划](../plans/hermitapp-notifications-development-plan.md) 为准。[Android 局域网权限](https://developer.android.com/privacy-and-security/local-network-permission)
 
 首次打开已识别的 LAN 在线入口时，Runtime 在 loadUrl 前由 Broker 处理该系统权限，不等待尚未加载的页面调用 Bridge。私网 IP、明确的本地域名和用户标注的局域网入口均走此流程；解析后发现私网目标也补做检查。拒绝时保留实例，提供重试或系统设置入口；无法可靠识别的网络失败允许用户主动选择“此地址在局域网”。这不是对全部网页子资源的逐目标授权承诺。
 
@@ -430,19 +431,25 @@ v1 将网页可调用的任意 SQL 收敛为 `hermit.data` 的键控 JSON 记录
 | data | get、put、delete、scan、batch | 持久化、CAS、分页、原子批量 |
 | files | 选择导入、文本创建/读取、删除、列举、导出、分享 | 逻辑 ID 隔离；大文件只走原生导入/导出/分享 |
 | audio | startRecording、stopRecording、cancelRecording、play、stopPlayback | 原始麦克风录音与逻辑文件播放；不依赖语音服务；单录音/单播放；退出前台立即释放 |
-| tts | 引擎/声音查询、speak、stop、导出音频 | 引擎可能联网；会话退出停止输出，导出用 FileHandle |
-| speech | availability、start、stop、cancel | 单活跃识别、partial/final 事件；明确 on-device 可用性，不伪称离线 |
+| tts | availability、preferences、voices、speak、stop、导出音频 | Bridge 不暴露厂商，引擎选择由用户在 HermitUI 管理；引擎可能联网，会话退出停止输出 |
+| speech | availability、preferences、languages、start、recognizeOnce、stop、cancel | 统一连续识别、系统真实语言目录、on-device 与系统界面降级；不暴露厂商，不伪称离线 |
 | location | getCurrent、watch、clearWatch | 前台、精度/超时/最大缓存年龄明确，后台停止 watch |
-| camera | capturePhoto | 系统 Camera Intent + FileProvider，取消清临时文件 |
+| sensors | availability、watch、clearWatch | 逐传感器硬件事实；方向由旋转向量计算；最高 60 Hz；后台释放 |
+| camera | capturePhoto、torchStatus、setTorch | 系统 Camera Intent + FileProvider；闪光灯另行授权；取消清临时文件 |
 | shell QR | CameraX 预览 + ZXing 本地二维码解码 | 属于应用库功能；单独请求 Hermit 相机权限，不把相机能力授权给页面，不联网 |
 | share | text、file | 系统 chooser，回调不能证明对方已读取或发布 |
 | clipboard | write、read | 读取受前台/系统与逐实例限制 |
 | haptics | vibrate、impact | 有限时长，频率限制 |
-| network | status、request | 受控 Native HTTP，普通页面优先标准 fetch |
+| network | status、watch、clearWatch、request | 连接类型/验证/计费状态订阅与受控 Native HTTP，普通页面优先标准 fetch |
+| wifi | status、scan、requestNetwork、releaseNetwork、openSettings | 扫描受位置与节流约束；Android 10+ 临时连接由系统确认，不改写已保存网络 |
+| bluetooth | status、paired、scan、connect、services、read、write、subscribe | 前台 BLE GATT；系统确认附近设备权限；切换页面或后台自动断开 |
+| infrared | status、transmit | 仅设备实际具备的消费级红外发射；单次脉冲不超过 2 秒；无通用接收 API |
+| battery | status、watch、clearWatch | 前台电量、充电、温度、电压和省电状态 |
+| system | openSettings | 只允许固定的 Wi-Fi、蓝牙、位置、语音、TTS 和本应用设置页，不接受任意 Intent |
 
 麦克风、系统文件选择器、拍照和扫码等排他资源同时只允许一个操作，其余返回忙碌或进入有界队列。原始录音是 Hermit 本地基础能力，单次默认上限五分钟、绝对上限 30 分钟，停止后原子导入当前实例的逻辑文件；取消、切应用或退出前台时释放录音器并删除临时文件。扬声器既可由 `audio.play` 播放逻辑文件，也可由标准 `<audio>` / Web Audio 播放页面资源，后者继续遵守用户手势策略。
 
-Android 10/11 不调用 API 31 才提供的 on-device SpeechRecognizer；定位在 Android 10 使用单次更新兼容路径。普通语音识别与 TTS 均按已安装系统服务探测，没有服务就报告 `supported=false` 并在调用时返回 `UNSUPPORTED`。稳定 API 名称不会随设备消失，页面依据 `runtime.capabilities` 以及 `audio.features.microphoneRecording/speakerPlayback` 选择能力或降级。Adapter 不独立建立权限和线程体系，而是使用统一调度、生命周期和错误模型。
+Android 10/11 不调用 API 31 才提供的 on-device SpeechRecognizer；定位在 Android 10 使用单次更新兼容路径。语音适配层枚举标准 Android TTS Service、RecognitionService 和 Recognizer Activity，吸收系统默认绑定、用户选择、已卸载服务和仅界面识别等差异。普通 happ 只看到是否支持朗读、连续识别、一次性识别、离线模式、局部结果和语言检测等稳定事实；服务包名与组件名只进入 Store-only 设置和诊断。选定 TTS 失效时尝试系统默认引擎并发出通用回退事件；ASR 缺失或失败返回明确状态和可处理错误，不导致宿主异常。传感器、Wi-Fi、蓝牙、红外和闪光灯也逐项读取设备事实，不能按 Android 版本、品牌或提供商猜测；系统开关关闭与 Android/happ 授权不足分别返回。
 
 ### 9.4 Native HTTP
 
@@ -456,15 +463,19 @@ Native network.request 使用独立配置的 OkHttp client：关闭自动重定�
 
 ## 10. Developer Deploy
 
-### 10.0 智能体开发模式（1.2 新增，以用户最新确认的单密码模型为准）
+### 10.0 统一智能体开发工作区
 
-在 Store 的“开发”Tab 中显式开启局域网 HTTP 服务，默认端口 8766。入口显示基址、MCP 地址和一个随机六位数字密码。密码首次生成后保存在宿主私有偏好，应用升级/服务重启不变；“修改密码”重新生成不同值并立即生效。每个 HTTP 请求发送 `Authorization: Bearer <password>`，只接受当前唯一密码；多台电脑可共享，不设配对、客户端名单、独立令牌或应用白名单。只能全局改密撤销旧访问，不能单独撤销某一台电脑。
+在 Store 的“开发”Tab 中显式开启开发服务，默认端口 8766。LAN 服务绑定全部本机接口但只公布当前可信局域网 IPv4；USB 备用在设备 loopback 启动同一服务，通过 `adb forward tcp:8766 tcp:8766` 访问。两条传输共享工具、密码、开发工作副本和并发控制。密码首次生成后保存在宿主私有偏好，应用升级/服务重启不变；修改密码后旧值立即失效。多台电脑可共享当前密码，不设配对、客户端名单、独立令牌或应用白名单。
 
 标准 MCP Streamable HTTP（无状态 JSON 响应，无 SSE）提供工具、资源和提示词发现。根地址和 `/.well-known/hermit-agent` 是接入入口，`/skills/hermit-device/SKILL.md` 和 MCP guide/resource 提供随 APK 同步更新的实时指导。客户端的 MCP 注册和 Skill 安装必须由客户端执行；本地 Skill 只保留动态拉取规则，不固定功能清单或保存密码。HTTP/stdio Python 标准库助手兼容不方便直接注册 HTTP MCP 的客户端，不增加页面框架或构建依赖。
 
-暴露能力限于现有全部应用的元信息、代码文件、版本、新建本地页面、快照更新、打开/刷新及代码回滚，不开放任意 Android shell、运行时 JS 执行、业务数据库、Cookie 或系统权限强授。增量补丁和 ZIP 发布共用 InstallCoordinator 的 staging/校验/CAS/激活事务；代码提交和排队 UI 动作重新校验密码。改密先完成则旧请求不能提交，已提交的事务不撤销。多电脑身份不限，但并发更新仍受 expectedReleaseId 冲突保护与有界写入并发限制。
+每个普通 happ 以 `appId` 对应一份开发工作副本和 `stable | dev` 启动通道。首次进入 dev 时从当前正式 release 建立内容寻址快照；后续创建、覆盖、移动、重命名和删除文件只写新的 blob 和原子清单，不修改正式 release。写入必须使用 `expectedDevRevision`，同一 happ 串行、不同 happ 可并行。正式版本外部更新时，干净副本自动跟随；有未发布修改的副本保留原基线并显示过期状态。HermitUI 不进入普通实例清单，保留 appId/happId 也在安装与开发层拒绝，因此该服务不能破坏管理界面。
 
-服务仅在 Hermit 前台存活（其中的 WebApp 也算前台），保持亮屏；后台/停止/进程退出/空闲 30 分钟停服，密码不失效。采用 Host/Origin 防护、错误尝试限速、请求大小限制和有界线程池。六位密码只有一百万种组合，HTTP 也不加密，因此明确仅用于可信局域网，不做公网安全承诺。旧端口 8765 的单应用 ADB/TLS 模式保留兼容，不与此服务混用凭据。完整交付与验收见 `plans/hermitapp-agent-development-plan.md`。
+快速保存优先提交调用者已知的变化文件。纯 CSS 变化替换样式链接，其他变化复用当前 WebView 并刷新当前路径，不清除页面 Profile、数据或 grant。Native 注入 revision 标识和最小就绪回执，服务以 `renderOperationId` 提供有界等待；控制台、HTTP 和页面错误写入有界诊断环，不能采集业务数据。打开特定页面只接受相对同源路由，禁止任意脚本执行。
+
+发布分为构建和安装两个动作：构建以当前开发 revision 生成确定性 ZIP、覆盖 manifest 版本并完整验证；安装使用现有 InstallCoordinator 的 staging、摘要、身份、CAS 和原子激活事务，成功后开发副本重基线并切回 stable。签名 happ 必须由原发布者在设备外签名，Hermit 不代造发布签名。新 happ 先安装最小 schema 2 包，再创建并进入开发副本。
+
+服务仅在 Hermit 前台存活（其中的 happ 也算前台），保持亮屏；后台/停止/进程退出/空闲 30 分钟停服，密码不失效。采用 Host/Origin 防护、错误尝试限速、请求大小限制和有界线程池。六位密码只有一百万种组合，LAN HTTP 也不加密，因此明确仅用于可信局域网，不做公网安全承诺。完整交付与验收见 `plans/hermitapp-unified-dev-workspace-plan.md`。
 
 两个手机开发入口互斥：开启智能体模式即停止单应用部署，开启旧部署即停止智能体模式；修改智能体密码也停止旧部署监听，避免遗留 token 绕过当前密码。导出备份和替换应用数据期间停止智能体服务。
 

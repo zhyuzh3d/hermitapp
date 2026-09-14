@@ -1,59 +1,115 @@
 # HermitApp
 
-1.3 的底部导航为“收藏、全部、开发、设置、支持”。收藏与全部共享应用库，支持爱心筛选、新增和二维码预填；开发页用开关控制智能体模式，并在运行时显示绿色状态点；设置集中宿主配置与软件信息；支持页在联网预检后打开官方支持页面，失败时显示本地重试页。
+HermitApp 是一个面向 Android 的 happ 容器：它直接运行 HTML、CSS、JavaScript 页面，并为页面提供安装、版本、数据、文件、权限和系统能力。项目目标不是把网页重新包装成独立 APK，而是在一个开放、轻量、可离线工作的宿主中管理多个页面应用。
 
-智能体开发模式位于“开发”Tab。将局域网地址和六位密码交给可信智能体，即可使用动态 MCP 工具创建、更新、打开、刷新和回滚页面。多台电脑共用一个持久密码，无需配对；修改后旧密码立即失效。保持 Hermit 在前台，仅使用可信局域网（HTTP 不加密）。[实施与验收计划](plans/hermitapp-agent-development-plan.md) · [实时指导源文件](app/src/main/assets/agent/hermit-device/SKILL.md)。
+当前正式版本为 `1.10.0`（versionCode `34`），包名为 `io.github.zhyuzh3d.hermit`，最低支持 Android 10 / API 29，compileSdk 与 targetSdk 为 37。系统语音识别语言目录通过 `speech.languages()` 从当前 Android 识别服务读取；系统 TTS 的可选语言和音色也来自当前引擎，不再声明未经运行时确认的候选。happ 可以在 `hermit.json.display` 中声明屏幕方向和键盘布局策略；该策略只在目标 happ 前台时生效，返回应用库会恢复宿主默认行为。
 
-Hermit 项目包含 Android 宿主 HermitApp 与官网/HermitUI 所在的 HermitWeb。HermitApp 可以加载多个 happ；HermitUI 是默认加载且具有宿主管理权限的官方 happ。每个 happ 实例都有稳定 ID、独立的 Hermit 业务数据、逐应用敏感能力授权和可选本地代码版本。
+Hermit 项目由两个同级独立仓库组成：
 
-## 仓库边界
+- `hermitapp/`：Android 宿主，本仓库只推送到 `git@github.com:zhyuzh3d/hermitapp.git`。
+- `hermitweb/`：官网与 HermitUI，只推送到 `git@github.com:zhyuzh3d/hermitweb.git`。
 
-HermitApp 与 HermitWeb 是同级但完全独立的 Git 仓库。本目录只推送到 `git@github.com:zhyuzh3d/hermitapp.git`；HermitWeb 只推送到 `git@github.com:zhyuzh3d/hermitweb.git`。共同父目录不建立 Git 仓库，跨项目修改必须分别提交和推送。具体防误操作规则见 `AGENTS.md`。
+HermitUI 是 HermitApp 默认加载、并拥有宿主管理权限的官方 happ。它的源码位于 HermitWeb 的 `public/shell/`；本仓库 `app/src/main/assets/store/` 只保存随 APK 分发的同步快照。
 
-“本地 happ / 线上 happ”描述来源，“本地运行 / 线上实时运行”描述当前执行方式，两者不能混用。手机文件或目录导入的是本地 happ 且只能本地运行；URL、HTTPS 包和 GitHub 是线上来源，即使代码已下载到手机仍是线上 happ。添加页面 URL 时会探测同源 `/hermit-install.json`：有有效 ZIP 时默认本地运行，没有时实时运行；同时具备本地代码和页面 URL 的线上 happ 可在管理设置中切换。网页 Cookie 与站点存储继续遵守标准同源规则。
+## 核心模型
 
-正式包名为 `io.github.zhyuzh3d.hermit`，最低支持 Android 10 / API 29，compileSdk 与 targetSdk 为 37。只要设备存在可创建的系统 WebView，Hermit 就尝试运行页面：优先使用可校验 Origin/主 frame 的 WebMessage 通道，旧 provider 则使用传统 `JavascriptInterface`。两者都使用共享资料空间；传统桥接无法隔离 iframe 调用，界面与诊断会如实显示。
+Hermit 把 happ 的来源与运行方式分开描述：
 
-核心功能按国内无 GMS 手机设计：二维码由 APK 内置 CameraX + ZXing 离线识别，字体图标全部内置，本地应用、数据、备份和局域网开发均不依赖 Google Play 服务、海外 CDN 或运行时下载。GitHub 仅是海外可选来源；本地 ZIP/目录、局域网推送和通用 HTTPS 包不依赖 GitHub。
+- `source` 记录代码来自本地文件、HTTP(S)、Git 等何处。下载到手机不会把线上来源改成本地来源。
+- `runtimeMode` 只表示当前采用本地 release，还是直接访问 `liveUrl`。
+- 有本地 release 才能本地运行；有 `liveUrl` 才能线上实时运行；有 `updateUrl` 才能一键更新；有 `downloadUrl` 才能从原地址重装。
 
-## 使用
+每个安装实例由 Native 生成稳定的 `instanceId`，发布包可以通过 `happId` 声明产品身份。Hermit 的业务数据、文件、授权、通知和代码版本按实例管理；Cookie、localStorage 与 IndexedDB 仍遵守浏览器的标准同源规则。
 
-页面开发的关键原则是 **纯原生 HTML + JavaScript + CSS，源文件即可运行，无需构建**。不要求 React/Vue、Vite/Webpack、Node/npm 或任何转译、打包步骤；Hermit 不为它们提供专门适配。第三方工具已生成的静态产物仍可作为普通 WebApp 导入，遵循相同规则。详细说明及可直接复制的示例见 [WebApp 编写指南](docs/webapp-authoring.md)。
+本地代码以不可变 release 保存。更新会生成新 release 后原子切换，当前版和上一版可用于回退，页面数据不会随代码切换而被覆盖。对于带 `liveUrl` 的本地 release，Hermit 会在该真实 URL 空间优先提供包内静态文件，包内不存在的资源和动态请求继续访问网络，因此相对 URL、Cookie 和请求头仍按正常网页规则工作。没有 `liveUrl` 的 happ 是纯本地应用，只访问包内资源和已授权的 Bridge 能力。
 
-从应用库可添加 HTTP(S) 页面地址，或导入 ZIP、SAF 目录快照、HTTPS ZIP；公开 GitHub 仓库目录是网络可达时的可选适配器。线上安装清单格式见 `api/hermit-install.schema.json`；ZIP 内元信息格式见 `api/hermit.schema.json`。目录导入后使用 Hermit 私有快照，原目录删除不会影响已安装实例。
+## 主要能力
 
-应用库提供收藏、搜索、扫码预填、启动、重命名、在线地址修改、桌面快捷方式、来源更新、代码回退、逐应用授权重置、备份/恢复、短期开发连接和删除。备份包含 Hermit 记录、逻辑文件、配置和当前本地代码，但不加密，也不包含 Cookie、WebStorage、系统权限、页面授权或开发令牌。
+应用库支持本地目录/ZIP、HTTP(S) 页面或安装包、局域网地址及公开 Git 仓库来源；提供收藏、搜索、扫码预填、桌面快捷方式、重装、更新、代码回退、备份恢复和卸载保留数据。安装包采用严格的 `hermit.json`，线上页面可通过同 Origin 的 `/hermit-install.json` 提供本地安装包。
 
-页面通过注入的 `window.hermit` 使用数据、文件、原始录音/音频播放、TTS、语音识别、前台定位、系统拍照、分享、剪贴板、震动和受控 Native HTTP。协议与类型位于 `api/` 和 `sdk/`。麦克风、定位、剪贴板读取、拍照和 Native 网络等敏感动作遵守 Hermit 逐实例授权；其中需要 Android runtime permission 的动作还必须同时取得系统授权。页面先用 `runtime.capabilities()` 查询当前设备事实：无对应硬件或系统服务时明确得到不支持，不会连接云端补齐或返回模拟成功。
+页面通过 `window.hermit` 调用数据、文件、录音与播放、系统 TTS、语音识别、定位、运动/方向/环境传感器、拍照与闪光灯、Wi-Fi、BLE、红外、网络与电池状态、分享、剪贴板、震动及通知能力。Bridge 对 happ 暴露稳定的 Android 通用能力，不暴露也不要求页面适配手机品牌或语音服务商；系统服务发现、用户选择、失效回退和诊断由 HermitApp 处理。敏感能力需要逐 happ 授权；涉及 Android runtime permission 时，还必须同时获得系统授权。Wi-Fi 与蓝牙配置遵守 Android 的用户确认和系统设置流程，不能越过系统限制静默修改。通知支持即时通知、设备端单次/每日/每周/每月/每年计划，以及由 HermitApp 约每 15 分钟同步的服务器通知；宿主不会在后台执行 happ JavaScript。
 
-## 开发部署
+核心链路按国内无 GMS 设备设计。二维码使用随 APK 打包的 CameraX 与 ZXing 离线识别，图标资源全部内置；本地运行、数据、备份和局域网开发不依赖 Google Play 服务、海外 CDN 或运行时下载。实际 Bridge 通道根据系统 WebView 能力选择安全 WebMessage 模式或兼容模式。
 
-先导入一个原生页面目录，在其卡片选择“管理 → 开发与更新 → USB 开发连接 / 局域网部署”，再从面板取得 appId、短期 token、地址以及 LAN 模式的 SPKI pin。直接编辑 HTML/JS/CSS 后归档并推送，无需前端编译。ADB 模式示例：
+## 编写 happ
+
+推荐目录就是可直接运行的原生静态页面：
+
+```text
+my-happ/
+  hermit.json
+  index.html
+  app.js
+  style.css
+```
+
+不要求 React、Vue、Vite、Webpack、Node/npm 或转译步骤。第三方工具已经生成的静态产物也可直接导入，遵循相同的 WebView、入口、Origin、权限和存储规则。ZIP 仅用于归档传输，不是前端编译。
+
+`hermit.json` schema 2 的最小正式示例：
+
+```json
+{
+  "schema": 2,
+  "happId": "com.example.notes",
+  "name": "示例笔记",
+  "version": { "code": 1, "name": "1.0.0" },
+  "entry": "index.html",
+  "routing": "hash"
+}
+```
+
+`liveUrl` 与 `updateUrl` 都是可选字段；缺少 `liveUrl` 表示纯本地 happ。完整作者合同、Bridge 示例和兼容要求见 [WebApp 编写指南](docs/webapp-authoring.md)，机器可读合同位于 [api](api/) 与 [sdk](sdk/)。
+
+## 智能体开发
+
+HermitUI 的“开发”Tab 可开启全局智能体开发模式。可信电脑使用页面显示的局域网地址和六位密码连接 MCP 服务；USB 可通过同一服务转发。每个普通 happ 有且只有一个开发副本，必须先切换为运行开发副本，智能体才能增量创建、修改、移动或删除文件。保存后可在同一 WebView 快速刷新并等待渲染确认；正式发布时再构建 ZIP，经标准更新事务安装。HermitUI 是受保护目标，不能通过该接口修改。
+
+该服务使用可信局域网内的明文 HTTP，不能暴露到公网。Hermit 必须保持前台；停止开发模式、进程退出或 30 分钟没有认证请求都会关闭服务。动态客户端说明随 APK 位于 `app/src/main/assets/agent/hermit-device/SKILL.md`。
+
+仓库仍保留面向单个实例的旧式 ADB/LAN 部署脚本，适合明确取得短期 token 的兼容流程：
 
 ```sh
 ./scripts/pack.sh examples/voice-notes /tmp/voice-notes.zip
-export HERMIT_TOKEN='从 Hermit 面板复制的短期令牌'
-./scripts/deploy.sh '<appId>' /tmp/voice-notes.zip
+export HERMIT_TOKEN='从目标 happ 的开发连接面板复制'
+./scripts/deploy.sh '<instanceId>' /tmp/voice-notes.zip
 ```
 
-LAN 模式还需按面板设置 `HERMIT_ADDRESS` 与 `HERMIT_SPKI_PIN`。脚本强制 HTTPS 和 SPKI 固定，不允许仅用 `-k` 信任自签名端点。令牌只驻留内存、只绑定一个实例，在 Hermit 退到后台或闲置 15 分钟后失效。
+两种开发入口互斥；启动其中一个会停止另一个。不要把密码、token 或业务数据写入源码、日志或提交内容。
 
 ## 构建与验证
 
-以下命令供 Hermit 宿主 APK 的维护者使用，不是 WebApp 作者的前置步骤。应用库自身也是未经编译的原生 HTML/JS/CSS；`npm run build` 只检查内置文件完整性，不进行前端打包。Font Awesome Free 7.3.1 的完整 Web 字体与 CSS 已提交并随 APK 离线分发；仅在更新上游资源时运行 `npm ci && npm run vendor:icons`。
-
-本项目锁定 JDK 17、AGP 9.1.1、Gradle 9.3.1 和依赖校验元数据。macOS 本机验证命令：
+下面的工具仅供 HermitApp 维护者使用，不是 happ 作者的依赖。项目锁定 JDK 17、AGP 9.1.1、Gradle 9.3.1 与 Android SDK 37；Node 只用于合同检查、HermitUI 快照和第三方图标资源维护，不参与页面运行时构建。
 
 ```sh
 export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
 export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
+
 ./scripts/doctor.sh
-npm ci
-npm run check && npm test && npm run build
-./gradlew --no-daemon :app:testDebugUnitTest :app:lintDebug :app:lintRelease
-./gradlew --no-daemon :app:assembleDebug :app:connectedDebugAndroidTest
+./scripts/quick-check.sh web
+./scripts/quick-check.sh android
 ```
 
-正式签名脚本从仓库外读取密钥与口令；密钥、token、`local.properties` 和构建目录不会进入 Git。各版本交付物位于 `artifacts/v<版本>/`。实体手机验收应按 `docs/validation/physical-device-checklist.md` 执行。
+HermitUI 必须先在同级 HermitWeb 修改，再同步快照：
 
-产品与架构合同见 `docs/hermitapp-product-technical-design.md`，开发阶段和证据见 `plans/hermitapp-v1-development-plan.md` 与 `plans/hermitapp-v1-execution-log.md`，隐私与数据边界见 `docs/privacy-and-data.md`。
+```sh
+node tools/sync-shell-assets.mjs
+```
+
+正式签名信息从仓库外读取。构建、校验和设备状态分别使用：
+
+```sh
+./scripts/build-release.sh
+./scripts/verify-release.sh
+./scripts/verify-device.sh
+```
+
+版本化交付物位于 `artifacts/v<version>/`。签名密钥、口令、token、`local.properties` 和构建目录不得进入 Git。
+
+## 文档导航
+
+- [产品与技术设计](docs/hermitapp-product-technical-design.md)
+- [WebApp 编写指南](docs/webapp-authoring.md)
+- [隐私与数据边界](docs/privacy-and-data.md)
+- [实体设备验收清单](docs/validation/physical-device-checklist.md)
+- [开发计划](plans/hermitapp-v1-development-plan.md)
+- [执行记录](plans/hermitapp-v1-execution-log.md)

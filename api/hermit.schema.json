@@ -1,21 +1,34 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://hermit.invalid/schema/hermit-v1.json",
+  "$id": "https://hermit.invalid/schema/hermit-v2.json",
   "title": "Hermit happ package manifest",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema"],
+  "required": ["schema", "happId", "name", "version"],
   "properties": {
-    "schema": { "const": 1 },
+    "schema": { "const": 2 },
+    "happId": { "type": "string", "minLength": 3, "maxLength": 160, "pattern": "^[a-z][a-z0-9]*(?:\\.[a-z][a-z0-9]*)+$" },
     "name": { "type": "string", "minLength": 1, "maxLength": 80 },
-    "entry": { "$ref": "#/$defs/path" },
-    "routing": { "enum": ["hash", "history"] },
     "version": {
       "type": "object",
       "additionalProperties": false,
+      "required": ["code", "name"],
       "properties": {
-        "code": { "type": "integer", "minimum": 0 },
-        "name": { "type": "string", "maxLength": 80 }
+        "code": { "type": "integer", "minimum": 1 },
+        "name": { "type": "string", "minLength": 1, "maxLength": 80 }
+      }
+    },
+    "entry": { "$ref": "#/$defs/path" },
+    "routing": { "enum": ["hash", "history"] },
+    "icon": { "$ref": "#/$defs/path" },
+    "liveUrl": { "$ref": "#/$defs/httpUrl" },
+    "updateUrl": { "$ref": "#/$defs/httpUrl" },
+    "display": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "orientation": { "enum": ["unspecified", "portrait", "landscape"] },
+        "keyboard": { "enum": ["resize", "overlay"] }
       }
     }
   },
@@ -25,6 +38,7 @@
       "minLength": 1,
       "maxLength": 512,
       "pattern": "^(?!/)(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!__hermit/)[^\\\\\\u0000]+$"
-    }
+    },
+    "httpUrl": { "type": "string", "maxLength": 4096, "pattern": "^https?://[^\\s]+$" }
   }
 }

@@ -9,12 +9,18 @@
     "createdAt": { "type": "integer", "minimum": 0 },
     "app": {
       "type": "object",
+      "additionalProperties": false,
       "required": ["name", "source", "runtimeMode", "liveUrl", "sourceAdapter", "sourceSpec"],
       "properties": {
         "name": { "type": "string", "minLength": 1, "maxLength": 80 },
         "source": { "enum": ["online", "local"] },
         "runtimeMode": { "enum": ["local", "live"] },
         "liveUrl": { "type": ["string", "null"] },
+                "happId": { "type": ["string", "null"] },
+        "updateUrl": { "type": ["string", "null"] },
+        "downloadUrl": { "type": ["string", "null"] },
+        "customIconDataUrl": { "type": ["string", "null"], "pattern": "^data:image/png;base64," },
+        "allowCrossOriginNetwork": { "type": "boolean" },
         "sourceAdapter": { "type": "string" },
         "sourceSpec": { "type": "object" }
       }

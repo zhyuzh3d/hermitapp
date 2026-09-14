@@ -16,6 +16,7 @@ class RuntimeSession(
     val release: CodeRelease?,
     val origin: String,
     val profileName: String,
+    @Volatile var devRevision: Long? = null,
 ) {
     val sessionId: String = UUID.randomUUID().toString()
     val appId: String = instance?.appId ?: STORE_APP_ID

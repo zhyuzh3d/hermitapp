@@ -2,6 +2,7 @@ package io.github.zhyuzh3d.hermit.bridge
 
 import android.net.Uri
 import android.annotation.SuppressLint
+import android.util.Log
 import android.webkit.WebView
 import androidx.webkit.JavaScriptReplyProxy
 import androidx.webkit.WebViewCompat
@@ -182,6 +183,7 @@ class BridgeController(
                 }
             } catch (e: Throwable) {
                 if (e is CancellationException) return@launch
+                Log.e(TAG, "Bridge request failed: $method", e)
                 val error = e as? HermitException
                 if (session.alive && replyProxy === activeProxy && documentId == activeDocumentId && requestEpoch == epoch) {
                     replyError(replyProxy, id, error?.code ?: ErrorCodes.INTERNAL, error?.message ?: "内部错误", error?.retryable ?: false)
@@ -234,6 +236,7 @@ class BridgeController(
 
     companion object {
         private const val TRANSPORT_NAME = "__hermitTransportV1"
+        private const val TAG = "HermitBridge"
         private const val MAX_MESSAGE_BYTES = 256 * 1024
         private const val MAX_IN_FLIGHT = 16
         private const val MAX_JSON_DEPTH = 16
