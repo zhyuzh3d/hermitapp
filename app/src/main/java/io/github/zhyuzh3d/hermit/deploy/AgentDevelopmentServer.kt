@@ -420,7 +420,7 @@ class AgentDevelopmentServer(
                         if (ui.optString("state") == "not-visible") operation?.let(::discardRenderOperation)
                         ui.put("renderOperationId", operation?.id ?: JSONObject.NULL)
                     }
-                    "hermit_reload_shell" -> ui("reload-shell", JSONObject(), authorization)
+                    "hermit_reload_shell" -> ui("reload-shell", args, authorization)
                     "hermit_wait_dev_render" -> waitForRender(args.getString("operationId"), args.optLong("timeoutMs", 5000))
                     "hermit_get_dev_diagnostics" -> diagnostics(appId!!)
                     "hermit_build_dev_package" -> guardedValue(authorization) {

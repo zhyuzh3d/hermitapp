@@ -62,6 +62,7 @@ test("agent catalog, guide snapshots and shared-password authority stay aligned"
   assert.equal(new Set(tools.map(tool => tool.name)).size, 28);
   assert.deepEqual(tools.find(tool => tool.name === "hermit_get_guide").inputSchema.properties, {});
   assert.deepEqual(tools.find(tool => tool.name === "hermit_reload_shell").inputSchema.properties.runtimeMode.enum, ["current", "online", "local"]);
+  assert.match(server, /"hermit_reload_shell"\s*->\s*ui\("reload-shell",\s*args,\s*authorization\)/);
   for (const tool of tools) {
     const dispatch = new RegExp(`(?:"[^"]+"\\s*,\\s*)*"${tool.name}"(?:\\s*,\\s*"[^"]+")*\\s*->`);
     assert.match(server, dispatch);
