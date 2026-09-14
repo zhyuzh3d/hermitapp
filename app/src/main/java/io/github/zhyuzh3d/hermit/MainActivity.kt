@@ -287,6 +287,13 @@ class MainActivity : ComponentActivity(), BridgeHost {
                         JSONObject().put("state", "reloading").put("appId", appId)
                     } else JSONObject().put("state", "not-visible").put("appId", appId)
                 }
+                "reload-shell" -> {
+                    if (visibleAppId == null && session?.role == RuntimeRole.STORE) {
+                        webView?.settings?.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
+                        webView?.reload()
+                        JSONObject().put("state", "reloading").put("runningMode", storeRunningMode)
+                    } else JSONObject().put("state", "not-visible").put("runningMode", storeRunningMode)
+                }
                 "refresh" -> refreshDevRuntime(args)
                 "switch" -> {
                     if (visibleAppId == appId && session?.role == RuntimeRole.WEB_APP) {

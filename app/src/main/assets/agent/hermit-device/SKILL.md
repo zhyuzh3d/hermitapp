@@ -22,6 +22,8 @@ Hermit must remain foreground. Running a happ inside Hermit counts. Backgroundin
 
 List apps and select by `appId`; display names are not unique. HermitUI is intentionally absent as a writable target and its reserved identities are rejected. Do not try to modify the management UI through this service.
 
+Official HermitWeb files are published through their own website deployment path. When HermitUI is configured for live access and is currently visible, `hermit_reload_shell` reloads that page from its configured runtime. This refresh-only operation does not expose HermitUI files or turn it into a development workspace.
+
 For an existing happ, call `hermit_enter_dev_mode` before changing files. This creates its single development workspace on first use and makes future launches run that workspace. Data, WebView identity and grants remain attached to the existing `appId`. Leaving dev mode switches launches back to the immutable stable release but preserves the development workspace.
 
 For a new happ, call `hermit_create_dev_app` with a stable reverse-domain `happId`. It installs a minimal valid package, creates the one dev workspace and enters dev mode. Source files are directly runnable HTML, CSS and JavaScript; no framework or build step is required. Finished static output from other tools is accepted under the same file contract.

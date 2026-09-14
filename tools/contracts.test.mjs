@@ -59,7 +59,7 @@ test("agent catalog, guide snapshots and shared-password authority stay aligned"
   const root = "app/src/main/assets/agent/";
   const tools = JSON.parse(fs.readFileSync(root + "tools.json", "utf8"));
   const server = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/deploy/AgentDevelopmentServer.kt", "utf8");
-  assert.equal(new Set(tools.map(tool => tool.name)).size, 27);
+  assert.equal(new Set(tools.map(tool => tool.name)).size, 28);
   for (const tool of tools) {
     const dispatch = new RegExp(`(?:"[^"]+"\\s*,\\s*)*"${tool.name}"(?:\\s*,\\s*"[^"]+")*\\s*->`);
     assert.match(server, dispatch);
@@ -183,6 +183,8 @@ test("official shell keeps live fallback support and explicit local refresh", ()
   assert.match(manager, /store\/manifest\.json/);
   assert.match(manager, /suspend fun activateOnline/);
   assert.match(activity, /officialShell\.activateOnline\(\)/);
+  assert.match(activity, /"reload-shell"/);
+  assert.match(fs.readFileSync("app/src/main/assets/agent/tools.json", "utf8"), /"name": "hermit_reload_shell"/);
   assert.doesNotMatch(html, /id="useOnlineShell"/);
 });
 

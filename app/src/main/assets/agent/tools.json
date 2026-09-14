@@ -612,6 +612,22 @@
     }
   },
   {
+    "name": "hermit_reload_shell",
+    "description": "Reload the currently visible HermitUI. This does not expose or modify protected HermitUI source files.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": false,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
     "name": "hermit_wait_dev_render",
     "description": "Wait for the APK-injected render acknowledgement for one revision.",
     "inputSchema": {
