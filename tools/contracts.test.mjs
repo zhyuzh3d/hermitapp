@@ -304,8 +304,12 @@ test("system capability adapters are discoverable, permission-gated and foregrou
   const tts = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/capability/TtsController.kt", "utf8");
   assert.match(speech, /SpeechRecognizer\.createSpeechRecognizer\(appContext, selection\.component\)/);
   assert.match(speech, /speech\.recognizeOnce/);
+  assert.match(speech, /RecognizerIntent\.ACTION_GET_LANGUAGE_DETAILS/);
+  assert.match(speech, /EXTRA_SUPPORTED_LANGUAGES/);
   assert.match(main, /"speech" -> speech\.availability\(\)\.optBoolean\("available"\)/);
+  assert.match(main, /"speech\.languages" -> speech\.languages\(\)/);
   assert.match(tts, /TextToSpeech\(appContext, \{ ready\.complete\(it\) \}, engineId\)/);
+  assert.match(tts, /availableLanguages/);
   assert.doesNotMatch(tts, /tts\.providerFallback/);
   assert.doesNotMatch(types, /providerManagedByUser|directServiceAvailable|recognitionActivityAvailable|\bengines\(\):/);
   assert.match(fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/capability/SensorController.kt", "utf8"), /MAX_RATE_HZ = 60\.0/);
