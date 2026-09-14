@@ -91,6 +91,7 @@ import okhttp3.HttpUrl.Companion.toHttpUrl
 import kotlinx.coroutines.CancellableContinuation
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -288,11 +289,17 @@ class MainActivity : ComponentActivity(), BridgeHost {
                     } else JSONObject().put("state", "not-visible").put("appId", appId)
                 }
                 "reload-shell" -> {
+                    val requestedMode = args.optString("runtimeMode", "current")
+                    val configuredMode = when (requestedMode) {
+                        "current" -> hermitApp.officialShell.mode()
+                        OfficialShellManager.Mode.ONLINE.value -> runBlocking { hermitApp.officialShell.activateOnline() }
+                        OfficialShellManager.Mode.LOCAL.value -> hermitApp.officialShell.setMode(OfficialShellManager.Mode.LOCAL.value)
+                        else -> throw HermitException(ErrorCodes.INVALID_ARGUMENT, "未知界面模式")
+                    }
                     if (visibleAppId == null && session?.role == RuntimeRole.STORE) {
-                        webView?.settings?.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
-                        webView?.reload()
-                        JSONObject().put("state", "reloading").put("runningMode", storeRunningMode)
-                    } else JSONObject().put("state", "not-visible").put("runningMode", storeRunningMode)
+                        root.post { if (visibleAppId == null && session?.role == RuntimeRole.STORE) showTarget(null, false) }
+                        JSONObject().put("state", "reloading").put("configuredMode", configuredMode.value)
+                    } else JSONObject().put("state", "not-visible").put("configuredMode", configuredMode.value)
                 }
                 "refresh" -> refreshDevRuntime(args)
                 "switch" -> {

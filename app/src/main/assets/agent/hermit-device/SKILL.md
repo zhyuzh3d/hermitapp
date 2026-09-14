@@ -22,7 +22,7 @@ Hermit must remain foreground. Running a happ inside Hermit counts. Backgroundin
 
 List apps and select by `appId`; display names are not unique. HermitUI is intentionally absent as a writable target and its reserved identities are rejected. Do not try to modify the management UI through this service.
 
-Official HermitWeb files are published through their own website deployment path. When HermitUI is configured for live access and is currently visible, `hermit_reload_shell` reloads that page from its configured runtime. This refresh-only operation does not expose HermitUI files or turn it into a development workspace.
+Official HermitWeb files are published through their own website deployment path. When HermitUI is currently visible, call `hermit_reload_shell` with `runtimeMode: "online"` to select the official live page and reload it, or omit the mode to retain the current selection. The online choice persists across ordinary process restarts; APK replacement intentionally restores the embedded UI so a broken website cannot prevent recovery. This refresh-only operation does not expose HermitUI files or turn it into a development workspace.
 
 For an existing happ, call `hermit_enter_dev_mode` before changing files. This creates its single development workspace on first use and makes future launches run that workspace. Data, WebView identity and grants remain attached to the existing `appId`. Leaving dev mode switches launches back to the immutable stable release but preserves the development workspace.
 

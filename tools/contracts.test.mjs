@@ -185,6 +185,10 @@ test("official shell keeps live fallback support and explicit local refresh", ()
   assert.match(activity, /officialShell\.activateOnline\(\)/);
   assert.match(activity, /"reload-shell"/);
   assert.match(fs.readFileSync("app/src/main/assets/agent/tools.json", "utf8"), /"name": "hermit_reload_shell"/);
+  assert.match(activity, /"current" -> hermitApp\.officialShell\.mode\(\)/);
+  const application = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/HermitApplication.kt", "utf8");
+  assert.match(application, /if \(replaced\) officialShell\.resetToEmbedded\(\)/);
+  assert.doesNotMatch(application, /installState\.edit[\s\S]{0,160}officialShell\.setMode/);
   assert.doesNotMatch(html, /id="useOnlineShell"/);
 });
 

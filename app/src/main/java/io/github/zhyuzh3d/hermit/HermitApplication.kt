@@ -51,7 +51,6 @@ class HermitApplication : Application(), DefaultLifecycleObserver {
         val replaced = installState.getLong("lastUpdateTime", -1L).let { it != -1L && it != installedAt }
         if (replaced) officialShell.resetToEmbedded()
         installState.edit().putLong("lastUpdateTime", installedAt).apply()
-        officialShell.setMode(OfficialShellManager.Mode.LOCAL.value)
         registry.recoverInterruptedOperations()
         installer.recoverStorage()
         devWorkspaces.recoverStorage()

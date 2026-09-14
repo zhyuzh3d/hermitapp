@@ -121,7 +121,7 @@ Hermit 提供全应用“智能体开发模式”：在 HermitUI 的开发 Tab �
 
 访问根地址获取连接说明；`/.well-known/hermit-agent` 提供当前工具与指南版本，`/mcp` 是标准 Streamable HTTP 接口，`/skills/hermit-device/SKILL.md` 是随 APK 更新的动态指南。智能体每次开发先获取当前指南，不把密码写入页面、Skill、日志或仓库。Skill 安装和 MCP 注册由客户端执行，不能承诺所有智能体软件收到地址就自动完成注册；服务同时提供无需第三方 Python 库的 HTTP/stdio 助手。
 
-HermitUI 仍不是可写开发目标。官方 HermitWeb 通过网站发布链路更新后，如果 HermitUI 当前可见，智能体可以调用 `hermit_reload_shell` 让它从已配置的本地或实时地址重新加载；该操作只刷新页面，不读取或修改 HermitUI 文件。
+HermitUI 仍不是可写开发目标。官方 HermitWeb 通过网站发布链路更新后，如果 HermitUI 当前可见，智能体可以调用 `hermit_reload_shell` 让它从已配置的地址重新加载；传入 `runtimeMode: "online"` 可选择官方实时页面，普通进程重启保留该选择，APK 替换则按恢复机制回到内置 UI。该操作只刷新页面，不读取或修改 HermitUI 文件。
 
 每个普通 happ 只有一份可变开发工作副本。智能体必须先让目标进入开发模式，之后才能按 `expectedDevRevision` 创建、覆盖、移动、重命名或删除任意文件；正式 release 在发布前始终不变。常规保存只传变化文件并原子切换清单，CSS 单独变化时热替换样式，其他变化在同一 WebView 中刷新当前路径。返回 `renderOperationId` 时可等待页面就绪确认，并读取有界的控制台、HTTP 和页面错误诊断。HermitUI 不出现在可写目标中，保留身份也会被 Native 拒绝。
 

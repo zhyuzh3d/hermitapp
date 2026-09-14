@@ -4,7 +4,17 @@
     "description": "Return current device development guidance and version identifiers.",
     "inputSchema": {
       "type": "object",
-      "properties": {},
+      "properties": {
+        "runtimeMode": {
+          "type": "string",
+          "enum": [
+            "current",
+            "online",
+            "local"
+          ],
+          "description": "Keep the configured mode, or explicitly select the official online/local HermitUI runtime before reloading."
+        }
+      },
       "required": [],
       "additionalProperties": false
     },
