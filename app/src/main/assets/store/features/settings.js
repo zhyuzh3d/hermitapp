@@ -4,16 +4,40 @@
   const { $, $$, state, host } = H;
   const { say, busy, bind, open, close, confirmAction, selected } = H.ui;
   const copy = (text, label) => H.copy(text, label);
+  const SETTINGS_TABS = ["interface", "tts", "speech", "system"];
+  function showSettingsTab(value) {
+    const active = SETTINGS_TABS.includes(value) ? value : "interface";
+    state.settingsTab = active;
+    $$('[data-settings-tab]').forEach(button => {
+      const selected = button.dataset.settingsTab === active;
+      button.classList.toggle("selected", selected);
+      button.setAttribute("aria-selected", String(selected));
+      button.tabIndex = selected ? 0 : -1;
+    });
+    $$('[data-settings-pane]').forEach(pane => pane.classList.toggle("hidden", pane.dataset.settingsPane !== active));
+  }
+  $$('[data-settings-tab]').forEach(button => { button.onclick = () => showSettingsTab(button.dataset.settingsTab); });
+  showSettingsTab(state.settingsTab);
   let theme = "system";
+  const systemDark = matchMedia("(prefers-color-scheme: dark)");
   try { theme = localStorage.getItem("hermit.theme") || "system"; } catch (_) {}
+  function resolvedTheme() { return theme === "system" ? (systemDark.matches ? "dark" : "light") : theme; }
+  function reportTheme() {
+    host.reportTheme(resolvedTheme()).catch(() => {});
+  }
   function applyTheme(value) {
     theme = ["system", "light", "dark"].includes(value) ? value : "system";
     if (theme === "system") delete document.documentElement.dataset.theme;
     else document.documentElement.dataset.theme = theme;
     selected("#themeChoices", "themeChoice", theme);
     try { localStorage.setItem("hermit.theme", theme); } catch (_) {}
+    reportTheme();
   }
   applyTheme(theme);
+  addEventListener("hermitready", reportTheme);
+  const systemThemeChanged = () => { if (theme === "system") reportTheme(); };
+  if (systemDark.addEventListener) systemDark.addEventListener("change", systemThemeChanged);
+  else systemDark.addListener(systemThemeChanged);
   $$("[data-theme-choice]").forEach(button => { button.onclick = () => applyTheme(button.dataset.themeChoice); });
 
   async function openLicenses() { const value = await host.call("licenses.info", {}); $("#licensesOutput").textContent = value.text; open("#licensesPanel"); }
@@ -122,5 +146,5 @@
     const results = await Promise.allSettled([loadAbout(), loadVoiceSettings(true)]);
     if (results[1].status === "rejected") setStatus("#speechCapabilityStatus", (results[1].reason && results[1].reason.message) || "语音能力检测失败", "error");
   }
-  H.features.settings = { loadAbout, loadVoiceSettings, load, openLicenses, openDiagnostics };
+  H.features.settings = { loadAbout, loadVoiceSettings, load, openLicenses, openDiagnostics, showSettingsTab };
 })();

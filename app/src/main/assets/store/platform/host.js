@@ -14,6 +14,10 @@
     }
   }
   H.host = { call, ready: () => !!(window.hermit && window.hermit.isReady),
+    reportTheme: theme => {
+      if (!window.hermit || !window.hermit.isReady) return Promise.resolve();
+      return window.hermit.call("appearance.reportTheme", { theme });
+    },
     copy: text => {
       if (!window.hermit || !window.hermit.isReady) return Promise.reject(new Error("请在 HermitApp 中复制内容。"));
       return window.hermit.call("clipboard.write", { text, label: "Hermit" });

@@ -189,7 +189,7 @@ test("official shell keeps live fallback support and explicit local refresh", ()
   const bridge = fs.readFileSync("app/src/main/assets/bridge/hermit-v1.js", "utf8");
   const html = fs.readFileSync("app/src/main/assets/store/index.html", "utf8");
   const script = shellSources(".js");
-  assert.match(manager, /OFFICIAL_ORIGIN = "https:\/\/hermit\.10knet\.com"/);
+  assert.match(manager, /OFFICIAL_ORIGIN = "https:\/\/hermit\.airen\.life"/);
   assert.match(manager, /ONLINE_URL = "\$OFFICIAL_ORIGIN\/shell\/index\.html"/);
   assert.match(manager, /Mode\.ONLINE/);
   assert.match(activity, /RuntimeRole\.STORE/);

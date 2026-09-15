@@ -229,8 +229,8 @@ class OfficialShellManager(private val context: Context) {
     }
 
     companion object {
-        const val OFFICIAL_ORIGIN = "https://hermit.10knet.com"
-        const val OFFICIAL_HOST = "hermit.10knet.com"
+        const val OFFICIAL_ORIGIN = "https://hermit.airen.life"
+        const val OFFICIAL_HOST = "hermit.airen.life"
         const val ONLINE_URL = "$OFFICIAL_ORIGIN/shell/index.html"
         const val MANIFEST_URL = "$OFFICIAL_ORIGIN/shell/manifest.json"
         private const val KEY_MODE = "mode"

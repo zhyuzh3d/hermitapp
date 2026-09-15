@@ -26,6 +26,8 @@
       value.query = $("#searchIcons").value;
       value.style = state.iconStyle;
       value.limit = state.iconLimit;
+    } else if (view === "settings") {
+      value.settingsTab = state.settingsTab;
     }
     cachedViewState.views[view] = value;
     cachedViewState.currentView = view;
@@ -47,6 +49,7 @@
         item.style = ["all", "solid", "regular", "brands"].includes(source.style) ? source.style : "all";
         item.limit = Number.isInteger(source.limit) ? Math.max(60, Math.min(source.limit, 600)) : 60;
       }
+      if (view === "settings") item.settingsTab = ["interface", "tts", "speech", "system"].includes(source.settingsTab) ? source.settingsTab : "interface";
       restored[view] = item;
     }
     cachedViewState.views = restored;
@@ -63,6 +66,9 @@
       state.iconStyle = ["all", "solid", "regular", "brands"].includes(value.style) ? value.style : "all";
       state.iconLimit = Number.isInteger(value.limit) && value.limit >= 60 ? Math.min(value.limit, 600) : 60;
       selected("#iconFilters", "style", state.iconStyle);
+    } else if (view === "settings") {
+      state.settingsTab = ["interface", "tts", "speech", "system"].includes(value.settingsTab) ? value.settingsTab : "interface";
+      if (H.features.settings) H.features.settings.showSettingsTab(state.settingsTab);
     }
   }
   function restoreViewScroll(view, epoch) {
