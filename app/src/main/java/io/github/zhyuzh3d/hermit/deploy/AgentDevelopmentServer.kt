@@ -25,7 +25,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Semaphore
 
-/** A foreground, explicitly enabled developer control plane, separate from page RPC authority. */
+/** An explicitly enabled, process-scoped developer control plane, separate from page RPC authority. */
 class AgentDevelopmentServer(
     private val context: Context,
     private val registry: AppRegistry,
@@ -47,10 +47,15 @@ class AgentDevelopmentServer(
     private val devDiagnostics = ConcurrentHashMap<String, ArrayDeque<JSONObject>>()
     @Volatile var lastStopReason = "Not started"
         private set
-    private var expiry: Job? = null
+    private var monitor: Job? = null
+    @Volatile private var networkAvailable = false
     @Volatile private var stateHandler: ((Boolean) -> Unit)? = null
-    fun setStateHandler(handler: ((Boolean) -> Unit)?) { stateHandler = handler; handler?.invoke(active != null) }
+    fun setStateHandler(handler: ((Boolean) -> Unit)?) { stateHandler = handler; handler?.invoke(enabled()) }
     private val preferences = context.getSharedPreferences("agent-development", Context.MODE_PRIVATE)
+
+    private fun enabled() = preferences.getBoolean("enabled", false)
+    private fun configuredMode() = preferences.getString("mode", "lan").takeIf { it == "usb" } ?: "lan"
+    private fun configuredPort() = preferences.getInt("port", DEFAULT_PORT).takeIf { it in 0..65535 } ?: DEFAULT_PORT
 
     @Synchronized fun passwordForUi(): String {
         val saved = preferences.getString("password", null)
@@ -94,7 +99,7 @@ class AgentDevelopmentServer(
                 .put("time", System.currentTimeMillis()))
         }
     }
-    fun addresses(): List<String> {
+    fun addresses(): List<String> = runCatching {
         val networks = context.getSystemService(ConnectivityManager::class.java)
         val interfaces = networks.allNetworks.mapNotNull { network ->
             val capabilities = networks.getNetworkCapabilities(network) ?: return@mapNotNull null
@@ -102,13 +107,19 @@ class AgentDevelopmentServer(
             name to (capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) || capabilities.hasTransport(NetworkCapabilities.TRANSPORT_ETHERNET))
         }
         val lan = interfaces.filter { it.second }.map { it.first }.toSet()
-        val excluded = interfaces.filter { !it.second }.map { it.first }.toSet()
-        return NetworkInterface.getNetworkInterfaces().toList()
-            .filter { it.isUp && !it.isLoopback && !it.isPointToPoint && it.name !in excluded }
+        val hotspotPrefixes = listOf("wlan", "swlan", "ap", "eth", "en", "rndis")
+        val blockedPrefixes = listOf("rmnet", "ccmni", "pdp", "wwan", "tun", "dummy")
+        NetworkInterface.getNetworkInterfaces().toList()
+            .filter { network ->
+                val name = network.name.lowercase()
+                network.isUp && !network.isLoopback && !network.isPointToPoint &&
+                    blockedPrefixes.none(name::startsWith) &&
+                    (network.name in lan || hotspotPrefixes.any(name::startsWith))
+            }
             .sortedBy { if (it.name in lan) 0 else 1 }
             .flatMap { it.inetAddresses.toList() }.filterIsInstance<Inet4Address>()
             .filter { it.isSiteLocalAddress && !it.isLoopbackAddress }.mapNotNull { it.hostAddress }.distinct()
-    }
+    }.getOrDefault(emptyList())
 
     @Synchronized fun start(bindAddress: String? = null, port: Int = 8766): JSONObject {
         val host = bindAddress ?: addresses().firstOrNull() ?: throw IllegalStateException("没有可用的局域网 IPv4 地址，请连接 Wi-Fi")
@@ -116,22 +127,124 @@ class AgentDevelopmentServer(
         passwordForUi()
         stop("Replaced")
         val bindHost = if (host == "127.0.0.1") host else "0.0.0.0"
-        val endpoint = Endpoint(bindHost, host, port)
+        val endpoint = Endpoint(if (host == "127.0.0.1") "usb" else "lan", bindHost, host, port)
         try { endpoint.start(15_000, false); active = endpoint } catch (error: Exception) { endpoint.stop(); throw error }
+        networkAvailable = true
         stateHandler?.invoke(true)
-        expiry = scope.launch {
-            while (isActive && active === endpoint) {
-                delay(15_000)
-                if (SystemClock.elapsedRealtime() - endpoint.lastAccess > IDLE_MS) stop("空闲 30 分钟，开发连接已关闭")
-            }
-        }
         return status()
     }
 
+    @Synchronized fun enable(mode: String, bindAddress: String? = null, port: Int = DEFAULT_PORT): JSONObject {
+        require(mode == "lan" || mode == "usb") { "Unsupported developer connection mode" }
+        check(preferences.edit().putBoolean("enabled", true).putString("mode", mode).putInt("port", port).commit()) {
+            "Unable to save developer service setting"
+        }
+        reconcileSafelyLocked("开发模式已开启", bindAddress)
+        ensureMonitorLocked()
+        stateHandler?.invoke(true)
+        return status()
+    }
+
+    fun restoreIfEnabled() {
+        synchronized(this) {
+            if (!enabled()) return
+            reconcileSafelyLocked("应用已重新启动")
+            ensureMonitorLocked()
+            stateHandler?.invoke(true)
+        }
+    }
+
+    @Synchronized fun refreshNetwork(): JSONObject {
+        if (enabled()) reconcileSafelyLocked("已刷新开发服务地址")
+        return status()
+    }
+
+    @Synchronized fun disable(reason: String): JSONObject {
+        check(preferences.edit().putBoolean("enabled", false).commit()) { "Unable to save developer service setting" }
+        return stop(reason)
+    }
+
+    private fun ensureMonitorLocked() {
+        if (monitor?.isActive == true) return
+        monitor = scope.launch {
+            while (isActive) {
+                delay(NETWORK_MONITOR_MS)
+                synchronized(this@AgentDevelopmentServer) {
+                    if (!enabled()) return@launch
+                    reconcileSafelyLocked("设备网络已变化")
+                }
+            }
+        }
+    }
+
+    private fun reconcileSafelyLocked(reason: String, requestedAddress: String? = null) {
+        try { reconcileLocked(reason, requestedAddress) }
+        catch (error: Exception) {
+            networkAvailable = false
+            lastStopReason = "开发模式保持开启，服务恢复失败：${error.message ?: "端口不可用"}"
+            recordEndpointObservation(null, false, lastStopReason)
+        }
+    }
+
+    private fun reconcileLocked(reason: String, requestedAddress: String? = null) {
+        val mode = configuredMode()
+        val currentAddresses = if (mode == "lan") addresses() else emptyList()
+        val host = if (mode == "usb") "127.0.0.1" else requestedAddress?.takeIf { it in currentAddresses } ?: currentAddresses.firstOrNull()
+        var endpoint = active
+        if (endpoint == null || endpoint.mode != mode) {
+            endpoint?.stop()
+            endpoint = startPersistentEndpointLocked(mode, host, configuredPort())
+        }
+        val available = mode == "usb" || host != null
+        val advertisedHost = if (available) host!! else "127.0.0.1"
+        endpoint.updateAdvertisedHost(advertisedHost)
+        networkAvailable = available
+        lastStopReason = if (available) "Running" else "开发模式保持开启，等待 Wi-Fi 或手机热点"
+        recordEndpointObservation(if (available) endpoint.address else null, available, reason)
+    }
+
+    private fun startPersistentEndpointLocked(mode: String, host: String?, port: Int): Endpoint {
+        val bindHost = if (mode == "usb") "127.0.0.1" else "0.0.0.0"
+        val advertisedHost = host ?: "127.0.0.1"
+        fun bind(value: Int): Endpoint {
+            val endpoint = Endpoint(mode, bindHost, advertisedHost, value)
+            try { endpoint.start(15_000, false) } catch (error: Exception) { endpoint.stop(); throw error }
+            return endpoint
+        }
+        val endpoint = try { bind(port) } catch (error: Exception) {
+            if (port == 0) throw error
+            bind(0)
+        }
+        active = endpoint
+        return endpoint
+    }
+
+    private fun recordEndpointObservation(address: String?, available: Boolean, reason: String) {
+        val previousAddress = preferences.getString("observedAddress", null)
+        val lastUsableAddress = preferences.getString("lastAddress", null)
+        val previousAvailable = preferences.getBoolean("lastAvailable", false)
+        val firstObservation = !preferences.contains("lastAvailable") && previousAddress == null && lastUsableAddress == null
+        val changed = !firstObservation && (previousAddress != address || previousAvailable != available)
+        val editor = preferences.edit().putBoolean("lastAvailable", available)
+        if (address == null) editor.remove("observedAddress")
+        else editor.putString("observedAddress", address).putString("lastAddress", address)
+        if (changed) {
+            val revision = preferences.getLong("changeRevision", 0L) + 1L
+            editor.putLong("changeRevision", revision)
+                .putString("changePreviousAddress", previousAddress ?: lastUsableAddress)
+                .putString("changeAddress", address)
+                .putBoolean("changeAvailable", available)
+                .putString("changeReason", reason)
+                .putLong("changeTime", System.currentTimeMillis())
+        }
+        editor.apply()
+    }
+
     @Synchronized fun stop(reason: String): JSONObject {
-        val previous = active; active = null; expiry?.cancel(); expiry = null
+        val previous = active; active = null; monitor?.cancel(); monitor = null
         previous?.stop()
-        stateHandler?.invoke(false)
+        networkAvailable = false
+        stateHandler?.invoke(enabled())
         renderOperations.values.forEach { if (!it.result.isCompleted) it.result.cancel() }
         renderOperations.clear()
         devDiagnostics.clear()
@@ -139,15 +252,29 @@ class AgentDevelopmentServer(
         return JSONObject().put("stopped", previous != null)
     }
 
-    fun status(): JSONObject {
-        val endpoint = active ?: return JSONObject().put("active", false).put("reason", lastStopReason).put("addresses", JSONArray(addresses())).put("password", passwordForUi())
-        return JSONObject().put("active", true).put("address", endpoint.address).put("mcpUrl", endpoint.address + "/mcp")
-            .put("serverVersion", BuildConfig.VERSION_NAME).put("runId", endpoint.runId)
-            .put("idleTimeoutSeconds", IDLE_MS / 1000).put("remainingSeconds", (IDLE_MS - (SystemClock.elapsedRealtime() - endpoint.lastAccess)).coerceAtLeast(0) / 1000)
-            .put("password", passwordForUi()).put("addresses", JSONArray(addresses()))
-            .put("usbAddress", "http://127.0.0.1:${endpoint.listeningPort}")
-            .put("usbCommand", "adb forward tcp:${endpoint.listeningPort} tcp:${endpoint.listeningPort}")
-            .put("events", JSONArray(synchronized(endpoint.events) { endpoint.events.toList() }))
+    @Synchronized fun status(): JSONObject {
+        val endpoint = active
+        val addresses = addresses()
+        val result = JSONObject().put("enabled", enabled()).put("active", endpoint != null)
+            .put("networkAvailable", networkAvailable).put("mode", configuredMode())
+            .put("persistent", true).put("reason", lastStopReason)
+            .put("password", passwordForUi()).put("addresses", JSONArray(addresses))
+            .put("monitorIntervalSeconds", NETWORK_MONITOR_MS / 1000)
+        if (endpoint != null) {
+            if (networkAvailable) result.put("address", endpoint.address).put("mcpUrl", endpoint.address + "/mcp")
+            result.put("serverVersion", BuildConfig.VERSION_NAME).put("runId", endpoint.runId)
+                .put("usbAddress", "http://127.0.0.1:${endpoint.listeningPort}")
+                .put("usbCommand", "adb forward tcp:${endpoint.listeningPort} tcp:${endpoint.listeningPort}")
+                .put("events", JSONArray(synchronized(endpoint.events) { endpoint.events.toList() }))
+        } else result.put("events", JSONArray())
+        val revision = preferences.getLong("changeRevision", 0L)
+        if (revision > 0) result.put("endpointChange", JSONObject().put("revision", revision)
+            .put("previousAddress", preferences.getString("changePreviousAddress", null))
+            .put("address", preferences.getString("changeAddress", null))
+            .put("available", preferences.getBoolean("changeAvailable", false))
+            .put("reason", preferences.getString("changeReason", "设备网络已变化"))
+            .put("time", preferences.getLong("changeTime", 0L)))
+        return result
     }
 
     private fun asset(path: String) = context.assets.open(path).bufferedReader().use { it.readText() }
@@ -162,9 +289,11 @@ class AgentDevelopmentServer(
 
     private class RpcError(val code: Int, override val message: String) : RuntimeException(message)
 
-    private inner class Endpoint(private val bindHost: String, private val advertisedHost: String, port: Int) : NanoHTTPD(bindHost, port) {
+    private inner class Endpoint(val mode: String, private val bindHost: String, advertisedHost: String, port: Int) : NanoHTTPD(bindHost, port) {
+        @Volatile private var advertisedHost = advertisedHost
         val runId: String = UUID.randomUUID().toString()
         val address get() = "http://$advertisedHost:$listeningPort"
+        fun updateAdvertisedHost(value: String) { advertisedHost = value }
         private val receipts = LinkedHashMap<String, Pair<String, JSONObject>>()
         val events = ArrayDeque<JSONObject>()
         private val writes = ConcurrentHashMap<String, Semaphore>()
@@ -260,7 +389,7 @@ class AgentDevelopmentServer(
             python3 hermit-agent.py --address $address client-config
             Select an ordinary happ and call hermit_enter_dev_mode before any write. HermitUI is protected and never exposed as a development target.
             No frontend build or framework support is needed. Author native HTML + JS + CSS; other tools' finished static output is accepted neutrally.
-            Keep Hermit foreground (its WebApps count). Stop/background/30 minutes idle closes the server; the password remains valid on restart.
+            The developer switch persists across app restarts. Wi-Fi changes update the advertised address without disabling developer mode; use the current address shown by Hermit.
         """.trimIndent()
 
         private fun serverInstructions() = "Authenticate with the password shown by HermitApp. Select an ordinary happ and call hermit_enter_dev_mode before writing. HermitUI is protected. Develop directly runnable HTML/JS/CSS without framework or build assumptions. Update only the single dev workspace with expectedDevRevision and a unique requestId; preserve app identity, business data and grants. Use hermit_sync_dev_changes for fast saves and hermit_wait_dev_render when render evidence is needed. The same endpoint and tools work from Windows, macOS and Linux. Server version ${BuildConfig.VERSION_NAME}; guidance $guidanceVersion."
@@ -679,7 +808,8 @@ class AgentDevelopmentServer(
         private const val MODERN_PROTOCOL = "2026-07-28"
         private val LEGACY_PROTOCOLS = listOf("2025-11-25", "2025-06-18", "2025-03-26")
         private val PROTOCOLS = listOf(MODERN_PROTOCOL) + LEGACY_PROTOCOLS
-        private const val IDLE_MS = 30L * 60 * 1000
+        private const val DEFAULT_PORT = 8766
+        private const val NETWORK_MONITOR_MS = 15_000L
         private const val MAX_RPC = 4L * 1024 * 1024
         private const val MAX_ZIP = 64L * 1024 * 1024
         private const val RENDER_TTL_MS = 2L * 60 * 1000

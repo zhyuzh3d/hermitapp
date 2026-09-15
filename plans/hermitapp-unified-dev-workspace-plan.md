@@ -187,7 +187,7 @@ HermitUI 继续由 OfficialShellManager 独立更新。正式 APK 被覆盖安�
 - LAN 是默认入口，服务覆盖所有普通 happ。
 - USB 是同一服务的备用入口，通过 ADB loopback forwarding 使用同一 MCP、工具目录、密码和 dev revision，不启动旧的单 happ协议。
 - LAN 和 USB 客户端并发写同一个 workspace 时，共用 revision CAS 和单写提交锁。
-- 停止服务、进入后台、进程退出、备份替换或空闲超时关闭所有 listener，但不删除开发工作副本或改变 `launchChannel`。
+- 用户关闭开发模式或切换到互斥的旧部署模式时关闭 listener，但不删除开发工作副本或改变 `launchChannel`。后台、锁屏、空闲、备份操作和 Wi-Fi 临时断开不清除持久开关；进程重新启动后恢复 listener。
 
 客户端助手复用 HTTP 连接和认证配置，MCP 初始化、guide、app metadata 与 dev revision 在 serverVersion/runId 不变时缓存；一次热更新不重复 discovery、tools/list、guide 或密码协商。Native 写入路径不执行网络请求、不生成正式 release、不压缩完整 ZIP，tree 指针提交后立即释放写锁，页面刷新在 UI 线程异步调度。不同 appId 的 blob 准备可并发，最终指针提交按 workspace 独立串行，不能用一个全局长耗时 ZIP锁阻塞所有 happ。
 

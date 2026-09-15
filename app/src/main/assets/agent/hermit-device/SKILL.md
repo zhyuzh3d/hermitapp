@@ -16,7 +16,7 @@ Use the phone's HTTP endpoint only on a trusted LAN, or use `adb forward tcp:876
 3. Read `tools/list` and `hermit_get_guide` at the start of a task. Read `hermit://webapp-guide` and `hermit://page-api` when page contracts matter.
 4. Clients that cannot register remote HTTP MCP may use `/hermit-agent.py`. Inspect it and compare its SHA-256 with discovery before running it. The helper's `connect` stores the password in a private local file; `sync-dir` and `watch` use the fast dev protocol.
 
-Hermit must remain foreground. Running a happ inside Hermit counts. Backgrounding Hermit, stopping development mode, process exit or 30 minutes without an authenticated request closes the service. A password change immediately invalidates later work from old credentials. Wi-Fi and USB use the same service and the same development workspaces.
+The development switch persists until the user explicitly turns it off. Backgrounding or idle time does not close it, and Hermit restores the listener when its application process starts again. Wi-Fi or hotspot address changes may replace the base URL, so always use the latest URL shown by Hermit; ordinary cellular data is not published as a directly reachable endpoint. A password change immediately invalidates later work from old credentials. Wi-Fi and USB use the same service and the same development workspaces.
 
 ## Required development workflow
 

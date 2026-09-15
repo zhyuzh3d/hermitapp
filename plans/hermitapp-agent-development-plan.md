@@ -12,7 +12,7 @@
 
 六位数字是可信 LAN 的便捷凭据，不是强认证；HTTP 可被同网窃听，不应公网暴露。错误密码按来源限速（60 秒内五次失败后返回 429），来源仅用于防暴力尝试，不绑定授权。Host/Origin 检查及请求/文件/并发限额继续执行。不能只撤销一台电脑；需要撤销时修改全局密码或停服，此限制是共享凭据的明确取舍。
 
-本版无需后台服务：Hermit 在前台（包括运行其中的页面应用）时保持开发连接与亮屏；切入后台、停止、进程退出或空闲超时即关闭。不会从后台强行弹出页面。系统权限与每个 WebApp 的能力授权仍由原授权系统处理，MCP 不授予摄像头/麦克风/定位权限，不开放任意 Android Shell、JS 执行、业务数据或登录态读取。
+开发模式使用持久化总开关：切入后台、锁屏、空闲或 Wi-Fi 临时断开都不会自动关闭，应用进程启动后恢复监听；只有用户明确关闭或切换到互斥的旧部署模式时停用。它仍是应用进程内服务，不通过前台常驻通知规避 Android 强制停止或进程回收。系统权限与每个 WebApp 的能力授权仍由原授权系统处理，MCP 不授予摄像头/麦克风/定位权限，不开放任意 Android Shell、JS 执行、业务数据或登录态读取。
 
 ## 统一接口
 
@@ -29,7 +29,7 @@
 1. 固化协议、工具描述、动态指南与连接入口，确保官方文档支持所选择的客户端接入方式。
 2. 实现单密码认证、MCP 路由、改密提交保护、安装/补丁/运行统一调度，保持原接口兼容。
 3. 完成原生 Store 控制面板、密码展示与修改、连接信息复制与停止；制作无第三方 Python 依赖的助手和轻量 Skill 引导。
-4. 在 Android instrumentation 中覆盖未认证/错误来源/共享密码/改密失效/限速/坏包/CAS/重试/后台停服，以及完整创建→更新→读取→打开→刷新链；用独立 MCP SDK 客户端验证协议互通。客户端脚本测试密码持久化、凭证文件权限、动态指南读取、上传与本地 Skill 安装，不改写无关配置。
+4. 在 Android instrumentation 中覆盖未认证/错误来源/共享密码/改密失效/限速/坏包/CAS/重试/后台保持与进程重建恢复，以及完整创建→更新→读取→打开→刷新链；用独立 MCP SDK 客户端验证协议互通。客户端脚本测试密码持久化、凭证文件权限、动态指南读取、上传与本地 Skill 安装，不改写无关配置。
 5. 构建签名 1.2.0 APK，同签名覆盖安装目标手机；保存报告。真实 WorkBuddy 界面配置若未实际运行，明确记录为待用户客户端验收。
 
 参考：[MCP HTTP 传输](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)、[工具](https://modelcontextprotocol.io/specification/2025-11-25/server/tools)、[资源](https://modelcontextprotocol.io/specification/2025-11-25/server/resources)、[Codex MCP](https://developers.openai.com/codex/mcp/)、[Codex Skills](https://developers.openai.com/codex/skills/)。

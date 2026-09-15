@@ -1311,7 +1311,6 @@ class MainActivity : ComponentActivity(), BridgeHost {
             if (deployStatus.optBoolean("active") && deployStatus.optString("appId") == app.appId) {
                 hermitApp.developmentServer.stop("Backup exported")
             }
-            hermitApp.agentServer.stop("正在导出备份")
             backup.export(app.appId, uri).put("cancelled", false)
         }
         "host.backup.restore" -> {
@@ -1325,7 +1324,6 @@ class MainActivity : ComponentActivity(), BridgeHost {
             if (deployStatus.optBoolean("active") && deployStatus.optString("appId") == appId) {
                 hermitApp.developmentServer.stop("Data restored")
             }
-            hermitApp.agentServer.stop("正在替换应用数据")
             backup.restoreData(uri, appId).put("cancelled", false)
         }
         "host.apps.launch" -> {
@@ -1368,7 +1366,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
         "host.deploy.start" -> {
             val mode = params.optString("mode", "adb")
             if (mode == "lan" && !ensureLanPermission()) throw HermitException(ErrorCodes.OS_PERMISSION_DENIED, "Android 未授予局域网权限")
-            hermitApp.agentServer.stop("已切换到单应用部署")
+            hermitApp.agentServer.disable("已切换到单应用部署")
             hermitApp.developmentServer.start(params.optString("appId"), mode)
         }
         "host.deploy.stop" -> hermitApp.developmentServer.stop("Stopped by user")
@@ -1377,10 +1375,11 @@ class MainActivity : ComponentActivity(), BridgeHost {
             val usbOnly = params.optString("mode") == "usb"
             if (!usbOnly && !ensureLanPermission()) throw HermitException(ErrorCodes.OS_PERMISSION_DENIED, "Android 未授予局域网权限")
             hermitApp.developmentServer.stop("已切换到智能体开发模式")
-            hermitApp.agentServer.start(if (usbOnly) "127.0.0.1" else params.optString("address").takeIf { it.isNotBlank() })
+            hermitApp.agentServer.enable(if (usbOnly) "usb" else "lan", params.optString("address").takeIf { it.isNotBlank() })
         }
-        "host.agent.stop" -> hermitApp.agentServer.stop("由用户停止")
+        "host.agent.stop" -> hermitApp.agentServer.disable("由用户停止")
         "host.agent.status" -> hermitApp.agentServer.status()
+        "host.agent.refresh" -> hermitApp.agentServer.refreshNetwork()
         "host.agent.resetPassword" -> {
             hermitApp.developmentServer.stop("开发凭据已重置")
             hermitApp.agentServer.resetPassword(params.optString("password").takeIf { it.isNotBlank() })
@@ -2733,7 +2732,6 @@ class MainActivity : ComponentActivity(), BridgeHost {
 
     override fun onStop() {
         hermitApp.developmentServer.stop("Hermit entered background")
-        hermitApp.agentServer.stop("Hermit 已进入后台")
         session?.sessionId?.let(audio::cancelSession)
         location.cancelAll()
         sensors.cancelAll()

@@ -54,13 +54,13 @@ class HermitApplication : Application(), DefaultLifecycleObserver {
         registry.recoverInterruptedOperations()
         installer.recoverStorage()
         devWorkspaces.recoverStorage()
+        agentServer.restoreIfEnabled()
         notifications.start()
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
     }
 
     override fun onStop(owner: LifecycleOwner) {
         developmentServer.stop("Hermit entered background")
-        agentServer.stop("Hermit 已进入后台")
     }
 
     override fun onTerminate() {

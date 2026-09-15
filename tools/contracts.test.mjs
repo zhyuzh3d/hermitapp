@@ -72,9 +72,17 @@ test("agent catalog, guide snapshots and shared-password authority stay aligned"
     assert.equal(tool.inputSchema.additionalProperties, false);
   }
   assert.doesNotMatch(server, /class Pairing|class Client|pairUrl|phone-approved/);
+  assert.match(server, /putBoolean\("enabled", true\)/);
+  assert.match(server, /restoreIfEnabled/);
+  assert.match(server, /NETWORK_MONITOR_MS = 15_000L/);
+  assert.match(server, /blockedPrefixes = listOf\("rmnet", "ccmni", "pdp", "wwan", "tun", "dummy"\)/);
+  assert.doesNotMatch(server, /IDLE_MS|空闲 30 分钟，开发连接已关闭/);
   assert.match(server, /commitGuard = \{ guarded\(authorization/);
   assert.match(server, /guardedValue\(authorization\) \{\s*devWorkspaces\.apply/);
   const activity = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
+  assert.match(activity, /"host\.agent\.refresh" -> hermitApp\.agentServer\.refreshNetwork\(\)/);
+  const onStop = activity.match(/override fun onStop\(\) \{([\s\S]*?)super\.onStop\(\)/)?.[1] || "";
+  assert.doesNotMatch(onStop, /agentServer\.stop/);
   assert.match(activity, /page state only allows current running happ development copy|页面状态只允许读取当前运行的 happ 开发副本/);
   assert.match(activity, /refresh only allows scheduling current running happ development copy|刷新只允许调度当前运行的 happ 开发副本/);
   assert.match(activity, /val strategy = args\.optString\("strategy", RELOAD_IN_PLACE\)/);

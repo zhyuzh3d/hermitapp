@@ -36,12 +36,13 @@ class AgentDevelopmentTest {
         scenario = ActivityScenario.launch(Intent(app, MainActivity::class.java))
         scenario.onActivity { it.window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
         server = app.agentServer
+        server.disable("Test setup")
         base = server.start("127.0.0.1", 0).getString("address")
         password = server.passwordForUi()
     }
 
     @After fun finish() {
-        server.stop("Test complete")
+        server.disable("Test complete")
         scenario.close()
         app.registry.listInstances().filter { it.appId !in before }.forEach {
             app.devWorkspaces.delete(it.appId)
@@ -240,12 +241,20 @@ class AgentDevelopmentTest {
         assertEquals(release, app.registry.getInstance(id)!!.activeReleaseId)
     }
 
-    @Test fun enteringBackgroundClosesServerButPreservesPassword() {
+    @Test fun enabledServiceSurvivesBackgroundAndRestoresAfterProcessRestart() {
+        server.stop("Switch to persistent test")
+        base = server.enable("usb", port = 0).getString("address")
         scenario.moveToState(Lifecycle.State.RESUMED)
-        if (!server.status().getBoolean("active")) base = server.start("127.0.0.1", 0).getString("address")
         scenario.moveToState(Lifecycle.State.CREATED)
-        for (i in 0 until 30) { if (!server.status().getBoolean("active")) break; Thread.sleep(100) }
+        Thread.sleep(500)
+        assertTrue(server.status().getBoolean("enabled"))
+        assertTrue(server.status().getBoolean("active"))
+        assertTrue(password == server.passwordForUi())
+        server.stop("Simulated process termination")
+        assertTrue(server.status().getBoolean("enabled"))
         assertFalse(server.status().getBoolean("active"))
+        server.restoreIfEnabled()
+        assertTrue(server.status().getBoolean("active"))
         assertTrue(password == server.passwordForUi())
     }
 
