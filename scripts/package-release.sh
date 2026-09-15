@@ -2,7 +2,7 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-VERSION=${1:-1.10.10}
+VERSION=${1:-1.10.11}
 OUT=$ROOT/artifacts/v$VERSION
 SDK_DIR=${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}
 export JAVA_HOME=${JAVA_HOME:-/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home}

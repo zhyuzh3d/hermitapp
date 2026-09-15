@@ -2,7 +2,7 @@
 
 HermitApp 是一个面向 Android 的 happ 容器：它直接运行 HTML、CSS、JavaScript 页面，并为页面提供安装、版本、数据、文件、权限和系统能力。项目目标不是把网页重新包装成独立 APK，而是在一个开放、轻量、可离线工作的宿主中管理多个页面应用。
 
-当前正式版本为 `1.10.10`（versionCode `44`），包名为 `io.github.zhyuzh3d.hermit`，最低支持 Android 10 / API 29，compileSdk 与 targetSdk 为 37。系统语音识别语言目录通过 `speech.languages()` 从当前 Android 识别服务读取；系统 TTS 的可选语言和音色也来自当前引擎，不再声明未经运行时确认的候选。HermitUI 固定使用竖屏；其他 happ 仍可在 `hermit.json.display` 中独立声明竖屏、横屏或跟随设备，以及键盘布局策略。HermitUI 会在应用启动和恢复前台时读取 Android 固定快捷方式状态，使 happ 卡片图钉与桌面图标状态保持同步。开发服务可读取当前 HermitUI 的白名单界面快照并在原 WebView 中刷新，再调用固定函数恢复界面；普通 happ 只有当前运行 DEV 副本且 `appId` 精确匹配时才能读取快照、刷新和执行刷新后脚本。APK 替换会恢复内置 UI。
+当前正式版本为 `1.10.11`（versionCode `45`），包名为 `io.github.zhyuzh3d.hermit`，最低支持 Android 10 / API 29，compileSdk 与 targetSdk 为 37。系统语音识别语言目录通过 `speech.languages()` 从当前 Android 识别服务读取；系统 TTS 的可选语言和音色也来自当前引擎，不再声明未经运行时确认的候选。HermitUI 固定使用竖屏；其他 happ 仍可在 `hermit.json.display` 中独立声明竖屏、横屏或跟随设备，以及键盘布局策略。HermitUI 会在应用启动和恢复前台时读取 Android 固定快捷方式状态，使 happ 卡片图钉与桌面图标状态保持同步。开发服务可读取当前 HermitUI 的白名单界面快照并在原 WebView 中刷新，再调用固定函数恢复界面；普通 happ 只有当前运行 DEV 副本且 `appId` 精确匹配时才能读取快照、刷新和执行刷新后脚本。APK 替换会恢复内置 UI。MCP 初始化指令、动态 Skill 和连接入口统一要求智能体采用最小相关测试、增量同步和原位刷新，不把完整测试或视觉验收附加到每次迭代。
 
 Hermit 项目由两个同级独立仓库组成：
 
