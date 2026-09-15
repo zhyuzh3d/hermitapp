@@ -24,6 +24,7 @@ export interface HermitApi {
     capabilities(): Promise<{ capabilities: HermitCapability[] }>;
   };
   app: { info(): Promise<Record<string, unknown>>; reload(): Promise<{ reloading: true }>; ready(): Promise<{ recorded: true }>; checkUpdate(): Promise<{ canCheck: boolean }>; setRuntimeMode(params: { runtimeMode: "local" | "live" }): Promise<Record<string, unknown>> };
+  appearance: { reportTheme(params: { theme: "light" | "dark" }): Promise<{ theme: "light" | "dark"; applied: true }> };
   permissions: {
     status(params: { capability: HermitPermissionCapability; scope?: string }): Promise<Record<string, unknown>>;
     request(params: { capability: HermitPermissionCapability; scope?: string }): Promise<{ capability: string; scope: string; addressClass?: "public" | "private" | null; usable: true }>;

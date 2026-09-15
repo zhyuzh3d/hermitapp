@@ -122,6 +122,7 @@
     call: request,
     runtime: namespace("runtime"),
     app: namespace("app"),
+    appearance: namespace("appearance"),
     permissions: namespace("permissions"),
     data: namespace("data"),
     files: namespace("files"),

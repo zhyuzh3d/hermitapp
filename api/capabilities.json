@@ -1,10 +1,11 @@
 {
   "apiMajor": 1,
-  "apiMinor": 10,
+  "apiMinor": 11,
   "roles": ["store", "web_app"],
   "public": {
     "runtime": ["info", "capabilities"],
     "app": ["info", "reload", "ready", "checkUpdate", "setRuntimeMode"],
+    "appearance": ["reportTheme"],
     "permissions": ["status", "request"],
     "data": ["get", "put", "delete", "scan", "batch"],
     "files": ["import", "writeText", "readText", "list", "export", "delete", "share"],

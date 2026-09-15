@@ -29,6 +29,8 @@ test("bridge keeps the isolated transport and an explicit legacy fallback", () =
   const native = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/bridge/BridgeController.kt", "utf8");
   const legacy = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/bridge/LegacyBridgeController.kt", "utf8");
   const bootstrap = fs.readFileSync("app/src/main/assets/bridge/legacy-bootstrap.js", "utf8");
+  const activity = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
+  const devRuntime = activity.slice(activity.indexOf("val devRuntime"), activity.indexOf("val sessionSdk"));
   assert.match(bridge, /kind: "hello"/);
   assert.match(native, /addWebMessageListener/);
   assert.match(native, /isMainFrame/);
@@ -39,6 +41,8 @@ test("bridge keeps the isolated transport and an explicit legacy fallback", () =
   assert.match(legacy, /addJavascriptInterface/);
   assert.match(legacy, /weakly isolated/);
   assert.match(bootstrap, /__hermitLegacyNativeV1/);
+  assert.doesNotMatch(devRuntime, /\?\./, "the injected dev runtime must parse on supported legacy OEM WebViews");
+  assert.ok(devRuntime.includes(String.raw`replace(/^\//,'')`), "the dev CSS path regex must emit one escaped slash");
 });
 
 test("backup contract excludes ambient trust state", () => {
@@ -326,7 +330,8 @@ test("system capability adapters are discoverable, permission-gated and foregrou
   const main = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
   const bridge = fs.readFileSync("app/src/main/assets/bridge/hermit-v1.js", "utf8");
   const types = fs.readFileSync("sdk/hermit-api.d.ts", "utf8");
-  assert.equal(caps.apiMinor, 10);
+  assert.equal(caps.apiMinor, 11);
+  assert.deepEqual(caps.public.appearance, ["reportTheme"]);
   assert.deepEqual(caps.public.tts, ["availability", "preferences", "voices", "languageAvailability", "speak", "stop", "export"]);
   assert.deepEqual(caps.public.speech, ["availability", "preferences", "languages", "start", "recognizeOnce", "stop", "cancel"]);
   assert.deepEqual(caps.storeOnly["host.voice"], ["status", "ttsVoices", "configure", "testTts", "openSettings"]);
@@ -334,7 +339,7 @@ test("system capability adapters are discoverable, permission-gated and foregrou
   assert.deepEqual(caps.public.wifi, ["status", "scan", "requestNetwork", "releaseNetwork", "openSettings"]);
   assert.ok(caps.public.bluetooth.includes("subscribe"));
   assert.deepEqual(caps.public.infrared, ["status", "transmit"]);
-  for (const namespace of ["sensors", "wifi", "bluetooth", "infrared", "battery", "system"]) {
+  for (const namespace of ["appearance", "sensors", "wifi", "bluetooth", "infrared", "battery", "system"]) {
     assert.match(bridge, new RegExp(`${namespace}: namespace\\("${namespace}"\\)`));
     assert.match(types, new RegExp(`\\b${namespace}:`));
   }

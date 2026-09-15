@@ -88,6 +88,25 @@ Hermit 把每次安装展开为只读 release，更新先生成新 release 再�
 
 必须同时保留 `hermitready` 监听和即时 `isReady` 检查：现代 WebView 会在文档起始阶段提供 API，旧 WebView 的线上实时页面可能要等首次加载完成后才收到兼容注入。不要在脚本第一行无条件调用 `hermit`。网页 Cookie/WebStorage 使用共享资料空间并遵守同源规则；旧式桥接模式另外不能保证 iframe 级 Bridge 隔离。页面可通过 `hermit.runtime.info()` 的 `runtimeMode` 判断本地或实时运行，通过 `bridgeMode`、`siteDataPolicy` 和 `isolatedProfiles` 解释宿主兼容环境。happ 可以调用 `hermit.app.setRuntimeMode({ runtimeMode: "local" | "live" })` 切换自己的运行方式；宿主只接受当前实例已经具备的本地 release 或 `liveUrl`，切换结果写入 Registry 并重新加载当前实例。
 
+每个 happ 自己决定主题偏好、存储和切换逻辑，并在 Bridge 就绪后通过 `hermit.appearance.reportTheme({ theme: "light" | "dark" })` 向宿主汇报当前实际生效的主题。这里必须传已经解析完成的 `light` 或 `dark`，不能传 `system`、`auto` 或自定义颜色；如果 happ 跟随系统，应由 happ 自己监听 `prefers-color-scheme` 并在结果变化后再次汇报。HermitApp 不读取页面 DOM、CSS 或 localStorage，不推断主题，也不保存 happ 的主题规则。报告只对当前前台文档会话有效，导航、刷新或离开 happ 后自动失效；页面每次建立新会话都应重新汇报。宿主仅用它选择状态栏背景层级和系统图标明暗，happ 仍完整控制自己的页面视觉。
+
+```js
+const darkMedia = matchMedia("(prefers-color-scheme: dark)");
+function currentTheme() {
+  const saved = localStorage.getItem("theme") || "system";
+  return saved === "system" ? (darkMedia.matches ? "dark" : "light") : saved;
+}
+function reportTheme() {
+  if (window.hermit && hermit.isReady) {
+    hermit.appearance.reportTheme({ theme: currentTheme() }).catch(() => {});
+  }
+}
+addEventListener("hermitready", reportTheme);
+if (window.hermit && hermit.isReady) reportTheme();
+if (darkMedia.addEventListener) darkMedia.addEventListener("change", reportTheme);
+else darkMedia.addListener(reportTheme);
+```
+
 ## 完整离线 Font Awesome Free
 
 Hermit 1.1.0 随 APK 内置 Font Awesome Free 7.3.1，含实心、常规、品牌，共 2,883 个图标/样式组合及四个 WOFF2 字体文件；同名不同样式分别计数。Pro 不包含在内。官方资源按固定 npm 版本获取并提交到宿主仓库，页面作者不使用 npm。

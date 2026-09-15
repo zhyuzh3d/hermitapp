@@ -7,6 +7,7 @@ import android.app.AlarmManager
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -42,6 +43,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.core.view.setPadding
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.annotation.VisibleForTesting
 import androidx.lifecycle.lifecycleScope
@@ -167,6 +169,17 @@ class MainActivity : ComponentActivity(), BridgeHost {
     private var lastHapticAt = 0L
     private var keyboardOverlaysContent = false
     private var hasResumed = false
+    private enum class StatusBarStyle { DEFAULT, LIVE, DEV }
+    private enum class ReportedColorScheme { LIGHT, DARK }
+    private var statusBarStyle = StatusBarStyle.DEFAULT
+    private var reportedColorScheme: ReportedColorScheme? = null
+    private var statusBarInsetTop = 0
+    private val statusBarBackdrop by lazy {
+        View(this).apply {
+            isClickable = false
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+    }
 
     private val zipPicker = registerForActivityResult(ActivityResultContracts.GetContent()) { uri ->
         pendingZip?.let { continuation ->
@@ -267,15 +280,21 @@ class MainActivity : ComponentActivity(), BridgeHost {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         root = android.widget.FrameLayout(this)
+        root.clipToPadding = false
         setContentView(root)
         root.setBackgroundColor(ContextCompat.getColor(this, R.color.hermit_background))
         ViewCompat.setOnApplyWindowInsetsListener(root) { view, insets ->
             var types = WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout()
             if (!keyboardOverlaysContent) types = types or WindowInsetsCompat.Type.ime()
             val safe = insets.getInsets(types)
+            statusBarInsetTop = insets.getInsets(
+                WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.displayCutout()
+            ).top
             view.setPadding(safe.left, safe.top, safe.right, safe.bottom)
+            updateStatusBarBackdrop()
             WindowInsetsCompat.CONSUMED
         }
+        applyStatusBarStyle(StatusBarStyle.DEFAULT)
         hermitApp.developmentServer.setReloadHandler { appId ->
             if (visibleAppId != appId) false else {
                 root.post { if (visibleAppId == appId) showTarget(appId, launchedFromLibrary) }
@@ -680,6 +699,14 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 showNativeError("开发副本不可用", error.message ?: "开发工作副本无法读取。", true)
                 return
             } }
+        reportedColorScheme = null
+        applyStatusBarStyle(
+            when {
+                devWorkspace != null -> StatusBarStyle.DEV
+                instance?.runtimeMode == HappRuntimeMode.LIVE -> StatusBarStyle.LIVE
+                else -> StatusBarStyle.DEFAULT
+            }
+        )
         val currentSession = RuntimeSession(role, instance, release, origin, profileName, devWorkspace?.revision)
         release?.releaseId?.let(hermitApp.installer::acquireRelease)
         val documentStart = WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
@@ -702,11 +729,11 @@ class MainActivity : ComponentActivity(), BridgeHost {
         """.trimIndent()
         val devRuntime = if (devWorkspace == null) "" else """
             (()=>{
-              const revision=()=>Number(document.querySelector('meta[name="hermit-dev-revision"]')?.content||0);
-              const report=()=>requestAnimationFrame(()=>requestAnimationFrame(()=>window.hermit?.call('runtime.devReady',{revision:revision(),url:location.href}).catch(()=>{})));
+              const revision=()=>{const meta=document.querySelector('meta[name="hermit-dev-revision"]');return Number(meta?meta.content:0)};
+              const report=()=>requestAnimationFrame(()=>requestAnimationFrame(()=>{const api=window.hermit;if(api&&typeof api.call==='function')api.call('runtime.devReady',{revision:revision(),url:location.href}).catch(()=>{})}));
               addEventListener('DOMContentLoaded',report,{once:true});
               window.__hermitDevRefreshCss=async(paths,next)=>{
-                const wanted=new Set(paths.map(path=>String(path).replace(/^\\//,'')));
+                const wanted=new Set(paths.map(path=>String(path).replace(/^\//,'')));
                 const links=[...document.querySelectorAll('link[rel~="stylesheet"][href]')].filter(link=>{
                   try{const path=decodeURIComponent(new URL(link.href,location.href).pathname);return [...wanted].some(item=>path==='/' + item||path.endsWith('/' + item))}catch(_){return false}
                 });
@@ -779,6 +806,10 @@ class MainActivity : ComponentActivity(), BridgeHost {
         view.webViewClient = object : WebViewClient() {
             override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
                 controller.navigationStarted()
+                if (view != null && webView === view) {
+                    reportedColorScheme = null
+                    applyStatusBarStyle(statusBarStyle)
+                }
             }
             override fun onPageCommitVisible(view: WebView?, url: String?) {
                 if (release == null || gateway?.wasLocalMainFrame(url) == true) controller.navigationCommitted()
@@ -882,14 +913,8 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 setPadding(12, 8, 12, 8)
             }, android.widget.FrameLayout.LayoutParams(-1, -2, android.view.Gravity.TOP))
         }
-        if (devWorkspace != null) {
-            root.addView(View(this).apply {
-                setBackgroundColor(Color.rgb(41, 151, 255))
-                isClickable = false
-                importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            }, android.widget.FrameLayout.LayoutParams(-1, (3 * resources.displayMetrics.density).toInt().coerceAtLeast(3), android.view.Gravity.TOP))
-            view.contentDescription = "运行开发副本"
-        }
+        if (devWorkspace != null) view.contentDescription = "运行开发副本"
+        attachStatusBarBackdrop()
         val targetUrl = instance?.let { resolveAppRoute(it, route) } ?: if (onlineStore) OfficialShellManager.ONLINE_URL else STORE_URL
         if (onlineStore) view.loadUrl(targetUrl, mapOf("Cache-Control" to "no-cache", "Pragma" to "no-cache")) else view.loadUrl(targetUrl)
     }
@@ -897,6 +922,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
     @SuppressLint("RequiresFeature", "MissingOnRenderProcessGone")
     private fun showSupportBrowser() {
         destroyRuntime()
+        applyStatusBarStyle(StatusBarStyle.DEFAULT)
         applyDisplayPolicy(null, forcePortrait = true)
         val currentSession = RuntimeSession(RuntimeRole.SUPPORT, null, null, SUPPORT_ORIGIN, "hermit-shared")
         val view = WebView(this)
@@ -928,7 +954,47 @@ class MainActivity : ComponentActivity(), BridgeHost {
             override fun onGeolocationPermissionsShowPrompt(origin: String?, callback: GeolocationPermissions.Callback) = callback.invoke(origin, false, false)
         }
         webView = view; session = currentSession; bridge = null; visibleAppId = null; launchedFromLibrary = true
-        root.removeAllViews(); root.addView(view, android.widget.FrameLayout.LayoutParams(-1, -1)); view.loadUrl(SUPPORT_URL)
+        root.removeAllViews(); root.addView(view, android.widget.FrameLayout.LayoutParams(-1, -1)); attachStatusBarBackdrop(); view.loadUrl(SUPPORT_URL)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun applyStatusBarStyle(style: StatusBarStyle) {
+        statusBarStyle = style
+        val night = reportedColorScheme?.let { it == ReportedColorScheme.DARK }
+            ?: (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK == Configuration.UI_MODE_NIGHT_YES)
+        val color = ContextCompat.getColor(
+            this,
+            when (style) {
+                StatusBarStyle.DEV -> if (night) R.color.hermit_status_dev_dark else R.color.hermit_status_dev_light
+                StatusBarStyle.LIVE -> if (night) R.color.hermit_status_live_dark else R.color.hermit_status_live_light
+                StatusBarStyle.DEFAULT -> if (night) R.color.hermit_status_default_dark else R.color.hermit_status_default_light
+            }
+        )
+        WindowCompat.getInsetsController(window, window.decorView).isAppearanceLightStatusBars = !night
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            window.statusBarColor = color
+            statusBarBackdrop.visibility = View.GONE
+        } else {
+            statusBarBackdrop.setBackgroundColor(color)
+            statusBarBackdrop.visibility = View.VISIBLE
+            attachStatusBarBackdrop()
+            updateStatusBarBackdrop()
+        }
+    }
+
+    private fun attachStatusBarBackdrop() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM) return
+        if (statusBarBackdrop.parent !== root) {
+            (statusBarBackdrop.parent as? android.view.ViewGroup)?.removeView(statusBarBackdrop)
+            root.addView(statusBarBackdrop)
+        }
+        statusBarBackdrop.bringToFront()
+    }
+
+    private fun updateStatusBarBackdrop() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.VANILLA_ICE_CREAM || statusBarBackdrop.parent !== root) return
+        statusBarBackdrop.layoutParams = android.widget.FrameLayout.LayoutParams(-1, statusBarInsetTop, Gravity.TOP)
+        statusBarBackdrop.translationY = -statusBarInsetTop.toFloat()
     }
 
     private fun applyDisplayPolicy(manifest: PackageManifest?, forcePortrait: Boolean = false) {
@@ -1004,6 +1070,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
         }
         bridge = null
         session = null
+        reportedColorScheme = null
         visibleAppId = null
         webView?.let { old ->
             old.stopLoading()
@@ -1462,7 +1529,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
     private suspend fun dispatchPublic(session: RuntimeSession, method: String, params: JSONObject): Any? {
         val app = session.instance
         return when (method) {
-            "runtime.info" -> JSONObject().put("apiMajor", 1).put("apiMinor", 10)
+            "runtime.info" -> JSONObject().put("apiMajor", 1).put("apiMinor", 11)
                 .put("sessionId", session.sessionId).put("appId", session.appId)
                 .put("role", session.role.name.lowercase()).put("webViewPackage", WebViewCompat.getCurrentWebViewPackage(this)?.versionName)
                 .put("runtimeMode", app?.runtimeMode?.name?.lowercase() ?: if (storeRunningMode == "online") "live" else "local")
@@ -1472,6 +1539,17 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 .put("siteDataPolicy", "shared-by-origin")
             "runtime.capabilities" -> capabilityDescriptors(session)
             "app.info" -> app?.toJson() ?: JSONObject().put("appId", RuntimeSession.STORE_APP_ID).put("name", "Hermit 应用库")
+            "appearance.reportTheme" -> {
+                if (this.session !== session) throw HermitException(ErrorCodes.SESSION_EXPIRED, "页面会话已经失效")
+                val theme = when (params.optString("theme")) {
+                    "light" -> ReportedColorScheme.LIGHT
+                    "dark" -> ReportedColorScheme.DARK
+                    else -> throw HermitException(ErrorCodes.INVALID_ARGUMENT, "当前主题必须是 light 或 dark")
+                }
+                reportedColorScheme = theme
+                applyStatusBarStyle(statusBarStyle)
+                JSONObject().put("theme", theme.name.lowercase()).put("applied", true)
+            }
             "runtime.devReady" -> {
                 val revision = params.getLong("revision")
                 if (app?.launchChannel != LaunchChannel.DEV || session.devRevision != revision) {
@@ -2209,7 +2287,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
     private fun safeDocumentName(value: String): String = value.replace(Regex("[^A-Za-z0-9._\\-\\u4e00-\\u9fff]+"), "-").take(60).ifBlank { "hermit-app" }
 
     private fun capabilityDescriptors(runtime: RuntimeSession): JSONObject {
-        val names = listOf("runtime", "app", "data", "files", "audio", "tts", "speech", "location", "sensors", "camera",
+        val names = listOf("runtime", "app", "appearance", "data", "files", "audio", "tts", "speech", "location", "sensors", "camera",
             "share", "clipboard", "haptics", "network", "wifi", "bluetooth", "infrared", "battery", "system")
         return JSONObject().put("capabilities", JSONArray(names.map { name ->
             val supported = when (name) {
@@ -2225,7 +2303,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 else -> true
             }
             JSONObject().put("name", name).put("implemented", true).put("supported", supported)
-                .put("usable", supported && (runtime.role == RuntimeRole.WEB_APP || name in setOf("runtime", "app")))
+                .put("usable", supported && (runtime.role == RuntimeRole.WEB_APP || name in setOf("runtime", "app", "appearance")))
                 .put("lifecycle", if (name in setOf("audio", "speech", "location", "sensors", "tts", "wifi", "bluetooth", "battery", "network")) "foreground-session" else "request")
                 .also { descriptor ->
                     authorizationDescriptors(runtime, name).takeIf { it.length() > 0 }?.let { descriptor.put("authorization", it) }
@@ -2523,6 +2601,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
 
     private fun showNativeError(title: String, message: String, showLibrary: Boolean) {
         destroyRuntime()
+        applyStatusBarStyle(StatusBarStyle.DEFAULT)
         val layout = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
@@ -2549,6 +2628,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
         root.removeAllViews()
         root.addView(ScrollView(this).apply { addView(layout, android.widget.FrameLayout.LayoutParams(-1, -2)) },
             android.widget.FrameLayout.LayoutParams(-1, -1))
+        attachStatusBarBackdrop()
     }
 
     private fun addNativeRecovery(layout: LinearLayout, title: String, message: String, showLibrary: Boolean) {
@@ -2701,6 +2781,12 @@ class MainActivity : ComponentActivity(), BridgeHost {
     @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
     fun importSharedZipForTest(uri: Uri) {
         importSharedZip(uri)
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        root.setBackgroundColor(ContextCompat.getColor(this, R.color.hermit_background))
+        applyStatusBarStyle(statusBarStyle)
     }
 
     override fun onDestroy() {

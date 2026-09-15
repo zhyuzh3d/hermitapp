@@ -5,6 +5,7 @@ import androidx.test.core.app.ActivityScenario
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
@@ -41,7 +42,7 @@ class ActivitySmokeTest {
             ActivityScenario.launch<MainActivity>(Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_APP_ID, installed.appId)).use { scenario ->
                 assertTrue(waitUntilReady(scenario))
                 val result = evaluateAsync(scenario, "Promise.all([hermit.runtime.info(),hermit.runtime.capabilities(),hermit.speech.availability(),hermit.tts.availability(),hermit.sensors.availability(),hermit.wifi.status(),hermit.bluetooth.status(),hermit.infrared.status(),hermit.battery.status(),hermit.network.status(),hermit.camera.torchStatus()]).then(x=>({minor:x[0].apiMinor,names:x[1].capabilities.map(c=>c.name),speech:typeof x[2].streamingAvailable==='boolean'&&!('services'in x[2])&&!('providerManagedByUser'in x[2]),tts:typeof x[3].operational==='boolean'&&!('services'in x[3])&&!('engines'in x[3])&&!('providerManagedByUser'in x[3]),sensors:Array.isArray(x[4].sensors),wifi:typeof x[5].supported==='boolean',bluetooth:typeof x[6].supported==='boolean',infrared:typeof x[7].supported==='boolean',battery:typeof x[8].charging==='boolean',network:Array.isArray(x[9].transports),torch:typeof x[10].supported==='boolean'}))")
-                assertTrue(result?.contains("\"minor\":10") == true)
+                assertTrue(result?.contains("\"minor\":11") == true)
                 for (name in listOf("sensors", "wifi", "bluetooth", "infrared", "battery", "system")) {
                     assertTrue("Missing $name in $result", result?.contains("\"$name\"") == true)
                 }
@@ -80,6 +81,31 @@ class ActivitySmokeTest {
             assertTrue(state?.optBoolean("ready") == true)
             val licenses = evaluateAsync(scenario, "hermit.host.licenses.info({}).then(x=>({hasNano:x.text.includes('NanoHTTPD')}))")
             assertEquals("{\"hasNano\":true}", licenses)
+        }
+    }
+
+    @Test fun pageReportsItsResolvedThemeToTheStatusBar() {
+        runBlocking {
+            val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+            val app = context.applicationContext as HermitApplication
+            val installed = app.installer.installZip(ByteArrayInputStream(appZip("Appearance", 1)), "Appearance fixture")
+            try {
+                ActivityScenario.launch<MainActivity>(Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_APP_ID, installed.appId)).use { scenario ->
+                    assertTrue(waitUntilReady(scenario))
+                    assertEquals("{\"theme\":\"dark\",\"applied\":true}", evaluateAsync(scenario, "hermit.appearance.reportTheme({theme:'dark'})"))
+                    scenario.onActivity { activity ->
+                        assertEquals(ContextCompat.getColor(activity, R.color.hermit_status_default_dark), activity.window.statusBarColor)
+                    }
+                    assertEquals("{\"theme\":\"light\",\"applied\":true}", evaluateAsync(scenario, "hermit.appearance.reportTheme({theme:'light'})"))
+                    scenario.onActivity { activity ->
+                        assertEquals(ContextCompat.getColor(activity, R.color.hermit_status_default_light), activity.window.statusBarColor)
+                    }
+                }
+            } finally {
+                app.registry.deleteInstance(installed.appId)
+                app.installer.deleteAppFiles(installed.appId)
+                app.registry.finishDelete(installed.appId)
+            }
         }
     }
 
