@@ -17,7 +17,7 @@
   },
   {
     "name": "hermit_runtime_status",
-    "description": "Return the foreground Hermit runtime target.",
+    "description": "Return the foreground Hermit runtime target and its launch channel. A successful MCP connection already proves the global development service is enabled; use this only to decide whether the target happ must be entered and opened.",
     "inputSchema": {
       "type": "object",
       "properties": {},
@@ -146,7 +146,7 @@
   },
   {
     "name": "hermit_enter_dev_mode",
-    "description": "Create or reuse the single dev workspace, then launch this happ from it. Must precede writes.",
+    "description": "Idempotently create or reuse the single dev workspace, switch this happ to the DEV launch channel, and open it. Call when the foreground runtime is not already this appId in DEV; do not separately check the global development switch.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -161,6 +161,12 @@
           "minLength": 8,
           "maxLength": 128,
           "description": "Unique idempotency key for this server run"
+        },
+        "route": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "description": "Optional same-origin relative route to open after entering DEV."
         }
       },
       "required": [

@@ -10,8 +10,8 @@ android {
         applicationId = "io.github.zhyuzh3d.hermit"
         minSdk = 29
         targetSdk = 37
-        versionCode = providers.gradleProperty("hermitVersionCode").orNull?.toInt() ?: 46
-        versionName = providers.gradleProperty("hermitVersionName").orNull ?: "1.10.12"
+        versionCode = providers.gradleProperty("hermitVersionCode").orNull?.toInt() ?: 47
+        versionName = providers.gradleProperty("hermitVersionName").orNull ?: "1.10.13"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true

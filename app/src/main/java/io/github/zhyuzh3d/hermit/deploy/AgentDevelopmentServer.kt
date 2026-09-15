@@ -387,14 +387,14 @@ class AgentDevelopmentServer(
             Windows launcher alternative: py -3 hermit-agent.py --address $address connect
             python3 hermit-agent.py --address $address install-skill
             python3 hermit-agent.py --address $address client-config
-            Select an ordinary happ and call hermit_enter_dev_mode before any write. HermitUI is protected and never exposed as a development target.
+            A successful MCP connection already proves the global development service is enabled; never check that switch again. Before a write cycle call hermit_runtime_status once. If the foreground appId is not the target or launchChannel is not dev, call hermit_enter_dev_mode once to create or reuse its dev workspace, switch it to DEV and open it. HermitUI is protected and never exposed as a development target.
             No frontend build or framework support is needed. Author native HTML + JS + CSS; other tools' finished static output is accepted neutrally.
             Optimize for fast iteration: make focused edits, run only the smallest directly relevant technical check, then sync and refresh immediately. Do not default to full-suite tests, release packaging, screenshots or visual inspection unless the change or user requires them.
             Android 10 / API 29 devices with older vendor WebViews are the recommended compatibility baseline unless the task chooses a newer target. Android has no fixed "WebView 10": prefer older-compatible JavaScript syntax or transpiled output, feature-detect newer browser APIs, and provide fallbacks. For Android system abilities, use only capabilities HermitApp supports through its public Bridge, query availability first, and treat anything absent from the Bridge as unavailable rather than calling undocumented Native or vendor interfaces. This is agent guidance only; HermitApp does not scan, certify or reject happ code for these choices. Keep any compatibility check focused rather than expanding each edit into a full test.
             The developer switch persists across app restarts. Wi-Fi changes update the advertised address without disabling developer mode; use the current address shown by Hermit.
         """.trimIndent()
 
-        private fun serverInstructions() = "Authenticate with the password shown by HermitApp. Select an ordinary happ and call hermit_enter_dev_mode before writing. HermitUI is protected. Develop directly runnable HTML/JS/CSS without framework or build assumptions. Use Android 10 / API 29 devices with older vendor WebViews as the recommended compatibility baseline unless the task chooses a newer target; Android has no fixed WebView 10. Prefer older-compatible JavaScript syntax or transpiled output, feature-detect newer browser APIs, and provide fallbacks. For Android system abilities, use only capabilities HermitApp supports through its public Bridge, query capabilities and availability first, and treat anything absent from the Bridge as unavailable instead of calling undocumented Native or vendor interfaces; handle E_UNSUPPORTED and permission errors without crashing. This is guidance for the agent: HermitApp does not scan, certify or reject happ code based on these choices, and the agent decides the appropriate tradeoff. Optimize for the shortest reliable edit-to-device loop: inspect only relevant files, batch focused edits, run the smallest directly relevant technical check, then sync and refresh immediately when deployment is authorized. Do not default to full test suites, release packaging, rebuilds, screenshots or visual inspection; expand validation only for affected high-risk contracts or artifacts, an actual failure, or an explicit user request. Update only the single dev workspace with expectedDevRevision and a unique requestId; preserve app identity, business data and grants. Use hermit_sync_dev_changes for fast saves and hermit_wait_dev_render only when render evidence is needed. The same endpoint and tools work from Windows, macOS and Linux. Server version ${BuildConfig.VERSION_NAME}; guidance $guidanceVersion."
+        private fun serverInstructions() = "Authenticate with the password shown by HermitApp. A successful MCP connection already proves the global development service is enabled; never check that switch again. Before a write cycle call hermit_runtime_status once. If its foreground appId is the target and launchChannel is dev, write immediately; otherwise call hermit_enter_dev_mode once to create or reuse the dev workspace, switch the target to DEV and open it. Do not repeat this with hermit_get_dev_status, hermit_get_page_state or hermit_open_app. HermitUI is protected. Develop directly runnable HTML/JS/CSS without framework or build assumptions. Use Android 10 / API 29 devices with older vendor WebViews as the recommended compatibility baseline unless the task chooses a newer target; Android has no fixed WebView 10. Prefer older-compatible JavaScript syntax or transpiled output, feature-detect newer browser APIs, and provide fallbacks. For Android system abilities, use only capabilities HermitApp supports through its public Bridge, query capabilities and availability first, and treat anything absent from the Bridge as unavailable instead of calling undocumented Native or vendor interfaces; handle E_UNSUPPORTED and permission errors without crashing. This is guidance for the agent: HermitApp does not scan, certify or reject happ code based on these choices, and the agent decides the appropriate tradeoff. Optimize for the shortest reliable edit-to-device loop: inspect only relevant files, batch focused edits, run the smallest directly relevant technical check, then sync and refresh immediately when deployment is authorized. Do not default to full test suites, release packaging, rebuilds, screenshots or visual inspection; expand validation only for affected high-risk contracts or artifacts, an actual failure, or an explicit user request. Update only the single dev workspace with expectedDevRevision and a unique requestId; preserve app identity, business data and grants. Use hermit_sync_dev_changes for fast saves and hermit_wait_dev_render only when render evidence is needed. The same endpoint and tools work from Windows, macOS and Linux. Server version ${BuildConfig.VERSION_NAME}; guidance $guidanceVersion."
 
         private fun capabilities() = JSONObject().put("tools", JSONObject()).put("resources", JSONObject()).put("prompts", JSONObject())
 
@@ -490,8 +490,7 @@ class AgentDevelopmentServer(
                 val result = when (name) {
                     "hermit_get_guide" -> JSONObject().put("serverVersion", BuildConfig.VERSION_NAME)
                         .put("runId", runId).put("guidanceVersion", guidanceVersion).put("text", guide())
-                    "hermit_runtime_status" -> ui("status", JSONObject(), authorization)
-                        .put("serverVersion", BuildConfig.VERSION_NAME).put("runId", runId)
+                    "hermit_runtime_status" -> runtimeStatus(authorization)
                     "hermit_get_page_state" -> ui("page-state", args, authorization)
                     "hermit_list_apps" -> JSONObject().put("apps", JSONArray(registry.listInstances().map { app ->
                         app.toJson().put("devWorkspace", devWorkspaces.status(app.appId))
@@ -501,8 +500,16 @@ class AgentDevelopmentServer(
                     "hermit_create_dev_app" -> workspace.createDev(
                         args.getString("name"), args.getString("happId"), devWorkspaces
                     ) { guarded(authorization, it) }
-                    "hermit_enter_dev_mode" -> guardedValue(authorization) { devWorkspaces.enter(appId!!) }.also {
-                        it.put("runtime", safeUi("switch", JSONObject().put("appId", appId), authorization))
+                    "hermit_enter_dev_mode" -> {
+                        val targetAppId = appId!!
+                        val workspace = guardedValue(authorization) { devWorkspaces.enter(targetAppId) }
+                        val operation = createRenderOperation(targetAppId, workspace.getLong("revision"))
+                        val openArgs = JSONObject().put("appId", targetAppId)
+                            .put("route", args.optString("route").takeIf { it.isNotBlank() } ?: JSONObject.NULL)
+                        val runtime = safeUi("open", openArgs, authorization)
+                        if (runtime.optString("state") == "not-visible") operation.let(::discardRenderOperation)
+                        workspace.put("runtime", runtime)
+                            .put("renderOperationId", if (runtime.optString("state") == "not-visible") JSONObject.NULL else operation.id)
                     }
                     "hermit_leave_dev_mode" -> guardedValue(authorization) { devWorkspaces.leave(appId!!) }.also {
                         it.put("runtime", safeUi("switch", JSONObject().put("appId", appId), authorization))
@@ -636,6 +643,16 @@ class AgentDevelopmentServer(
             }
             return result.put("refreshState", runtime.optString("state", "scheduled"))
                 .put("runtime", runtime).put("renderOperationId", operation.id)
+        }
+
+        private fun runtimeStatus(authorization: String): JSONObject {
+            val result = safeUi("status", JSONObject(), authorization)
+            val appId = result.optString("appId").takeIf { it.isNotBlank() }
+            val app = appId?.let(registry::getInstance)
+            return result.put("launchChannel", app?.launchChannel?.name?.lowercase() ?: JSONObject.NULL)
+                .put("runtimeMode", app?.runtimeMode?.name?.lowercase() ?: JSONObject.NULL)
+                .put("isDevelopmentCopy", app?.launchChannel == io.github.zhyuzh3d.hermit.model.LaunchChannel.DEV)
+                .put("serverVersion", BuildConfig.VERSION_NAME).put("runId", runId)
         }
 
         private fun createRenderOperation(appId: String, revision: Long): RenderOperation {

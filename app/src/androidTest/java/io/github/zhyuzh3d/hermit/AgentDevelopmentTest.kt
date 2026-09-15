@@ -197,6 +197,11 @@ class AgentDevelopmentTest {
             .put("refreshMode", "none").put("files", JSONArray().put(JSONObject().put("path", "blocked.txt").put("content", "blocked"))), true).getString("code"))
         val resumed = tool("hermit_enter_dev_mode", JSONObject().put("appId", id).put("requestId", UUID.randomUUID().toString()))
         assertEquals(applied.getLong("revision"), resumed.getLong("revision"))
+        assertEquals("opening", resumed.getJSONObject("runtime").getString("state"))
+        val runtime = tool("hermit_runtime_status")
+        assertEquals(id, runtime.getString("appId"))
+        assertEquals("dev", runtime.getString("launchChannel"))
+        assertTrue(runtime.getBoolean("isDevelopmentCopy"))
 
         val built = tool("hermit_build_dev_package", JSONObject().put("appId", id)
             .put("expectedDevRevision", resumed.getLong("revision")).put("requestId", UUID.randomUUID().toString())

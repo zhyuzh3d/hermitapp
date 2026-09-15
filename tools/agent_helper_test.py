@@ -104,8 +104,10 @@ class AgentHelperTest(unittest.TestCase):
     def test_dev_sync_sends_only_changed_text_and_deletions(self):
         class Device:
             def __init__(self): self.calls = []
-            def tool(self, name, arguments):
-                self.calls.append((name, arguments))
+            def tool(self, name, arguments=None):
+                self.calls.append((name, arguments or {}))
+                if name == "hermit_runtime_status":
+                    return {"appId": "app-id", "launchChannel": "dev"}
                 if name == "hermit_list_dev_files":
                     same = hashlib.sha256(b"same").hexdigest()
                     return {"revision": 7, "treeHash": "old", "files": [
@@ -122,6 +124,7 @@ class AgentHelperTest(unittest.TestCase):
             device = Device()
             result = helper.dev_sync(device, "app-id", root)
             self.assertEqual(8, result["revision"])
+            self.assertEqual("hermit_runtime_status", device.calls[0][0])
             name, arguments = device.calls[-1]
             self.assertEqual("hermit_sync_dev_changes", name)
             self.assertEqual(7, arguments["expectedDevRevision"])
@@ -129,6 +132,31 @@ class AgentHelperTest(unittest.TestCase):
                 {"path": "app.js", "content": "changed"},
                 {"path": "removed.css", "delete": True},
             ], arguments["files"])
+
+    def test_dev_sync_prepares_and_opens_target_only_when_needed(self):
+        class Device:
+            def __init__(self): self.calls = []
+            def tool(self, name, arguments=None):
+                self.calls.append((name, arguments or {}))
+                if name == "hermit_runtime_status":
+                    return {"appId": "other-app", "launchChannel": "stable"}
+                if name == "hermit_enter_dev_mode":
+                    return {"appId": "app-id", "launchChannel": "dev", "revision": 3,
+                            "runtime": {"state": "opening"}}
+                if name == "hermit_list_dev_files":
+                    return {"revision": 3, "treeHash": "same", "files": [
+                        {"path": "index.html", "sha256": hashlib.sha256(b"same").hexdigest()}
+                    ]}
+                raise AssertionError(name)
+        with tempfile.TemporaryDirectory() as temp:
+            Path(temp, "index.html").write_text("same")
+            device = Device()
+            result = helper.dev_sync(device, "app-id", temp)
+            self.assertEqual("unchanged", result["refreshState"])
+            self.assertEqual(["hermit_runtime_status", "hermit_enter_dev_mode", "hermit_list_dev_files"],
+                             [name for name, _ in device.calls])
+            self.assertEqual("app-id", device.calls[1][1]["appId"])
+            self.assertIn("requestId", device.calls[1][1])
 
 
 if __name__ == "__main__": unittest.main()
