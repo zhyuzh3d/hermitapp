@@ -29,7 +29,7 @@ p { line-height:1.7; }
 :root[data-theme="dark"] .brand-mark,:root[data-theme="dark"] .main-tile,:root[data-theme="dark"] .about-mark { background:#000; color:#fff; }
 @media (prefers-color-scheme:dark) { :root:not([data-theme="light"]) .brand-mark,:root:not([data-theme="light"]) .main-tile,:root:not([data-theme="light"]) .about-mark { background:#000; color:#fff; } }
 .brand-dot { color:var(--blue); }
-.brand-dot.online { color:var(--green); }
+.brand-dot.online { color:var(--blue); }
 .topbar-versions { display:grid; gap:4px; text-align:right; color:var(--muted); font-size:11px; line-height:1.35; }
 .topbar-versions span { display:block; }
 .topbar-versions b { color:var(--ink); font-weight:650; }

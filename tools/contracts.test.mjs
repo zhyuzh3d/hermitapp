@@ -197,8 +197,8 @@ test("official shell keeps live fallback support and explicit local refresh", ()
   assert.match(activity, /正在加载官网界面/);
   assert.match(activity, /local-fallback/);
   assert.match(bridge, /shell: namespace\("host\.shell"\)/);
-  for (const id of ["shellVersionSwitch", "updateLocalShell"]) assert.match(html, new RegExp(`id="${id}"`));
-  assert.doesNotMatch(script, /"shell\.setMode"/);
+  for (const id of ["shellVersionSwitch", "useLocalShell", "updateLocalShell"]) assert.match(html, new RegExp(`id="${id}"`));
+  assert.match(script, /"shell\.setMode"/);
   assert.match(script, /"shell\.updateLocal"/);
   assert.match(manager, /KEY_MODE, Mode\.LOCAL\.value/);
   assert.match(manager, /downloadedVersion < embeddedVersion/);
@@ -207,11 +207,13 @@ test("official shell keeps live fallback support and explicit local refresh", ()
   assert.match(manager, /store\/manifest\.json/);
   assert.match(manager, /suspend fun activateOnline/);
   assert.match(activity, /officialShell\.activateOnline\(\)/);
+  assert.match(activity, /officialShell\.setMode\(OfficialShellManager\.Mode\.LOCAL\.value\)[\s\S]{0,160}forceLocalStoreOnce = true/);
+  assert.match(activity, /onlineStore -> StatusBarStyle\.LIVE/);
   assert.match(activity, /"reload-shell"/);
   assert.match(fs.readFileSync("app/src/main/assets/agent/tools.json", "utf8"), /"name": "hermit_reload_shell"/);
   assert.match(activity, /"current" -> hermitApp\.officialShell\.mode\(\)/);
   const application = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/HermitApplication.kt", "utf8");
-  assert.match(application, /if \(replaced\) officialShell\.resetToEmbedded\(\)/);
+  assert.match(application, /if \(replaced\) \{[\s\S]{0,160}officialShell\.resetToEmbedded\(\)[\s\S]{0,160}agentServer\.disable/);
   assert.doesNotMatch(application, /installState\.edit[\s\S]{0,160}officialShell\.setMode/);
   assert.doesNotMatch(html, /id="useOnlineShell"/);
 });

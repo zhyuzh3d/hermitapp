@@ -125,9 +125,36 @@
     voiceLoaded = false; await loadVoiceSettings(true); say("系统语音设置已保存。");
   });
 
+  let shellState = null;
+  function renderShellState(value) {
+    shellState = value;
+    const online = value.configuredMode === "online";
+    const currentVersion = value.runningMode === "online" ? H.version : value.localVersion;
+    $("#brandDot").classList.toggle("online", online);
+    $("#shellVersionSwitch").textContent = "当前界面版本：" + currentVersion + (online ? " · 实时在线" : " · 本地");
+    $("#useLocalShell").classList.toggle("hidden", !online);
+  }
+  async function loadShellStatus() { renderShellState(await host.call("shell.status", {})); }
+  let shellVersionTaps = 0, shellVersionTapTimer;
+  $("#shellVersionSwitch").onclick = event => {
+    clearTimeout(shellVersionTapTimer);
+    shellVersionTaps += 1;
+    shellVersionTapTimer = setTimeout(() => { shellVersionTaps = 0; }, 1200);
+    if (shellVersionTaps < 3) return;
+    shellVersionTaps = 0;
+    busy(event.currentTarget, async () => {
+      if (shellState && shellState.configuredMode === "online") return;
+      await host.call("shell.setMode", { mode:"online" });
+    });
+  };
+  bind("#useLocalShell", async () => {
+    if (shellState && shellState.configuredMode === "local") return;
+    await host.call("shell.setMode", { mode:"local" });
+  });
   bind("#updateLocalShell", async () => {
     const value = await host.call("shell.updateLocal", {});
-    say("本地界面已更新到 " + value.localVersion + "，正在重新加载。");
+    renderShellState(value);
+    say("本地界面已更新到 " + value.localVersion + "。");
   });
   window.hermitShellUnavailable = message => {
     say(message || "界面更新暂时不可用，继续使用当前本地界面。", true);
@@ -143,8 +170,9 @@
 
   bind("#supportRepository", () => host.call("about.openRepository", {}));
   async function load() {
-    const results = await Promise.allSettled([loadAbout(), loadVoiceSettings(true)]);
+    const results = await Promise.allSettled([loadAbout(), loadVoiceSettings(true), loadShellStatus()]);
     if (results[1].status === "rejected") setStatus("#speechCapabilityStatus", (results[1].reason && results[1].reason.message) || "语音能力检测失败", "error");
+    if (results[2].status === "rejected") $("#shellVersionSwitch").textContent = "界面模式暂不可用";
   }
   H.features.settings = { loadAbout, loadVoiceSettings, load, openLicenses, openDiagnostics, showSettingsTab };
 })();

@@ -703,6 +703,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
         applyStatusBarStyle(
             when {
                 devWorkspace != null -> StatusBarStyle.DEV
+                onlineStore -> StatusBarStyle.LIVE
                 instance?.runtimeMode == HappRuntimeMode.LIVE -> StatusBarStyle.LIVE
                 else -> StatusBarStyle.DEFAULT
             }
@@ -799,6 +800,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
         fun fallBackToLocalShell(message: String) {
             if (!onlineStore || onlineFailureHandled || webView !== view) return
             onlineFailureHandled = true
+            hermitApp.officialShell.setMode(OfficialShellManager.Mode.LOCAL.value)
             forceLocalStoreOnce = true
             pendingStoreScript = "window.hermitShellUnavailable && window.hermitShellUnavailable(${JSONObject.quote(message)})"
             root.post { showTarget(null, false) }

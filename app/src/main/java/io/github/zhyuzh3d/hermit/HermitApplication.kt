@@ -49,7 +49,10 @@ class HermitApplication : Application(), DefaultLifecycleObserver {
         val installState = getSharedPreferences("hermit-install-state", MODE_PRIVATE)
         val installedAt = packageManager.getPackageInfo(packageName, 0).lastUpdateTime
         val replaced = installState.getLong("lastUpdateTime", -1L).let { it != -1L && it != installedAt }
-        if (replaced) officialShell.resetToEmbedded()
+        if (replaced) {
+            officialShell.resetToEmbedded()
+            agentServer.disable("APK 已重新安装或更新")
+        }
         installState.edit().putLong("lastUpdateTime", installedAt).apply()
         registry.recoverInterruptedOperations()
         installer.recoverStorage()
