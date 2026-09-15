@@ -11,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.Response
 import okhttp3.HttpUrl.Companion.toHttpUrl
 import org.json.JSONObject
 import java.io.BufferedInputStream
@@ -37,6 +38,8 @@ class RemoteSourceInstaller(
         val releaseId: String?,
         val strategy: String,
         val kind: String,
+        val operationId: String? = null,
+        val treeHash: String? = null,
     )
 
     private data class InstallManifest(
@@ -45,15 +48,22 @@ class RemoteSourceInstaller(
         val sha256: String?,
     )
 
+    private data class RepositoryFile(val path: String, val size: Long)
+
     /**
      * A URL makes this an online-source happ. If the origin publishes
      * /hermit-install.json, its package is materialized locally by default;
      * otherwise the URL is saved for live runtime.
      */
     suspend fun installOnline(url: String, name: String?,
-        identityChoice: suspend (WebAppInstance, String?) -> IdentityInstallChoice = { _, _ -> IdentityInstallChoice.NEW_INSTANCE }): OnlineInstallResult = withContext(Dispatchers.IO) {
+        identityChoice: suspend (WebAppInstance, String?) -> IdentityInstallChoice = { _, _ -> IdentityInstallChoice.NEW_INSTANCE },
+        directoryChoice: suspend (RepositorySource, List<RepositoryDirectory>) -> String? = { _, _ -> null },
+    ): OnlineInstallResult = withContext(Dispatchers.IO) {
         val normalized = validateNetworkUrl(url)
         val parsed = normalized.toHttpUrl()
+        RepositorySourceRules.parse(normalized)?.let { repository ->
+            return@withContext installRepository(repository, name, identityChoice = identityChoice, directoryChoice = directoryChoice)
+        }
         if (parsed.encodedPath.endsWith(".zip", ignoreCase = true)) {
             val result = installHttps(normalized, name, identityChoice = identityChoice)
             return@withContext OnlineInstallResult(result.appId, result.releaseId, "local", "package")
@@ -64,6 +74,18 @@ class RemoteSourceInstaller(
         }
         val manifest = discoverInstallManifest(normalized)
         if (manifest == null) {
+            val candidate = download(normalized)
+            try {
+                if (isZipArchive(candidate)) {
+                    val result = FileInputStream(candidate).use {
+                        installer.installZip(it, name, provenance = "https-package", source = HappSource.ONLINE,
+                            downloadUrl = normalized, identityChoice = identityChoice)
+                    }
+                    registry.updateSource(result.appId, "https-package", JSONObject().put("url", normalized).toString())
+                    registry.getRelease(result.releaseId)?.let { registry.recordDownload(result.appId, normalized, it.versionCode, it.versionName) }
+                    return@withContext OnlineInstallResult(result.appId, result.releaseId, "local", "package")
+                }
+            } finally { candidate.delete() }
             val fallbackName = name?.trim()?.takeIf { it.isNotBlank() }
                 ?: normalized.toHttpUrl().host
             val app = WebAppInstance.newOnlineLive(fallbackName, normalized)
@@ -73,6 +95,72 @@ class RemoteSourceInstaller(
         }
 
         installManifestPackage(manifest, name, normalized, "online-manifest", "manifest", identityChoice)
+    }
+
+    private suspend fun installRepository(
+        source: RepositorySource,
+        name: String?,
+        existingAppId: String? = null,
+        expected: String? = null,
+        rememberedPath: String? = null,
+        identityChoice: suspend (WebAppInstance, String?) -> IdentityInstallChoice = { _, _ -> IdentityInstallChoice.NEW_INSTANCE },
+        directoryChoice: suspend (RepositorySource, List<RepositoryDirectory>) -> String? = { _, _ -> null },
+    ): OnlineInstallResult = withContext(Dispatchers.IO) {
+        val branch = source.ref ?: repositoryDefaultBranch(source)
+        val revision = if (source.provider == RepositoryProvider.GITHUB) resolveGitHubCommit(source.namespace, source.repository, branch) else branch
+        val resolved = source.copy(ref = branch)
+        val manifestPath = listOf(source.path, "hermit-install.json").filter { it.isNotBlank() }.joinToString("/")
+        val manifest = readInstallManifest(repositoryRawUrl(resolved, revision, manifestPath), required = false)
+        if (manifest != null) {
+            val archive = downloadSameOrigin(manifest.packageUrl, manifest.manifestUrl)
+            try {
+                val result = FileInputStream(archive).use {
+                    installer.installZip(it, name, existingAppId, source.provider.adapter, expectedReleaseId = expected,
+                        declaredSha256 = manifest.sha256, sourceRevision = revision, fallbackName = source.repository,
+                        source = HappSource.ONLINE, downloadUrl = manifest.packageUrl, identityChoice = identityChoice)
+                }
+                rememberRepository(result, resolved, revision, source.path, "manifest")
+                return@withContext OnlineInstallResult(result.appId, result.releaseId, "local", "repository-package", result.operationId, result.treeHash)
+            } finally { archive.delete() }
+        }
+
+        val filtered = File(context.cacheDir, "repository-${UUID.randomUUID()}.zip")
+        var sourceArchive: File? = null
+        try {
+            val repositoryFiles = if (source.provider == RepositoryProvider.GITHUB) {
+                githubRepositoryFiles(resolved, revision)
+            } else {
+                sourceArchive = download(repositoryArchiveUrl(resolved, revision), repositoryArchiveHeaders(resolved))
+                repositoryEntries(sourceArchive!!).map { RepositoryFile(it, -1L) }
+            }
+            val choices = RepositorySourceRules.directoryChoices(repositoryFiles.map(RepositoryFile::path), source.path)
+            val selected = rememberedPath?.takeIf { path -> choices.any { option -> option.path == path } }
+                ?: directoryChoice(resolved, choices)
+                ?: throw HermitException(ErrorCodes.CANCELLED, "用户取消安装")
+            val subtree = listOf(source.path, selected).filter { it.isNotBlank() }.joinToString("/")
+            if (source.provider == RepositoryProvider.GITHUB) {
+                downloadGitHubDirectory(resolved, revision, repositoryFiles, subtree, filtered)
+            } else {
+                filterRepositoryArchive(sourceArchive!!, filtered, subtree)
+            }
+            val result = FileInputStream(filtered).use {
+                installer.installZip(it, name, existingAppId, source.provider.adapter, expectedReleaseId = expected,
+                    sourceRevision = revision, fallbackName = source.repository, source = HappSource.ONLINE,
+                    downloadUrl = source.cloneUrl, identityChoice = identityChoice)
+            }
+            rememberRepository(result, resolved, revision, selected, "directory")
+            OnlineInstallResult(result.appId, result.releaseId, "local", "repository-directory", result.operationId, result.treeHash)
+        } finally { sourceArchive?.delete(); filtered.delete() }
+    }
+
+    private fun rememberRepository(result: InstallResult, source: RepositorySource, revision: String, selectedPath: String, mode: String) {
+        registry.updateSource(result.appId, source.provider.adapter, JSONObject()
+            .put("provider", source.provider.adapter).put("namespace", source.namespace).put("repo", source.repository)
+            .put("ref", source.ref).put("resolvedRevision", revision).put("rootPath", source.path)
+            .put("path", selectedPath).put("mode", mode).toString())
+        registry.getRelease(result.releaseId)?.let { registry.recordDownload(result.appId, source.cloneUrl, it.versionCode, it.versionName) }
+        val installed = registry.getInstance(result.appId)
+        if (installed?.updateUrl == null) registry.updateUrls(result.appId, installed?.liveUrl, source.cloneUrl)
     }
 
     private suspend fun installManifestPackage(
@@ -141,27 +229,22 @@ class RemoteSourceInstaller(
         val normalizedPath = path.trim('/').also {
             if (it.isNotEmpty()) validateRelative(it)
         }
-        val resolvedCommit = resolveGitHubCommit(owner, repo, ref)
-        val url = "https://api.github.com".toHttpUrl().newBuilder()
-            .addPathSegment("repos").addPathSegment(owner).addPathSegment(repo)
-            .addPathSegment("zipball").addPathSegment(resolvedCommit).build().toString()
-        val sourceArchive = download(url, mapOf("Accept" to "application/vnd.github+json", "X-GitHub-Api-Version" to "2022-11-28"))
-        val filtered = File(context.cacheDir, "github-${UUID.randomUUID()}.zip")
-        try {
-            filterGitHubArchive(sourceArchive, filtered, normalizedPath)
-            val result = FileInputStream(filtered).use {
-                installer.installZip(it, name, existingAppId, "github", expectedReleaseId = expected,
-                    sourceRevision = resolvedCommit, fallbackName = repo, source = HappSource.ONLINE,
-                    downloadUrl = "https://github.com/$owner/$repo.git", identityChoice = identityChoice)
-            }
-            val gitUrl = "https://github.com/$owner/$repo.git"
-            registry.updateSource(result.appId, "github", JSONObject().put("owner", owner).put("repo", repo)
-                .put("ref", ref).put("resolvedCommit", resolvedCommit).put("path", normalizedPath).toString())
-            registry.getRelease(result.releaseId)?.let { registry.recordDownload(result.appId, gitUrl, it.versionCode, it.versionName) }
-            val installed = registry.getInstance(result.appId)
-            if (installed?.updateUrl == null) registry.updateUrls(result.appId, installed?.liveUrl, gitUrl)
-            result
-        } finally { sourceArchive.delete(); filtered.delete() }
+        val installed = installRepository(
+            RepositorySource(RepositoryProvider.GITHUB, owner, repo, ref, normalizedPath),
+            name,
+            existingAppId,
+            expected,
+            rememberedPath = "",
+            identityChoice = identityChoice,
+        )
+        val releaseId = installed.releaseId ?: throw HermitException(ErrorCodes.INTERNAL, "GitHub 安装没有生成本地版本")
+        InstallResult(
+            installed.operationId ?: UUID.randomUUID().toString(),
+            installed.appId,
+            releaseId,
+            installed.treeHash ?: registry.getRelease(releaseId)?.treeHash
+                ?: throw HermitException(ErrorCodes.INTERNAL, "GitHub 安装结果不完整"),
+        )
     }
 
     suspend fun update(appId: String): InstallResult = withContext(Dispatchers.IO) {
@@ -185,21 +268,30 @@ class RemoteSourceInstaller(
     }
 
     private suspend fun installDownloadUrl(app: WebAppInstance, rawUrl: String): InstallResult {
-        val github = githubRepository(rawUrl)
-        if (github != null) {
+        val repository = RepositorySourceRules.parse(rawUrl)
+        if (repository != null) {
             val source = runCatching { JSONObject(app.sourceSpec) }.getOrDefault(JSONObject())
-            return installGitHub(github.first, github.second, source.optString("ref", "main"), source.optString("path"),
-                app.name, app.appId, app.activeReleaseId)
+            val rootPath = source.optString("rootPath", repository.path)
+            val configured = repository.copy(
+                ref = source.optString("ref").takeIf { it.isNotBlank() } ?: repository.ref,
+                path = rootPath,
+            )
+            val rememberedPath = source.optString("path").takeIf { source.optString("mode") == "directory" }
+            val installed = installRepository(configured, app.name, app.appId, app.activeReleaseId, rememberedPath)
+            val releaseId = installed.releaseId ?: throw HermitException(ErrorCodes.INTERNAL, "仓库更新没有生成本地版本")
+            return InstallResult(installed.operationId ?: UUID.randomUUID().toString(), installed.appId, releaseId,
+                installed.treeHash ?: registry.getRelease(releaseId)?.treeHash
+                ?: throw HermitException(ErrorCodes.INTERNAL, "仓库更新结果不完整"))
         }
         if (rawUrl.trim().endsWith(".git", true)) {
-            throw HermitException(ErrorCodes.UNSUPPORTED, "当前版本只支持 GitHub 仓库地址；其他 Git 服务请提供 ZIP 下载地址")
+            throw HermitException(ErrorCodes.UNSUPPORTED, "当前只识别 GitHub、GitLab 和 Gitee 仓库；其他 Git 服务请提供 ZIP 下载地址")
         }
         return installHttps(rawUrl, app.name, app.appId, app.activeReleaseId)
     }
 
     private suspend fun installUpdateUrl(app: WebAppInstance, rawUrl: String): InstallResult {
         val updateUrl = validateNetworkUrl(rawUrl)
-        if (updateUrl.endsWith(".git", true)) return installDownloadUrl(app, updateUrl)
+        if (RepositorySourceRules.parse(updateUrl) != null) return installDownloadUrl(app, updateUrl)
         if (!Uri.parse(updateUrl).path.orEmpty().endsWith(".json", true)) {
             val archive = download(updateUrl)
             val result = try {
@@ -210,7 +302,8 @@ class RemoteSourceInstaller(
         }
         val endpoint = updateUrl.toHttpUrl()
         val client = clientFor(endpoint.host)
-        val text = client.newCall(Request.Builder().url(endpoint).header("Accept", "application/json").build()).execute().use { response ->
+        val request = Request.Builder().url(endpoint).header("Accept", "application/json").build()
+        val text = executeWithRetries(client, request).use { response ->
             if (!response.isSuccessful) throw HermitException(ErrorCodes.NETWORK, "更新信息请求失败：HTTP ${response.code}", response.code >= 500)
             if (response.body.contentLength() > MAX_MANIFEST_BYTES) throw HermitException(ErrorCodes.QUOTA, "更新信息过大")
             readAtMost(response.body.byteStream(), MAX_MANIFEST_BYTES + 1).also {
@@ -285,18 +378,21 @@ class RemoteSourceInstaller(
 
     private fun discoverInstallManifest(pageUrl: String): InstallManifest? {
         val page = pageUrl.toHttpUrl()
+        val adjacent = page.resolve("hermit-install.json")
+        if (adjacent != null) readInstallManifest(adjacent, required = false)?.let { return it }
         val manifestUrl = page.newBuilder()
             .encodedPath("/hermit-install.json")
             .query(null)
             .fragment(null)
             .build()
+        if (adjacent == manifestUrl) return null
         return readInstallManifest(manifestUrl, required = false)
     }
 
     private fun readInstallManifest(manifestUrl: okhttp3.HttpUrl, required: Boolean): InstallManifest? {
         val request = Request.Builder().url(manifestUrl).header("Accept", "application/json").build()
         val body = try {
-            SAME_ORIGIN_CLIENT.newCall(request).execute().use { response ->
+            executeWithRetries(SAME_ORIGIN_CLIENT, request).use { response ->
                 if (response.code == 404 || response.code == 410) {
                     if (required) throw HermitException(ErrorCodes.NETWORK, "安装配置不存在：HTTP ${response.code}")
                     return null
@@ -353,7 +449,7 @@ class RemoteSourceInstaller(
         val target = File(context.cacheDir, "online-package-${UUID.randomUUID()}.zip")
         try {
             val request = Request.Builder().url(targetUrl).build()
-            SAME_ORIGIN_CLIENT.newCall(request).execute().use { response ->
+            executeWithRetries(SAME_ORIGIN_CLIENT, request).use { response ->
                 if (!response.isSuccessful) throw HermitException(ErrorCodes.NETWORK, "安装包下载失败：HTTP ${response.code}", response.code >= 500)
                 if (response.body.contentLength() > MAX_DOWNLOAD_BYTES) throw HermitException(ErrorCodes.QUOTA, "远程包超过 64 MiB")
                 FileOutputStream(target).use { output ->
@@ -423,7 +519,7 @@ class RemoteSourceInstaller(
                     .retryOnConnectionFailure(true).connectTimeout(15, TimeUnit.SECONDS).readTimeout(60, TimeUnit.SECONDS)
                     .dns { host -> if (host.equals(uri.host, true)) addresses else throw java.net.UnknownHostException(host) }.build()
                 val request = Request.Builder().url(url).apply { headers.forEach { (key, value) -> header(key, value) } }.build()
-                client.newCall(request).execute().use { response ->
+                executeWithRetries(client, request).use { response ->
                     if (response.code in 300..399) {
                         if (redirects++ >= 5) throw HermitException(ErrorCodes.NETWORK, "下载重定向次数过多")
                         val location = response.header("Location") ?: throw HermitException(ErrorCodes.NETWORK, "下载重定向缺少地址")
@@ -455,7 +551,7 @@ class RemoteSourceInstaller(
     }
 
     private fun resolveGitHubCommit(owner: String, repo: String, ref: String): String {
-        val url = "https://api.github.com".toHttpUrl().newBuilder()
+        val url = "$GITHUB_GATEWAY/api/".toHttpUrl().newBuilder()
             .addPathSegment("repos").addPathSegment(owner).addPathSegment(repo)
             .addPathSegment("commits").addPathSegment(ref).build()
         val addresses = InetAddress.getAllByName(url.host).toList()
@@ -468,7 +564,7 @@ class RemoteSourceInstaller(
         val request = Request.Builder().url(url).header("Accept", "application/vnd.github+json")
             .header("X-GitHub-Api-Version", "2022-11-28").build()
         try {
-            client.newCall(request).execute().use { response ->
+            executeWithRetries(client, request).use { response ->
                 if (!response.isSuccessful) {
                     val detail = if (response.code == 403 || response.code == 429) "（可能达到匿名 API 限额）" else ""
                     throw HermitException(ErrorCodes.NETWORK, "无法解析 GitHub ref：HTTP ${response.code}$detail", response.code >= 500)
@@ -485,7 +581,174 @@ class RemoteSourceInstaller(
         }
     }
 
-    private fun filterGitHubArchive(source: File, output: File, subtree: String) {
+    private fun repositoryDefaultBranch(source: RepositorySource): String {
+        val endpoint = when (source.provider) {
+            RepositoryProvider.GITHUB -> "$GITHUB_GATEWAY/api/".toHttpUrl().newBuilder()
+                .addPathSegment("repos").addPathSegments(source.namespace).addPathSegment(source.repository).build()
+            RepositoryProvider.GITLAB -> "https://gitlab.com".toHttpUrl().newBuilder()
+                .addPathSegments("api/v4/projects").addPathSegment("${source.namespace}/${source.repository}").build()
+            RepositoryProvider.GITEE -> "https://gitee.com".toHttpUrl().newBuilder()
+                .addPathSegments("api/v5/repos").addPathSegments(source.namespace).addPathSegment(source.repository).build()
+        }
+        val json = readRepositoryJson(endpoint.toString(), source.provider)
+        return json.optString("default_branch").takeIf { it.isNotBlank() && it.length <= 200 && !it.contains("..") }
+            ?: throw HermitException(ErrorCodes.NETWORK, "${source.provider.label} 没有返回默认分支")
+    }
+
+    private fun readRepositoryJson(url: String, provider: RepositoryProvider): JSONObject {
+        val endpoint = url.toHttpUrl()
+        val request = Request.Builder().url(endpoint).apply {
+            if (provider == RepositoryProvider.GITHUB) {
+                header("Accept", "application/vnd.github+json")
+                header("X-GitHub-Api-Version", "2022-11-28")
+            } else header("Accept", "application/json")
+        }.build()
+        try {
+            executeWithRetries(clientFor(endpoint.host), request).use { response ->
+                if (!response.isSuccessful) {
+                    val detail = if (response.code == 403 || response.code == 429) "（可能达到匿名 API 限额）" else ""
+                    throw HermitException(ErrorCodes.NETWORK, "无法读取 ${provider.label} 仓库信息：HTTP ${response.code}$detail", response.code >= 500)
+                }
+                val bytes = readAtMost(response.body.byteStream(), MAX_GITHUB_JSON_BYTES + 1)
+                if (bytes.size > MAX_GITHUB_JSON_BYTES) throw HermitException(ErrorCodes.QUOTA, "仓库信息响应过大")
+                return JSONObject(bytes.toString(Charsets.UTF_8))
+            }
+        } catch (error: Throwable) {
+            throw if (error is HermitException) error else HermitException(ErrorCodes.NETWORK, error.message ?: "仓库信息读取失败", true)
+        }
+    }
+
+    private fun repositoryRawUrl(source: RepositorySource, revision: String, path: String): okhttp3.HttpUrl {
+        val builder = when (source.provider) {
+            RepositoryProvider.GITHUB -> "$GITHUB_GATEWAY/raw/".toHttpUrl().newBuilder()
+                .addPathSegments(source.namespace).addPathSegment(source.repository).addPathSegment(revision)
+            RepositoryProvider.GITLAB -> source.webUrl.toHttpUrl().newBuilder()
+                .addPathSegment("-").addPathSegment("raw").addPathSegment(revision)
+            RepositoryProvider.GITEE -> source.webUrl.toHttpUrl().newBuilder()
+                .addPathSegment("raw").addPathSegment(revision)
+        }
+        if (path.isNotBlank()) builder.addPathSegments(path)
+        return builder.build()
+    }
+
+    private fun repositoryArchiveUrl(source: RepositorySource, revision: String): String = when (source.provider) {
+        RepositoryProvider.GITHUB -> "$GITHUB_GATEWAY/archive/".toHttpUrl().newBuilder()
+            .addPathSegments(source.namespace).addPathSegment(source.repository)
+            .addPathSegment("zip").addPathSegment(revision).build().toString()
+        RepositoryProvider.GITLAB -> source.webUrl.toHttpUrl().newBuilder()
+            .addPathSegment("-").addPathSegment("archive").addPathSegment(revision)
+            .addPathSegment("${source.repository}-${revision.replace('/', '-')}.zip").build().toString()
+        RepositoryProvider.GITEE -> source.webUrl.toHttpUrl().newBuilder()
+            .addPathSegments("repository/archive").addPathSegment("$revision.zip").build().toString()
+    }
+
+    private fun repositoryArchiveHeaders(source: RepositorySource): Map<String, String> =
+        if (source.provider == RepositoryProvider.GITHUB) mapOf(
+            "Accept" to "application/vnd.github+json", "X-GitHub-Api-Version" to "2022-11-28"
+        ) else emptyMap()
+
+    private fun githubRepositoryFiles(source: RepositorySource, revision: String): List<RepositoryFile> {
+        val endpoint = "$GITHUB_GATEWAY/api/".toHttpUrl().newBuilder()
+            .addPathSegment("repos").addPathSegments(source.namespace).addPathSegment(source.repository)
+            .addPathSegments("git/trees").addPathSegment(revision)
+            .addQueryParameter("recursive", "1").build()
+        val json = readRepositoryJson(endpoint.toString(), RepositoryProvider.GITHUB)
+        if (json.optBoolean("truncated")) {
+            throw HermitException(ErrorCodes.QUOTA, "仓库目录过大，请提供发布 ZIP 或 hermit-install.json")
+        }
+        val tree = json.optJSONArray("tree")
+            ?: throw HermitException(ErrorCodes.NETWORK, "GitHub 没有返回仓库目录")
+        if (tree.length() > MAX_REPOSITORY_ENTRIES) throw HermitException(ErrorCodes.QUOTA, "仓库文件数量超过限制")
+        val files = buildList {
+            for (index in 0 until tree.length()) {
+                val entry = tree.optJSONObject(index) ?: continue
+                if (entry.optString("type") != "blob") continue
+                val path = entry.optString("path")
+                validateRelative(path)
+                val size = entry.optLong("size", -1L)
+                if (size > MAX_EXPANDED_BYTES) throw HermitException(ErrorCodes.QUOTA, "仓库文件过大：$path")
+                add(RepositoryFile(path, size))
+            }
+        }
+        if (files.isEmpty()) throw HermitException(ErrorCodes.INVALID_ARGUMENT, "仓库中没有可安装文件")
+        return files
+    }
+
+    private fun downloadGitHubDirectory(
+        source: RepositorySource,
+        revision: String,
+        files: List<RepositoryFile>,
+        subtree: String,
+        output: File,
+    ) {
+        val selected = files.mapNotNull { file ->
+            val relative = when {
+                subtree.isBlank() -> file.path
+                file.path.startsWith("$subtree/") -> file.path.removePrefix("$subtree/")
+                else -> return@mapNotNull null
+            }
+            RepositoryFile(relative, file.size)
+        }
+        if (selected.isEmpty()) throw HermitException(ErrorCodes.INVALID_ARGUMENT, "仓库目录为空或不存在")
+        if (selected.size > MAX_REPOSITORY_FILES) throw HermitException(ErrorCodes.QUOTA, "所选目录文件数量超过限制")
+        val declaredSize = selected.map(RepositoryFile::size).filter { it >= 0 }.sum()
+        if (declaredSize > MAX_EXPANDED_BYTES) throw HermitException(ErrorCodes.QUOTA, "所选目录展开后超过 256 MiB")
+        var total = 0L
+        val repositoryClient = clientFor(GITHUB_GATEWAY.toHttpUrl().host)
+        ZipOutputStream(FileOutputStream(output)).use { zip ->
+            selected.forEach { file ->
+                validateRelative(file.path)
+                val remotePath = listOf(subtree, file.path).filter { it.isNotBlank() }.joinToString("/")
+                val endpoint = repositoryRawUrl(source, revision, remotePath)
+                val request = Request.Builder().url(endpoint).build()
+                executeWithRetries(repositoryClient, request).use { response ->
+                    if (!response.isSuccessful) {
+                        throw HermitException(ErrorCodes.NETWORK, "仓库文件下载失败：${file.path}（HTTP ${response.code}）", response.code >= 500)
+                    }
+                    zip.putNextEntry(ZipEntry(file.path))
+                    val input = response.body.byteStream()
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    while (true) {
+                        val read = input.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        if (total > MAX_EXPANDED_BYTES) throw HermitException(ErrorCodes.QUOTA, "所选目录展开后超过 256 MiB")
+                        zip.write(buffer, 0, read)
+                    }
+                    zip.closeEntry()
+                }
+            }
+        }
+    }
+
+    private fun repositoryEntries(source: File): List<String> {
+        val entries = linkedSetOf<String>()
+        ZipInputStream(BufferedInputStream(FileInputStream(source))).use { input ->
+            while (true) {
+                val entry = input.nextEntry ?: break
+                val parts = entry.name.trimEnd('/').split('/')
+                if (parts.size < 2) continue
+                val relative = parts.drop(1).joinToString("/")
+                if (relative.isNotBlank()) {
+                    validateRelative(relative)
+                    entries += relative
+                    if (entries.size > MAX_REPOSITORY_ENTRIES) throw HermitException(ErrorCodes.QUOTA, "仓库文件数量超过限制")
+                }
+            }
+        }
+        if (entries.isEmpty()) throw HermitException(ErrorCodes.INVALID_ARGUMENT, "仓库中没有可安装文件")
+        return entries.toList()
+    }
+
+    private fun isZipArchive(file: File): Boolean = runCatching {
+        FileInputStream(file).use { input ->
+            val signature = ByteArray(4)
+            input.read(signature) == 4 && signature[0] == 'P'.code.toByte() && signature[1] == 'K'.code.toByte() &&
+                signature[2] in listOf(3, 5, 7).map(Int::toByte) && signature[3] in listOf(4, 6, 8).map(Int::toByte)
+        }
+    }.getOrDefault(false)
+
+    private fun filterRepositoryArchive(source: File, output: File, subtree: String) {
         var written = 0
         var total = 0L
         ZipInputStream(BufferedInputStream(FileInputStream(source))).use { input ->
@@ -514,7 +777,7 @@ class RemoteSourceInstaller(
                 }
             }
         }
-        if (written == 0) throw HermitException(ErrorCodes.INVALID_ARGUMENT, "GitHub 路径为空或不存在")
+        if (written == 0) throw HermitException(ErrorCodes.INVALID_ARGUMENT, "仓库目录为空或不存在")
     }
 
     private fun validateDownloadUrl(value: String): String {
@@ -538,32 +801,40 @@ class RemoteSourceInstaller(
             .dns { requested -> if (requested.equals(host, true)) addresses else throw java.net.UnknownHostException(requested) }.build()
     }
 
+    private fun executeWithRetries(client: OkHttpClient, request: Request, attempts: Int = 3): Response {
+        var lastError: IOException? = null
+        repeat(attempts) { attempt ->
+            try {
+                return client.newCall(request).execute()
+            } catch (error: IOException) {
+                lastError = error
+                if (attempt + 1 < attempts) Thread.sleep(250L * (attempt + 1))
+            }
+        }
+        throw lastError ?: IOException("网络请求失败")
+    }
+
     private fun validateSlug(value: String, field: String) {
         if (!value.matches(Regex("[A-Za-z0-9_.-]{1,100}")) || value.startsWith('.') || value.endsWith('.')) {
             throw HermitException(ErrorCodes.INVALID_ARGUMENT, "GitHub $field 无效")
         }
     }
 
-    private fun githubRepository(value: String): Pair<String, String>? {
-        val uri = runCatching { Uri.parse(value.trim()) }.getOrNull() ?: return null
-        if (!uri.host.equals("github.com", true)) return null
-        val parts = uri.path.orEmpty().trim('/').removeSuffix(".git").split('/').filter { it.isNotBlank() }
-        if (parts.size != 2) return null
-        return parts[0] to parts[1]
-    }
-
     private fun validateRelative(path: String) {
         if (path.length > 512 || path.startsWith('/') || path.contains('\\') || path.split('/').any { it.isBlank() || it == "." || it == ".." }) {
-            throw HermitException(ErrorCodes.INVALID_ARGUMENT, "GitHub 子目录无效")
+            throw HermitException(ErrorCodes.INVALID_ARGUMENT, "仓库子目录无效")
         }
     }
 
     companion object {
         private const val MAX_DOWNLOAD_BYTES = 64L * 1024 * 1024
         private const val MAX_EXPANDED_BYTES = 256L * 1024 * 1024
-        private const val MAX_GITHUB_JSON_BYTES = 1024 * 1024
+        private const val MAX_GITHUB_JSON_BYTES = 4 * 1024 * 1024
+        private const val MAX_REPOSITORY_ENTRIES = 20_000
+        private const val MAX_REPOSITORY_FILES = 5_000
         private const val MAX_MANIFEST_BYTES = 64 * 1024
         private const val MAX_URL_LENGTH = 4096
+        private const val GITHUB_GATEWAY = "https://hermit.airen.life/_repo/github"
         private val SHA256_PATTERN = Regex("^[0-9a-f]{64}$")
         private val SAME_ORIGIN_CLIENT = OkHttpClient.Builder()
             .proxy(Proxy.NO_PROXY)

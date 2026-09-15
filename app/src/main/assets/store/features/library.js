@@ -3,7 +3,7 @@
   const H = window.HermitShell;
   const { $, $$, state, host } = H;
   const { say, busy, bind, open, close, confirmAction, selected } = H.ui;
-  const sourceLabels = { "online-manifest": "线上安装包", "https-package": "线上安装包", github: "GitHub（海外可选）", zip: "本地 ZIP", import: "本地 ZIP", directory: "本地文件夹", agent: "本地创建", online: "线上网址" };
+  const sourceLabels = { "online-manifest": "线上安装包", "https-package": "线上安装包", github: "GitHub 仓库", gitlab: "GitLab 仓库", gitee: "Gitee 仓库", zip: "本地 ZIP", import: "本地 ZIP", directory: "本地文件夹", agent: "本地创建", online: "线上网址" };
   function appSource(app) { return app.source || (["online", "online-manifest", "https-package", "github"].includes(app.sourceAdapter) ? "online" : "local"); }
   function appRuntime(app) { return app.runtimeMode || (app.liveUrl && !app.activeReleaseId ? "live" : "local"); }
   function hasLocal(app) { return typeof app.localAvailable === "boolean" ? app.localAvailable : !!app.activeReleaseId; }
@@ -19,17 +19,19 @@
     return "未标注版本";
   }
   function filterApps() {
-    const candidates = state.view === "favorites" ? state.apps.filter(app => app.favorite) : state.apps;
+    const favoritesOnly = state.libraryFilter === "favorites";
+    const candidates = favoritesOnly ? state.apps.filter(app => app.favorite) : state.apps;
     $$(".app-card").forEach(card => {
-      const inCollection = state.view !== "favorites" || card.dataset.favorite === "true";
+      const inCollection = !favoritesOnly || card.dataset.favorite === "true";
       card.classList.toggle("hidden", !inCollection);
     });
     $("#empty").classList.toggle("hidden", candidates.length !== 0);
-    $("#collectionPrompt").textContent = state.view === "favorites"
+    $("#collectionPrompt").textContent = favoritesOnly
       ? "已收藏【" + candidates.length + "】个HAPP应用"
       : "已安装【" + candidates.length + "】个HAPP应用";
-    $("#emptyTitle").textContent = state.view === "favorites" ? "收藏你的第一个应用" : "添加你的第一个应用";
-    $("#emptyMessage").textContent = state.view === "favorites" ? "点亮应用卡片上的爱心，常用工具就会集中在这里。" : "添加在线网址或导入原生 HTML、JavaScript 和 CSS 页面。";
+    $("#emptyTitle").textContent = favoritesOnly ? "收藏你的第一个应用" : "添加你的第一个应用";
+    $("#emptyMessage").textContent = favoritesOnly ? "点亮应用卡片上的爱心，常用工具就会集中在这里。" : "添加在线网址或导入原生 HTML、JavaScript 和 CSS 页面。";
+    selected("#libraryTabs", "collection", state.libraryFilter);
   }
   function resetFilters() { filterApps(); }
   function shortcutState(app) {
@@ -55,6 +57,14 @@
     const value = await host.call("apps.pin", { appId: app.appId });
     say(value.requested ? "已请求添加到手机桌面，请确认系统提示。" : "当前桌面不支持固定图标。");
   }
+  $$("#libraryTabs [data-collection]").forEach(button => {
+    button.onclick = () => {
+      state.libraryFilter = button.dataset.collection === "all" ? "all" : "favorites";
+      filterApps();
+      if (H.navigation) H.navigation.captureViewState("favorites");
+      window.scrollTo(0, 0);
+    };
+  });
   let refreshEpoch = 0;
   async function refresh() {
     const epoch = ++refreshEpoch;

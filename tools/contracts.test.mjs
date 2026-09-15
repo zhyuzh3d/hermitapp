@@ -108,18 +108,19 @@ test("store navigation, favorites, support fallback and QR bridge remain wired",
   const script = shellSources(".js");
   const css = shellSources(".css");
   const tabs = [...html.matchAll(/<nav class="bottom-nav[^"]*"[\s\S]*?<\/nav>/g)][0]?.[0] || "";
-  assert.deepEqual([...tabs.matchAll(/data-view="([^"]+)"/g)].map(match => match[1]), ["favorites", "all", "development", "settings", "support"]);
-  assert.equal((tabs.match(/class="nav-icon"/g) || []).length, 5);
-  assert.match(css, /grid-template-columns:repeat\(5,minmax\(0,1fr\)\)/);
+  assert.deepEqual([...tabs.matchAll(/data-view="([^"]+)"/g)].map(match => match[1]), ["favorites", "development", "settings", "support"]);
+  assert.equal((tabs.match(/class="nav-icon"/g) || []).length, 4);
+  assert.match(css, /grid-template-columns:repeat\(4,minmax\(0,1fr\)\)/);
   assert.match(script, /"apps\.favorite"/);
   assert.match(script, /activeVersion/);
   assert.match(fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8"), /\.put\("activeVersion"/);
   assert.match(script, /"apps\.scanQr"/);
   assert.match(script, /"support\.open"/);
   assert.match(html, /10knet·zhyuzh3d/);
-  for (const id of ["addFolder", "addUrl", "scanQr", "topApkVersion", "topWebVersion"]) assert.match(html, new RegExp(`id="${id}"`));
-  assert.match(script, /"apps\.pickDirectory"/);
-  assert.match(script, /"apps\.confirmDirectory"/);
+  for (const id of ["addZip", "addUrl", "scanQr", "libraryTabs", "topApkVersion", "topWebVersion"]) assert.match(html, new RegExp(`id="${id}"`));
+  assert.doesNotMatch(html, /id="addFolder"/);
+  assert.doesNotMatch(script, /"apps\.pickDirectory"/);
+  assert.doesNotMatch(script, /"apps\.confirmDirectory"/);
   assert.match(script, /"apps\.pickIcon"/);
   assert.match(css, /bottom-nav \.nav-icon\{margin:0 auto 4px!important\}/);
   assert.match(css, /\.agent-address-row \{ display:block;/);
@@ -177,8 +178,20 @@ test("official HermitUI is portrait-only while installed happs retain manifest o
 
 test("online entry separates live pages from direct packages and install descriptors", () => {
   const installer = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/install/RemoteSourceInstaller.kt", "utf8");
+  const repository = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/install/RepositorySource.kt", "utf8");
+  const bridge = fs.readFileSync("app/src/main/assets/bridge/hermit-v1.js", "utf8");
   assert.match(installer, /encodedPath\.endsWith\("\.zip", ignoreCase = true\)/);
+  assert.match(installer, /isZipArchive\(candidate\)/);
   assert.match(installer, /equals\("hermit-install\.json", ignoreCase = true\)/);
+  assert.match(installer, /readInstallManifest\(repositoryRawUrl/);
+  assert.match(installer, /directoryChoice\(resolved, choices\)/);
+  assert.match(installer, /GITHUB_GATEWAY = "https:\/\/hermit\.airen\.life\/_repo\/github"/);
+  assert.match(installer, /githubRepositoryFiles\(resolved, revision\)/);
+  assert.match(bridge, /host\\\.apps\\\.\(\?:installOnline\|importZip/);
+  assert.match(repository, /GITHUB\("github"/);
+  assert.match(repository, /GITLAB\("gitlab"/);
+  assert.match(repository, /GITEE\("gitee"/);
+  for (const path of ["dist", "build", "release", "web", "public"]) assert.match(repository, new RegExp(`"${path}"`));
   assert.match(installer, /OnlineInstallResult\(app\.appId, null, "live", "live"\)/);
   assert.match(installer, /"online-descriptor"/);
 });

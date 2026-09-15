@@ -15,6 +15,7 @@
   const MAX_PENDING = 16;
 
   function requestTimeout(method, params) {
+    if (/^host\.apps\.(?:installOnline|importZip|installPackageUrl|installGitHub|updateFromSource|reinstall)$/.test(method)) return 600000;
     if (!/^network\.(?:request|openStream|readStream|openSocket|readSocket)$/.test(method)) return 60000;
     const requested = Number(params && params.timeoutMs);
     if (!Number.isFinite(requested)) return /^network\.read(?:Stream|Socket)$/.test(method) ? 195000 : 60000;

@@ -23,7 +23,7 @@
     if (!state.viewMounted) await H.navigation.showView(H.navigation.initialView(), false);
     try { await H.features.library.refresh(); } catch (error) { libraryError(error); }
     starting = false;
-    if (!["favorites", "all"].includes(state.view)) {
+    if (state.view !== "favorites") {
       try { await H.navigation.showView(state.view); } catch (error) { H.ui.say(error.message || "页面恢复失败，请重试。", true); }
     } else H.navigation.restoreViewScroll(state.view, state.viewEpoch);
     const reads = [H.features.settings.loadAbout(), H.features.development.refreshAgent()];

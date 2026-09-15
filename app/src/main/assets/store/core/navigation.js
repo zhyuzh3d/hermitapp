@@ -22,6 +22,8 @@
       const details = $("#developmentView details");
       value.eventsOpen = !!(details && details.open);
       // The development password is Native-owned sensitive state and is never cached here.
+    } else if (view === "favorites") {
+      value.libraryFilter = state.libraryFilter;
     } else if (view === "icons") {
       value.query = $("#searchIcons").value;
       value.style = state.iconStyle;
@@ -44,6 +46,7 @@
       if (!source || typeof source !== "object") continue;
       const item = { scrollY:Number.isFinite(source.scrollY) ? Math.max(0, Math.round(source.scrollY)) : 0 };
       if (view === "development") item.eventsOpen = !!source.eventsOpen;
+      if (view === "favorites") item.libraryFilter = source.libraryFilter === "all" ? "all" : "favorites";
       if (view === "icons") {
         item.query = typeof source.query === "string" ? source.query.slice(0, 300) : "";
         item.style = ["all", "solid", "regular", "brands"].includes(source.style) ? source.style : "all";
@@ -61,6 +64,8 @@
     if (view === "development") {
       const details = $("#developmentView details");
       if (details) details.open = !!value.eventsOpen;
+    } else if (view === "favorites") {
+      state.libraryFilter = value.libraryFilter === "all" ? "all" : "favorites";
     } else if (view === "icons") {
       $("#searchIcons").value = typeof value.query === "string" ? value.query.slice(0, 300) : "";
       state.iconStyle = ["all", "solid", "regular", "brands"].includes(value.style) ? value.style : "all";
@@ -100,7 +105,7 @@
 
   async function refreshView(view) {
     if (!host.ready() && view !== "icons") return;
-    if (["favorites", "all"].includes(view)) return H.features.library.refresh();
+    if (view === "favorites") return H.features.library.refresh();
     if (view === "development") return H.features.development.refreshAgent();
     if (view === "settings") return H.features.settings.load();
     if (view === "icons") return H.features.icons.loadCatalog();
@@ -114,7 +119,6 @@
     writeViewState();
     const epoch = ++state.viewEpoch;
     const topbarCopy = {
-      all: ["全部应用", "你的页面应用，都在这里。"],
       development: ["开发服务", "让任意电脑的智能体快速更新、刷新和发布 happ。"],
       settings: ["设置", "调整外观、界面版本与常用工具。"],
       support: ["支持 Hermit", "向项目提交反馈，并查看开源仓库。"],
@@ -124,12 +128,12 @@
     $("#topbarCopy").classList.toggle("hidden", !topbarCopy);
     $(".topbar-versions").classList.toggle("hidden", view !== "favorites");
     $("#homePrompt").classList.toggle("hidden", view !== "favorites");
-    $("#collectionPrompt").classList.toggle("hidden", !["favorites", "all"].includes(view));
+    $("#collectionPrompt").classList.toggle("hidden", view !== "favorites");
     if (topbarCopy) {
       $("#topbarTitle").textContent = topbarCopy[0];
       $("#topbarDescription").textContent = topbarCopy[1];
     }
-    const visibleView = ["favorites", "all"].includes(view) ? "libraryView" : view + "View";
+    const visibleView = view === "favorites" ? "libraryView" : view + "View";
     $$("main > .view").forEach(el => el.classList.toggle("hidden", el.id !== visibleView));
     $$(".bottom-nav [data-view]").forEach(button => {
       const active = button.dataset.view === (view === "icons" ? "settings" : view);
@@ -138,7 +142,7 @@
     });
     restoreViewState(view);
     window.scrollTo(0, 0);
-    if (["favorites", "all"].includes(view)) H.features.library.filterApps();
+    if (view === "favorites") H.features.library.filterApps();
     if (runSideEffect) await refreshView(view);
     restoreViewScroll(view, epoch);
   }

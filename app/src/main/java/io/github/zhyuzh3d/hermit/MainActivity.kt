@@ -75,6 +75,8 @@ import io.github.zhyuzh3d.hermit.install.IdentityInstallChoice
 import io.github.zhyuzh3d.hermit.install.IconProcessor
 import io.github.zhyuzh3d.hermit.install.PackageManifest
 import io.github.zhyuzh3d.hermit.install.PackageManifestReader
+import io.github.zhyuzh3d.hermit.install.RepositoryDirectory
+import io.github.zhyuzh3d.hermit.install.RepositorySource
 import io.github.zhyuzh3d.hermit.model.ErrorCodes
 import io.github.zhyuzh3d.hermit.model.HappRuntimeMode
 import io.github.zhyuzh3d.hermit.model.HappSource
@@ -1208,7 +1210,9 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 throw HermitException(ErrorCodes.OS_PERMISSION_DENIED, "Android 未授予局域网权限")
             }
             val name = params.optString("name").takeIf { it.isNotBlank() }?.take(80)
-            val installed = hermitApp.remoteInstaller.installOnline(url, name, ::chooseIdentityInstall)
+            val installed = hermitApp.remoteInstaller.installOnline(
+                url, name, identityChoice = ::chooseIdentityInstall, directoryChoice = ::chooseRepositoryDirectory,
+            )
             val updated = withContext(Dispatchers.IO) {
                 val installedInstance = hermitApp.registry.getInstance(installed.appId)!!
                 val presented = hermitApp.registry.updatePresentation(
@@ -2729,6 +2733,20 @@ class MainActivity : ComponentActivity(), BridgeHost {
             "update" -> IdentityInstallChoice.UPDATE
             else -> IdentityInstallChoice.CANCEL
         }
+    }
+
+    private suspend fun chooseRepositoryDirectory(source: RepositorySource, options: List<RepositoryDirectory>): String? {
+        val choices = mutableListOf(PromptChoice("cancel", "取消"))
+        choices += options.mapIndexed { index, option ->
+            val label = if (option.path.isBlank()) option.label else "${option.label}/"
+            PromptChoice("path:${option.path}", label, if (index == 0) "primary" else "")
+        }
+        val selected = promptChoice(
+            "选择网页发布目录",
+            "${source.provider.label} 仓库没有提供 hermit-install.json。请选择要作为 happ 根目录的现有发布目录；Hermit 会先复制到临时区并校验入口与配置，再提交安装。",
+            choices,
+        )
+        return selected.takeIf { it.startsWith("path:") }?.removePrefix("path:")
     }
 
     private suspend fun promptChoice(title: String, message: String, choices: List<PromptChoice>): String {

@@ -22,32 +22,26 @@
     showAddIcon(dataUrl);
   }
   function openAdd(kind, value = {}) {
-    state.addToFavorites = state.view === "favorites";
+    state.addToFavorites = state.libraryFilter === "favorites";
     state.addDraft = { kind, token:value.token || null, customIconDataUrl:null, defaultIconDataUrl:value.iconDataUrl || null };
     $("#favoriteOnAdd").classList.toggle("hidden", !state.addToFavorites);
-    $("#urlField").classList.toggle("hidden", kind !== "online");
-    $("#pathField").classList.toggle("hidden", kind !== "directory");
-    $("#versionField").classList.toggle("hidden", kind === "online");
+    $("#urlField").classList.remove("hidden");
+    $("#versionField").classList.add("hidden");
     $("#url").value = value.url || "";
-    $("#sourcePath").value = value.path || "";
     $("#name").value = value.name || (value.url ? new URL(value.url).hostname : "");
     $("#addVersion").value = value.version || "1.0.0";
-    $("#addSourceLabel").textContent = kind === "directory" ? "文件夹快照" : value.scanned ? "二维码链接" : "在线网址";
-    $("#manifestStatus").textContent = kind === "directory" ? (value.manifestFound ? "已找到并解析 hermit.json，可在下方修改后添加。" : "未找到 hermit.json，已生成基础配置，请检查后添加。") : "普通网页会直接实时运行且不能进入开发；ZIP 或 hermit-install.json 会下载安装为本地版本，可创建开发副本。";
+    $("#addSourceLabel").textContent = value.scanned ? "二维码链接" : "在线网址";
+    $("#manifestStatus").textContent = "普通网页会实时运行；ZIP 会下载校验后本地安装；Git 仓库优先读取 hermit-install.json，缺失时再选择仓库中实际存在的发布目录。";
     resetAddIcon();
     if (value.iconDataUrl) showAddIcon(value.iconDataUrl);
     open("#addPanel");
-    setTimeout(() => (kind === "online" ? $("#url") : $("#name")).focus({ preventScroll:true }), 80);
+    setTimeout(() => $("#url").focus({ preventScroll:true }), 80);
   }
   bind("#addZip", async () => {
-    state.addToFavorites = state.view === "favorites";
-    await installed(await host.call("apps.importZip", { favorite: state.addToFavorites }), "本地 ZIP 已导入。");
+    state.addToFavorites = state.libraryFilter === "favorites";
+    await installed(await host.call("apps.importZip", { favorite: state.addToFavorites }), "压缩包已校验并安装。" );
   });
   $("#addUrl").onclick = () => openAdd("online");
-  bind("#addFolder", async () => {
-    const value = await host.call("apps.pickDirectory", {});
-    if (!value.cancelled) openAdd("directory", value);
-  });
   async function scanQr() {
     const value = await host.call("apps.scanQr", {});
     if (value.cancelled) { say("已取消操作。"); return; }
@@ -62,9 +56,9 @@
   async function installed(value, message) {
     if (value && value.cancelled) { say("已取消添加。"); return; }
     $("#name").value = ""; state.addDraft = null; close("#addPanel"); resetFilters();
-    const targetView = state.addToFavorites ? "favorites" : "all";
-    cachedViewState.views[targetView] = { scrollY: 0, query: "" };
-    await showView(targetView); say(message);
+    state.libraryFilter = state.addToFavorites ? "favorites" : "all";
+    cachedViewState.views.favorites = { scrollY: 0, libraryFilter:state.libraryFilter };
+    await showView("favorites"); say(message);
   }
   bind("#pickAppIcon", async () => {
     const value = await host.call("apps.pickIcon", {});
@@ -87,11 +81,8 @@
         common.insecureConfirmed = true;
       }
     }
-    const value = draft.kind === "directory"
-      ? await host.call("apps.confirmDirectory", Object.assign(common, { token:draft.token }))
-      : await host.call("apps.installOnline", Object.assign(common, { url:onlineUrl }));
-    const message = draft.kind === "directory" ? "本地 happ 已添加。"
-      : value.installStrategy === "local" ? "安装包已下载为本地 happ，可创建开发副本。"
+    const value = await host.call("apps.installOnline", Object.assign(common, { url:onlineUrl }));
+    const message = value.installStrategy === "local" ? "来源内容已校验并安装为本地 happ，可创建开发副本。"
       : "普通网页已添加为实时 happ；没有本地代码，不能进入开发模式。";
     await installed(value, message);
   });

@@ -243,8 +243,10 @@
     if (!await confirmAction("恢复应用备份", "将创建独立的新应用，不继承登录状态和页面授权。", "选择备份")) return;
     const value = await host.call("backup.restore", {});
     if (!value.cancelled) {
-      resetFilters(); cachedViewState.views.all = { scrollY: 0, query: "" };
-      await showView("all"); say("已恢复“" + value.name + "”。");
+      state.libraryFilter = "all";
+      cachedViewState.views.favorites = { scrollY: 0, libraryFilter: "all" };
+      resetFilters();
+      await showView("favorites"); say("已恢复“" + value.name + "”。");
     }
   });
   bind("#restoreAppData", async () => {

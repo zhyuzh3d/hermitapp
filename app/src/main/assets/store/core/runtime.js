@@ -11,9 +11,9 @@
   }
   const $ = selector => document.querySelector(selector);
   const $$ = selector => [...document.querySelectorAll(selector)];
-  const HERMIT_WEB_VERSION = "1.10.8";
+  const HERMIT_WEB_VERSION = "1.10.10";
   const VIEW_STATE_KEY = "hermit.shell.view-state.v1";
-  const VIEWS = ["favorites", "all", "development", "settings", "icons", "support"];
-  const state = { apps: [], selected: null, deploy: null, iconStyle: "all", iconLimit: 60, settingsTab: "interface", modals: [], view: "favorites", viewEpoch: 0, viewMounted: false, addToFavorites: true, addDraft: null, manageDraft: null, managedEpoch: 0 };
+  const VIEWS = ["favorites", "development", "settings", "icons", "support"];
+  const state = { apps: [], selected: null, deploy: null, iconStyle: "all", iconLimit: 60, settingsTab: "interface", modals: [], view: "favorites", libraryFilter: "favorites", viewEpoch: 0, viewMounted: false, addToFavorites: true, addDraft: null, manageDraft: null, managedEpoch: 0 };
   window.HermitShell = { $, $$, state, version: HERMIT_WEB_VERSION, VIEW_STATE_KEY, VIEWS, features: {} };
 })();
