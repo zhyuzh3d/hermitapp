@@ -4,7 +4,7 @@ ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 SDK_DIR=${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}
 export JAVA_HOME=${JAVA_HOME:-/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home}
 export PATH="$JAVA_HOME/bin:$PATH"
-EXPECTED_VERSION=1.10.11
+EXPECTED_VERSION=1.10.12
 if [ "${1:-}" = "--version" ]; then
   test "$#" -ge 2 || { echo "usage: $0 [--version VERSION] [APK]" >&2; exit 2; }
   EXPECTED_VERSION=$2

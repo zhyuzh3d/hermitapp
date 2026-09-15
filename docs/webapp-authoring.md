@@ -4,6 +4,14 @@ Hermit 的 happ（WebApp）开发基线是纯原生 HTML + JavaScript + CSS。�
 
 Hermit 不为框架提供额外支持，但不会拒绝框架已经生成的最终静态产物。只要它遵守普通页面的入口、相对资源路径、WebView 能力和权限边界，就按普通页面添加。Hermit 不安装源码依赖、不自动寻找 dist、不构建源码、不提供专属框架适配。依赖服务端 SSR 的源码不能当作本地静态页面运行，这是运行形态限制，不是框架黑名单。
 
+## Android 10 与旧 WebView 兼容基线
+
+happ 默认建议以 Android 10 / API 29 设备及其较旧厂商 WebView 为兼容基线；用户或项目也可以自行选择更高目标。Android 系统版本与 WebView 内核版本彼此独立，不存在可统一依赖的“WebView 10”；同为 Android 10 或 11 的设备也可能使用不同厂商、不同版本和不同能力的 WebView。建议页面按实际能力检测，不要因为开发机浏览器较新就直接假定手机支持同样的语法和 API。
+
+直接交付、没有转译的 JavaScript 通常应避免旧 WebView 无法解析的较新语法，包括可选链 `?.`、空值合并 `??`、逻辑赋值 `&&=` / `||=` / `??=`、私有类字段和顶层 `await`；如果最终交付文件已转译到选定基线，则源码可以使用这些语法。`Array.prototype.at`、`structuredClone` 等较新 API 建议先检测并提供回退；核心布局也建议避免在无回退时依赖旧 WebView 不支持的 flexbox `gap`。继续保留 `hermitready` 监听和即时 `hermit.isReady` 检查。
+
+happ 的核心流程也建议避免依赖 Android 11 及以上才提供的系统能力。happ 需要 Android 系统能力时，只使用 HermitApp 已支持并通过公开 Hermit Bridge 提供的能力；Bridge 没有提供的能力按当前不可用处理，不调用未公开 Native 接口、厂商私有接口，也不绕过宿主的权限与逐 happ 授权机制。建议先查询 `hermit.runtime.capabilities()` 和具体能力的 availability 接口，再决定是否显示和调用；不要仅根据开发设备成功就推断其他设备可用。缺少硬件、系统服务、happ grant 或 Android 权限都是正常运行状态，页面应处理 `E_UNSUPPORTED` 和权限错误，尽量保留 Android 10 可用路径或显示明确的不可用说明。较新系统能力可以作为增强。以上只是提供给智能体的开发建议，不是 happ 的安装或运行准入规则；HermitApp 不会按 JavaScript 语法、浏览器 API 或系统能力选择扫描、核定或拒绝代码，具体取舍由智能体结合用户需求判断。智能体如需兼容性检查，只检查本次变更涉及的语法与能力分支，随后立即同步和刷新，不要扩大成全项目兼容性测试。
+
 ## 最小应用
 
 创建一个目录，保存以下三个文件。`hermit.json` 可选，简单页面只要根目录有 `index.html` 即可。
