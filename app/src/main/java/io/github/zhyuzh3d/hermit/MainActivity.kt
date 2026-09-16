@@ -11,13 +11,17 @@ import android.content.res.Configuration
 import android.graphics.Color
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Canvas
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.os.storage.StorageManager
 import android.provider.Settings
 import android.view.Gravity
+import android.view.PixelCopy
 import android.view.View
 import android.view.WindowManager
 import android.webkit.GeolocationPermissions
@@ -85,6 +89,7 @@ import io.github.zhyuzh3d.hermit.model.HermitException
 import io.github.zhyuzh3d.hermit.model.WebAppInstance
 import io.github.zhyuzh3d.hermit.runtime.LocalContentGateway
 import io.github.zhyuzh3d.hermit.runtime.OfficialShellManager
+import io.github.zhyuzh3d.hermit.runtime.ObjectAssetGateway
 import io.github.zhyuzh3d.hermit.runtime.SharedAssetGateway
 import io.github.zhyuzh3d.hermit.runtime.RuntimeRole
 import io.github.zhyuzh3d.hermit.runtime.RuntimeSession
@@ -309,6 +314,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
             when (action) {
                 "open" -> openAgentTarget(appId, args.optString("route").takeIf { !args.isNull("route") && it.isNotBlank() })
                 "page-state" -> captureAgentPageState(args)
+                "capture-screen" -> captureAgentScreen(args)
                 "reload" -> reloadAppFromAgent(args)
                 "reload-shell" -> reloadShellFromAgent(args)
                 "refresh" -> refreshDevRuntime(args)
@@ -515,6 +521,66 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 .put("originalUrl", view.originalUrl ?: JSONObject.NULL)
                 .put("canGoBack", view.canGoBack())
                 .put("canGoForward", view.canGoForward()))
+    }
+
+    private suspend fun captureAgentScreen(args: JSONObject): JSONObject {
+        val current = session ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "当前没有页面会话")
+        if (current.role !in setOf(RuntimeRole.STORE, RuntimeRole.WEB_APP)) {
+            throw HermitException(ErrorCodes.ORIGIN_DENIED, "当前界面不开放开发截图")
+        }
+        val requestedAppId = args.optString("appId").takeIf { it.isNotBlank() }
+        if (current.role == RuntimeRole.WEB_APP) {
+            if (requestedAppId == null || requestedAppId != current.instance?.appId) {
+                throw HermitException(ErrorCodes.INVALID_ARGUMENT, "必须指定当前前台 happ 的 appId")
+            }
+            if (current.instance?.launchChannel != LaunchChannel.DEV) {
+                throw HermitException(ErrorCodes.DEV_MODE_REQUIRED, "截图只允许调度当前运行的 happ 开发副本")
+            }
+        } else if (requestedAppId != null) {
+            throw HermitException(ErrorCodes.INVALID_ARGUMENT, "截取 HermitUI 时不能指定 appId")
+        }
+        if (!root.isAttachedToWindow || root.width <= 0 || root.height <= 0) {
+            throw HermitException(ErrorCodes.INVALID_ARGUMENT, "当前 HermitApp 窗口尚未准备好")
+        }
+
+        val maxEdge = args.optInt("maxEdge", DEFAULT_AGENT_SCREENSHOT_EDGE).coerceIn(720, MAX_AGENT_SCREENSHOT_EDGE)
+        val scale = minOf(1f, maxEdge.toFloat() / maxOf(root.width, root.height).toFloat())
+        val width = maxOf(1, (root.width * scale).toInt())
+        val height = maxOf(1, (root.height * scale).toInt())
+        val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val pixelCopyResult = suspendCancellableCoroutine { continuation ->
+            PixelCopy.request(window, bitmap, { result ->
+                if (continuation.isActive) continuation.resume(result)
+            }, Handler(Looper.getMainLooper()))
+        }
+        if (pixelCopyResult != PixelCopy.SUCCESS) {
+            val canvas = Canvas(bitmap)
+            canvas.scale(width.toFloat() / root.width, height.toFloat() / root.height)
+            root.draw(canvas)
+        }
+
+        val output = ByteArrayOutputStream()
+        var mimeType = "image/png"
+        bitmap.compress(Bitmap.CompressFormat.PNG, 100, output)
+        if (output.size() > MAX_AGENT_SCREENSHOT_BYTES) {
+            output.reset()
+            mimeType = "image/jpeg"
+            bitmap.compress(Bitmap.CompressFormat.JPEG, 90, output)
+        }
+        bitmap.recycle()
+        if (output.size() > MAX_AGENT_SCREENSHOT_BYTES) {
+            throw HermitException(ErrorCodes.QUOTA, "截图超过传输大小限制，请降低 maxEdge")
+        }
+        val bytes = output.toByteArray()
+        return JSONObject()
+            .put("role", current.role.name)
+            .put("appId", current.instance?.appId ?: JSONObject.NULL)
+            .put("width", width)
+            .put("height", height)
+            .put("bytes", bytes.size)
+            .put("mimeType", mimeType)
+            .put("capturedAt", System.currentTimeMillis())
+            .put("_imageData", Base64.encodeToString(bytes, Base64.NO_WRAP))
     }
 
     private fun reloadAppFromAgent(args: JSONObject): JSONObject {
@@ -784,12 +850,19 @@ class MainActivity : ComponentActivity(), BridgeHost {
         } else null
         if (shellLoadingView != null) view.visibility = View.INVISIBLE
         val sharedAssets = SharedAssetGateway(this, origin, compatibilitySource.takeIf { !nativeDocumentBootstrap })
+        val objectAssets = ObjectAssetGateway(
+            this,
+            origin,
+            instance?.appId,
+            instance?.activeDataGeneration,
+            allowHostImages = instance == null,
+        )
         val networkPolicy = instance?.takeIf { it.liveUrl != null }
             ?.let { RuntimeNetworkPolicy(it.runtimeUrl, it.allowCrossOriginNetwork) }
         if (WebViewFeature.isFeatureSupported(WebViewFeature.SERVICE_WORKER_SHOULD_INTERCEPT_REQUEST)) {
             ServiceWorkerControllerCompat.getInstance().setServiceWorkerClient(object : ServiceWorkerClientCompat() {
                 override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? =
-                    sharedAssets.intercept(request) ?: gateway?.intercept(request) ?: networkPolicy?.intercept(request)
+                    objectAssets.intercept(request) ?: sharedAssets.intercept(request) ?: gateway?.intercept(request) ?: networkPolicy?.intercept(request)
             })
         }
         val controller: PageBridge = if (webMessage) {
@@ -856,7 +929,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 }
             }
             override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest): WebResourceResponse? =
-                sharedAssets.intercept(request) ?: gateway?.intercept(request) ?: networkPolicy?.intercept(request)
+                objectAssets.intercept(request) ?: sharedAssets.intercept(request) ?: gateway?.intercept(request) ?: networkPolicy?.intercept(request)
                 ?: super.shouldInterceptRequest(view, request)
 
             override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest): Boolean {
@@ -1176,7 +1249,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
         "host.apps.scanQr" -> scanQrLink()
         "host.apps.pickIcon" -> {
             val uri = pickIcon() ?: return JSONObject().put("cancelled", true)
-            JSONObject().put("cancelled", false).put("dataUrl", iconSourceDataUrl(uri))
+            JSONObject().put("cancelled", false).put("preview", iconSourceDataUrl(uri))
         }
         "host.apps.pickDirectory" -> {
             val uri = pickTree() ?: return JSONObject().put("cancelled", true)
@@ -1191,9 +1264,13 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 ?: throw HermitException(ErrorCodes.SESSION_EXPIRED, "目录选择已失效，请重新选择")
             val result = hermitApp.installer.installTree(uri, params.optString("name").takeIf { it.isNotBlank() }, ::chooseIdentityInstall)
             val updated = withContext(Dispatchers.IO) {
-                val installed = hermitApp.registry.getInstance(result.appId)!!
-                val icon = params.optString("iconDataUrl").takeIf { it.isNotBlank() } ?: installed.iconDataUrl
-                val presented = hermitApp.registry.updatePresentation(result.appId, params.optString("name", "本地应用"), icon)
+                val iconBytes = params.optString("iconPreviewDataUrl").takeIf { it.isNotBlank() }?.let(IconProcessor::decodePngDataUrl)
+                val presented = hermitApp.registry.updatePresentation(
+                    result.appId,
+                    params.optString("name", "本地应用"),
+                    iconBytes,
+                    replaceIcon = iconBytes != null,
+                )
                 hermitApp.registry.updateReleaseVersion(result.releaseId, params.optString("version").takeIf { it.isNotBlank() })
                 if (params.optBoolean("favorite")) hermitApp.registry.setFavorite(result.appId, true) else presented
             }
@@ -1215,10 +1292,12 @@ class MainActivity : ComponentActivity(), BridgeHost {
             )
             val updated = withContext(Dispatchers.IO) {
                 val installedInstance = hermitApp.registry.getInstance(installed.appId)!!
+                val iconBytes = params.optString("iconPreviewDataUrl").takeIf { it.isNotBlank() }?.let(IconProcessor::decodePngDataUrl)
                 val presented = hermitApp.registry.updatePresentation(
                     installed.appId,
                     name ?: installedInstance.name,
-                    params.optString("iconDataUrl").takeIf { it.isNotBlank() } ?: installedInstance.iconDataUrl,
+                    iconBytes,
+                    replaceIcon = iconBytes != null,
                 )
                 if (params.optBoolean("favorite")) hermitApp.registry.setFavorite(installed.appId, true) else presented
             }
@@ -1282,8 +1361,12 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "页面应用不存在")
             val name = params.optString("name", app.name).trim().takeIf { it.isNotBlank() }
                 ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "名称不能为空")
-            val iconDataUrl = if (params.has("iconDataUrl")) validateIconDataUrl(params.optString("iconDataUrl")) else app.iconDataUrl
-            val updated = withContext(Dispatchers.IO) { hermitApp.registry.updatePresentation(app.appId, name, iconDataUrl) }
+            val replaceIcon = params.has("iconPreviewDataUrl")
+            val iconBytes = params.optString("iconPreviewDataUrl").trim().takeIf { replaceIcon && it.isNotEmpty() }
+                ?.let(IconProcessor::decodePngDataUrl)
+            val updated = withContext(Dispatchers.IO) {
+                hermitApp.registry.updatePresentation(app.appId, name, iconBytes, replaceIcon)
+            }
             shortcuts.update(updated)
             updated.toJson()
         }
@@ -1695,12 +1778,12 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 val input = contentResolver.openInputStream(uri) ?: throw HermitException(ErrorCodes.STORAGE, "无法读取文件")
                 val stored = input.use { stream -> withContext(Dispatchers.IO) { files.import(it.appId, session.dataGeneration!!, stream, name, mime) } }
                 if (mime.startsWith("video/")) {
-                    val metadata = inspectVideo(uri)
+                    val metadata = inspectVideo(uri, it.appId, session.dataGeneration!!)
                     metadata.keys().forEach { key -> stored.put(key, metadata.get(key)) }
                 }
                 stored
             }
-            "files.pickImage" -> requireApp(app).let { pickInlineImage(params) }
+            "files.pickImage" -> requireApp(app).let { pickStoredImage(it, session.dataGeneration!!, params) }
             "files.pickInline" -> requireApp(app).let { pickInlineFile(params) }
             "files.writeText" -> requireApp(app).let { withContext(Dispatchers.IO) {
                 files.writeText(it.appId, session.dataGeneration!!, params.optString("name", "note.txt"), params.getString("text"))
@@ -2047,7 +2130,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
             .put("dataUrl", "data:$mime;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP))
     }
 
-    private suspend fun pickInlineImage(params: JSONObject): JSONObject {
+    private suspend fun pickStoredImage(app: WebAppInstance, generation: String, params: JSONObject): JSONObject {
         val maxDimension = params.optInt("maxDimension", 1280).coerceIn(320, 2048)
         val maxBytes = params.optInt("maxBytes", 420 * 1024).coerceIn(64 * 1024, 700 * 1024)
         val uri = pickImage() ?: return JSONObject().put("cancelled", true)
@@ -2083,13 +2166,14 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 original.recycle()
             }
         }
-        return JSONObject().put("cancelled", false)
-            .put("name", (queryDisplayName(uri) ?: "image").substringBeforeLast('.') + ".jpg")
-            .put("mime", "image/jpeg").put("size", bytes.size)
-            .put("dataUrl", "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP))
+        val name = (queryDisplayName(uri) ?: "image").substringBeforeLast('.') + ".jpg"
+        return withContext(Dispatchers.IO) {
+            files.import(app.appId, generation, bytes.inputStream(), name, "image/jpeg")
+                .put("cancelled", false)
+        }
     }
 
-    private suspend fun inspectVideo(uri: Uri): JSONObject = withContext(Dispatchers.IO) {
+    private suspend fun inspectVideo(uri: Uri, appId: String, generation: String): JSONObject = withContext(Dispatchers.IO) {
         val output = JSONObject()
         val retriever = MediaMetadataRetriever()
         try {
@@ -2107,7 +2191,15 @@ class MainActivity : ComponentActivity(), BridgeHost {
                         encoded.toByteArray()
                     }
                     if (preview !== frame) preview.recycle()
-                    if (bytes.size <= 96 * 1024) output.put("previewDataUrl", "data:image/jpeg;base64," + Base64.encodeToString(bytes, Base64.NO_WRAP))
+                    if (bytes.size <= 96 * 1024) {
+                        output.put("preview", files.import(
+                            appId,
+                            generation,
+                            bytes.inputStream(),
+                            "video-preview.jpg",
+                            "image/jpeg",
+                        ))
+                    }
                 } finally { frame.recycle() }
             }
         } catch (_: Throwable) {
@@ -2174,7 +2266,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
             .put("name", manifest?.optString("name")?.takeIf { it.isNotBlank() } ?: tree.name ?: "本地应用")
             .put("version", versionName.ifBlank { "1.0.0" })
             .put("entry", manifest?.optString("entry", "index.html") ?: "index.html")
-            .put("iconDataUrl", manifestIcon)
+            .put("iconPreview", manifestIcon)
     }
 
     private fun findDocument(root: androidx.documentfile.provider.DocumentFile, relativePath: String): androidx.documentfile.provider.DocumentFile? {
@@ -2209,22 +2301,6 @@ class MainActivity : ComponentActivity(), BridgeHost {
         decoded.recycle()
         if (bytes.size > 2 * 1024 * 1024) throw HermitException(ErrorCodes.QUOTA, "图片处理后仍然过大，请选择较简单的图片")
         "data:image/${if (hasAlpha) "png" else "jpeg"};base64," + Base64.encodeToString(bytes, Base64.NO_WRAP)
-    }
-
-    private fun validateIconDataUrl(value: String): String? {
-        val dataUrl = value.trim()
-        if (dataUrl.isEmpty()) return null
-        val prefix = "data:image/png;base64,"
-        if (!dataUrl.startsWith(prefix)) throw HermitException(ErrorCodes.INVALID_ARGUMENT, "图标格式无效")
-        val bytes = try { Base64.decode(dataUrl.removePrefix(prefix), Base64.NO_WRAP) }
-        catch (_: IllegalArgumentException) { throw HermitException(ErrorCodes.INVALID_ARGUMENT, "图标格式无效") }
-        if (bytes.isEmpty() || bytes.size > 512 * 1024) throw HermitException(ErrorCodes.QUOTA, "图标文件过大")
-        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-        if (bounds.outWidth != 192 || bounds.outHeight != 192) {
-            throw HermitException(ErrorCodes.INVALID_ARGUMENT, "图标尺寸无效，请重新选择图片")
-        }
-        return dataUrl
     }
 
     private suspend fun capturePhoto(app: WebAppInstance, runtime: RuntimeSession): JSONObject {
@@ -2877,6 +2953,9 @@ class MainActivity : ComponentActivity(), BridgeHost {
         private const val MAX_POST_RELOAD_SCRIPT_CHARS = 64 * 1024
         private const val MAX_PAGE_STATE_CHARS = 512 * 1024
         private const val MAX_STORAGE_VALUE_CHARS = 8 * 1024
+        private const val DEFAULT_AGENT_SCREENSHOT_EDGE = 1600
+        private const val MAX_AGENT_SCREENSHOT_EDGE = 2048
+        private const val MAX_AGENT_SCREENSHOT_BYTES = 4 * 1024 * 1024
         private const val SUPPORT_URL = "https://hermit.10knet.com/pages/donate.html"
         private const val SUPPORT_ORIGIN = "https://hermit.10knet.com"
         private const val REPOSITORY_URL = "https://github.com/zhyuzh3d/hermit"

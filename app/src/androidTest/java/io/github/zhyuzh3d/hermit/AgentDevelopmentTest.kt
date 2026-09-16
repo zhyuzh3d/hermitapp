@@ -81,12 +81,22 @@ class AgentDevelopmentTest {
         return result.getJSONObject("structuredContent")
     }
 
-    private fun create(): JSONObject = tool("hermit_create_app", JSONObject().put("name", "Agent test").put("requestId", UUID.randomUUID().toString()))
+    private fun create(): JSONObject = tool("hermit_create_dev_app", JSONObject()
+        .put("name", "Agent test")
+        .put("happId", "com.example.agent${UUID.randomUUID().toString().replace("-", "")}")
+        .put("requestId", UUID.randomUUID().toString()))
 
     @Test fun sharedPasswordPersistsAndReplacesWithoutPairingOrClientIdentity() {
         assertTrue(password.matches(Regex("[0-9]{6}")))
         val ping = JSONObject().put("jsonrpc", "2.0").put("id", 1).put("method", "ping").toString().toByteArray()
-        assertEquals(401, request("/mcp", "POST", ping, null).first)
+        val unauthenticated = request("/mcp", "POST", ping, null)
+        assertEquals(401, unauthenticated.first)
+        JSONObject(unauthenticated.second).let {
+            assertEquals("authentication_required", it.getString("error"))
+            assertEquals("$base/.well-known/hermit-agent", it.getString("discoveryUrl"))
+            assertEquals("$base/connect", it.getString("instructionsUrl"))
+            assertEquals("Authorization: Bearer <current six-digit password>", it.getString("authentication"))
+        }
         assertEquals(200, request("/mcp", "POST", ping).first)
         // Independent HTTP connections need no initialize identity, pairing, session ID or peer registration.
         assertEquals(200, request("/mcp", "POST", ping, password, mapOf("User-Agent" to "second-computer")).first)
@@ -104,15 +114,25 @@ class AgentDevelopmentTest {
     }
 
     @Test fun protocolDiscoveryOriginAndBruteForceLimits() {
+        val root = request("/", credential = null)
+        assertEquals(200, root.first)
+        assertTrue(root.second.contains("Authorization: Bearer <password>"))
+        assertTrue(root.second.contains("/.well-known/hermit-agent"))
         val discovery = JSONObject(request("/.well-known/hermit-agent", credential = null).second)
         assertFalse(discovery.toString().contains(password)); assertFalse(discovery.has("pairUrl"))
-        assertEquals(29, discovery.getJSONArray("tools").length())
+        assertEquals(3, discovery.getInt("schema"))
+        assertEquals(26, discovery.getJSONArray("toolIndex").length())
+        assertTrue(discovery.getJSONObject("resourceDigests").has("webappGuide"))
         assertEquals(200, request("/skills/hermit-device/SKILL.md", credential = null).first)
         assertEquals(200, request("/hermit-agent.py", credential = null).first)
         val initialized = rpc("initialize", JSONObject().put("protocolVersion", "2025-11-25").put("clientInfo", JSONObject().put("name", "test").put("version", "1")).put("capabilities", JSONObject()))
         assertEquals("2025-11-25", initialized.getString("protocolVersion"))
         assertTrue(initialized.getString("instructions").contains("password"))
-        assertEquals(29, rpc("tools/list").getJSONArray("tools").length())
+        assertEquals(26, rpc("tools/list").getJSONArray("tools").length())
+        assertTrue(rpc("resources/read", JSONObject().put("uri", "hermit://tool-index"))
+            .getJSONArray("contents").getJSONObject(0).getString("text").contains("hermit_runtime_status"))
+        assertTrue(rpc("resources/read", JSONObject().put("uri", "hermit://tool/hermit_runtime_status"))
+            .getJSONArray("contents").getJSONObject(0).getString("text").contains("inputSchema"))
         assertTrue(rpc("resources/read", JSONObject().put("uri", "hermit://webapp-guide")).getJSONArray("contents").getJSONObject(0).getString("text").contains("HTML"))
         assertTrue(rpc("prompts/get", JSONObject().put("name", "develop-webapp"))
             .getJSONArray("messages").getJSONObject(0).getJSONObject("content").getString("text").contains("hermit_enter_dev_mode"))
@@ -134,35 +154,61 @@ class AgentDevelopmentTest {
         assertEquals(405, request("/mcp").first)
         assertEquals(403, request("/mcp", "POST", notice, headers = mapOf("Origin" to "https://untrusted.invalid")).first)
         assertEquals(400, request("/mcp", "POST", notice, headers = mapOf("MCP-Protocol-Version" to "invalid")).first)
+        repeat(8) {
+            val missing = request("/mcp", "POST", notice, credential = null)
+            assertEquals(401, missing.first)
+            assertEquals("authentication_required", JSONObject(missing.second).getString("error"))
+        }
         repeat(5) { assertEquals(401, request("/mcp", "POST", notice, "invalid").first) }
         assertEquals(429, request("/mcp", "POST", notice, "invalid").first)
     }
 
-    @Test fun createPatchRetryConflictReadOpenReloadRollbackAndAllAppsVisible() {
+    @Test fun screenshotReturnsMcpImageAndRecentOperationsStayBounded() {
+        val envelope = rpc("tools/call", JSONObject().put("name", "hermit_capture_screen").put("arguments", JSONObject().put("maxEdge", 720)))
+        assertFalse(envelope.getBoolean("isError"))
+        val content = envelope.getJSONArray("content")
+        val image = (0 until content.length()).map(content::getJSONObject).first { it.getString("type") == "image" }
+        assertTrue(image.getString("mimeType") in setOf("image/png", "image/jpeg"))
+        assertTrue(android.util.Base64.decode(image.getString("data"), android.util.Base64.DEFAULT).size > 100)
+        val metadata = envelope.getJSONObject("structuredContent")
+        assertEquals("STORE", metadata.getString("role"))
+        assertFalse(metadata.has("_imageData"))
+        assertTrue(metadata.getInt("width") <= 720)
+        assertTrue(metadata.getInt("height") <= 720)
+
+        repeat(24) { tool("hermit_get_guide") }
+        assertEquals(20, server.status().getJSONArray("events").length())
+    }
+
+    @Test fun devPatchRetryConflictReadOpenReloadRollbackAndAllAppsVisible() {
         val created = create(); val id = created.getString("appId"); val first = created.getString("activeReleaseId")
         val secondApp = create()
         assertTrue(tool("hermit_list_apps").getJSONArray("apps").toString().contains(secondApp.getString("appId")))
-        val args = JSONObject().put("appId", id).put("expectedReleaseId", first).put("requestId", UUID.randomUUID().toString()).put("reload", false)
+        val revision = created.getJSONObject("devWorkspace").getLong("revision")
+        val args = JSONObject().put("appId", id).put("expectedDevRevision", revision).put("requestId", UUID.randomUUID().toString()).put("refreshMode", "none")
             .put("files", JSONArray().put(JSONObject().put("path", "index.html").put("content", "<!doctype html><html><title>MCP updated</title><body>native page</body></html>")))
-        val applied = tool("hermit_apply_files", args)
-        assertEquals(applied.getString("releaseId"), tool("hermit_apply_files", args).getString("releaseId"))
+        val applied = tool("hermit_apply_dev_files", args)
+        assertEquals(applied.getLong("revision"), tool("hermit_apply_dev_files", args).getLong("revision"))
         val stale = JSONObject(args.toString()).put("requestId", UUID.randomUUID().toString())
-        assertEquals("E_CONFLICT", tool("hermit_apply_files", stale, true).getString("code"))
-        val file = tool("hermit_read_file", JSONObject().put("appId", id).put("path", "index.html"))
+        assertEquals("E_CONFLICT", tool("hermit_apply_dev_files", stale, true).getString("code"))
+        val file = tool("hermit_read_dev_file", JSONObject().put("appId", id).put("path", "index.html"))
         assertTrue(file.getString("content").contains("native page"))
-        tool("hermit_read_file", JSONObject().put("appId", id).put("path", "../secret"), true)
-        assertTrue(tool("hermit_list_files", JSONObject().put("appId", id)).getJSONArray("files").length() > 0)
-        val appBefore = app.registry.getInstance(id)!!
+        tool("hermit_read_dev_file", JSONObject().put("appId", id).put("path", "../secret"), true)
+        assertTrue(tool("hermit_list_dev_files", JSONObject().put("appId", id)).getJSONArray("files").length() > 0)
         assertEquals("opening", tool("hermit_open_app", JSONObject().put("appId", id)).getString("state"))
         assertEquals(id, tool("hermit_runtime_status").getString("appId"))
-        assertEquals("E_DEV_MODE_REQUIRED", tool("hermit_reload_app", JSONObject().put("appId", id), true).getString("code"))
+        assertEquals("opening", tool("hermit_reload_app", JSONObject().put("appId", id)).getString("state"))
         assertEquals("E_INVALID_ARGUMENT", tool("hermit_reload_app", JSONObject().put("appId", secondApp.getString("appId")), true).getString("code"))
+        val built = tool("hermit_build_dev_package", JSONObject().put("appId", id)
+            .put("expectedDevRevision", applied.getLong("revision")).put("requestId", UUID.randomUUID().toString())
+            .put("versionCode", 2).put("versionName", "1.0.0"))
+        val installed = tool("hermit_install_dev_package", JSONObject().put("appId", id)
+            .put("expectedDevRevision", applied.getLong("revision")).put("requestId", UUID.randomUUID().toString())
+            .put("buildId", built.getString("buildId")).put("expectedStableReleaseId", first))
+        assertNotEquals(first, installed.getString("releaseId"))
         assertTrue(tool("hermit_list_releases", JSONObject().put("appId", id)).getJSONArray("releases").length() >= 2)
-        tool("hermit_rollback", JSONObject().put("appId", id).put("releaseId", first).put("expectedReleaseId", applied.getString("releaseId")).put("requestId", UUID.randomUUID().toString()))
-        val appAfter = app.registry.getInstance(id)!!
-        assertEquals(first, appAfter.activeReleaseId)
-        assertEquals(appBefore.activeDataGeneration, appAfter.activeDataGeneration)
-        assertEquals(appBefore.webProfileName, appAfter.webProfileName)
+        tool("hermit_rollback", JSONObject().put("appId", id).put("releaseId", first).put("expectedReleaseId", installed.getString("releaseId")).put("requestId", UUID.randomUUID().toString()))
+        assertEquals(first, app.registry.getInstance(id)!!.activeReleaseId)
     }
 
     @Test fun devWorkspaceSupportsAtomicEditsConflictsBuildAndPublish() {

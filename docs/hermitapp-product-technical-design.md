@@ -415,11 +415,11 @@ v1 将网页可调用的任意 SQL 收敛为 `hermit.data` 的键控 JSON 记录
 
 ### 9.2 文件与二进制
 
-应用文件使用逻辑文件 ID 并始终按 appId 与 dataGeneration 解析，保存时先写临时文件再提交索引；App 代码目录只读。持久记录只保存 logicalFileId，不保存 Android 物理路径。SAF 选入文件默认复制到当前实例，移除原文件不影响已导入内容。导出走系统目标选择器，不让网页提交 Android 物理路径。
+应用文件采用本地 OSS 风格的对象存储：文件本体写入 `filesDir/instances/<appId>/data/<dataGeneration>/files/`，SQLite 只保存 `logicalFileId`、对象 URL、名称、MIME、大小和 SHA-256 等元数据。保存时先写临时文件、刷盘，再原子提交对象索引；App 代码目录只读。SAF 选入文件默认复制到当前实例，移除原文件不影响已导入内容。导出走系统目标选择器，不让网页提交 Android 物理路径。
 
-原生选择、拍照、较大 Native HTTP 响应和 TTS 导出均产生相同逻辑文件对象。只有不超过 256 KiB 的文本可经 RPC 读取；较大内容由原生流直接导入、导出或分享，不通过巨大 Base64 JSON。文件写入绑定当前实例和 dataGeneration，完成前不进入索引。分享给其他 Android 应用的只读文件使用独立副本和 URI grant，不能因切到分享目标就立即删除；该副本按短期 TTL 清理，不授予对原数据目录的访问。通用二进制分块读写与同源临时媒体 URL 不属于 v1 公共接口。
+原生选择、拍照、较大 Native HTTP 响应和 TTS 导出均产生相同逻辑文件对象，并返回同源对象 URL；视频缩略图也作为文件对象。只有不超过 256 KiB 的文本可经 RPC 读取；较大内容由原生流直接导入、导出或分享，不通过巨大 Base64 JSON。文件写入绑定当前实例和 dataGeneration，完成前不进入索引。分享给其他 Android 应用的只读文件使用独立副本和 URI grant，不能因切到分享目标就立即删除；该副本按短期 TTL 清理，不授予对原数据目录的访问。通用二进制分块读写仍不作为公共 RPC，页面通过对象 URL 使用 `<img>`、`<audio>`、`<video>` 或上传接口。
 
-本地网关保留 `/__hermit/` 命名空间，v1 不向页面发布其中的媒体 URL。跨应用或跨 dataGeneration 即使知道 logicalFileId 也不能读取对应文件。
+本地网关保留 `/__hermit/` 命名空间，v1 只向当前页面发布当前 appId/dataGeneration 的对象 URL；HermitUI 可读取宿主图标对象。跨应用或跨 dataGeneration 即使知道 logicalFileId 或对象 URL 也不能读取对应文件。
 
 ### 9.3 v1 能力面
 
@@ -467,7 +467,9 @@ Native network.request 使用独立配置的 OkHttp client：关闭自动重定�
 
 在 Store 的“开发”Tab 中显式开启开发服务，默认端口 8766。LAN 服务绑定全部本机接口但只公布当前可信局域网 IPv4；USB 备用在设备 loopback 启动同一服务，通过 `adb forward tcp:8766 tcp:8766` 访问。两条传输共享工具、密码、开发工作副本和并发控制。密码首次生成后保存在宿主私有偏好，应用升级/服务重启不变；修改密码后旧值立即失效。多台电脑可共享当前密码，不设配对、客户端名单、独立令牌或应用白名单。
 
-标准 MCP Streamable HTTP（无状态 JSON 响应，无 SSE）提供工具、资源和提示词发现。根地址和 `/.well-known/hermit-agent` 是接入入口，`/skills/hermit-device/SKILL.md` 和 MCP guide/resource 提供随 APK 同步更新的实时指导。客户端的 MCP 注册和 Skill 安装必须由客户端执行；本地 Skill 只保留动态拉取规则，不固定功能清单或保存密码。HTTP/stdio Python 标准库助手兼容不方便直接注册 HTTP MCP 的客户端，不增加页面框架或构建依赖。
+标准 MCP Streamable HTTP（无状态 JSON 响应，无 SSE）提供工具、资源和提示词发现。根地址和 `/.well-known/hermit-agent` 是无需密码的接入入口，`/skills/hermit-device/SKILL.md` 和 MCP guide/resource 提供随 APK 同步更新的实时指导；公开入口只描述认证方式和能力目录，不返回密码、应用或代码数据。缺少 Authorization 的受保护请求返回带发现地址、说明地址和认证头模板的结构化 401，且不计入错误密码限流；只有实际提交错误凭据才累计失败次数。密码只允许放在 `Authorization: Bearer` 请求头，禁止放进 URL 路径、查询参数或 fragment。客户端的 MCP 注册和 Skill 安装必须由客户端执行；本地 Skill 只保留动态拉取规则，不固定功能清单或保存密码。HTTP/stdio Python 标准库助手兼容不方便直接注册 HTTP MCP 的客户端，不增加页面框架或构建依赖。
+
+智能体在初始化 happ 开发前按统一规范锁定本地目录：用户指定目录优先，其次复用用户目录 `~/hermit/happ-dev.json` 中以精确 `happId` 为键的绝对路径；没有记录时由智能体判断是否使用当前项目工作空间，否则落到 `~/hermit/happs/`。新目录统一命名为 `happ-<happId 中的点改为横线>`。一个 `happId` 只有一个活动路径，用户移动或替换时原子更新记录；旧路径失效时不扫描磁盘或暗中创建副本。记录允许智能体保存自己的版本备忘，但 Hermit 服务不读取它决定目录、版本或同步方向，也不允许其中出现开发密码或设备凭据。
 
 每个普通 happ 以 `appId` 对应一份开发工作副本和 `stable | dev` 启动通道。首次进入 dev 时从当前正式 release 建立内容寻址快照；后续创建、覆盖、移动、重命名和删除文件只写新的 blob 和原子清单，不修改正式 release。写入必须使用 `expectedDevRevision`，同一 happ 串行、不同 happ 可并行。正式版本外部更新时，干净副本自动跟随；有未发布修改的副本保留原基线并显示过期状态。HermitUI 不进入普通实例清单，保留 appId/happId 也在安装与开发层拒绝，因此该服务不能破坏管理界面。
 
@@ -532,7 +534,7 @@ v1 提供两条明确路径：完整备份恢复会创建新实例、新 appId �
 
 BackupValidator 与代码 PackageValidator 共享路径/流量校验底座，但有独立容量预算。默认备份支持 1 GiB 传输/展开、50,000 文件；用户提高数据配额后，导出前必须同步核验备份上限与预计峰值空间，必要时明确提高该次备份预算并写入头部。导入按声明量、用户批准的预算和本机容量预检，不能让本机合法导出的包仅因复用了代码 ZIP 上限而无法恢复。
 
-APK 覆盖升级保留原 appId、来源、activeReleaseId、数据 generation、grants 和快捷方式；Registry 显式迁移，失败保留原文件进入恢复 UI，禁止删除重建空库。默认关闭 Android Auto Backup，并配置适用版本的数据提取规则；不同厂商设备迁移行为需实测，不能靠一个布尔配置保证完整排除。
+测试设备的 APK 覆盖升级采用当前 schema 的干净重建，直接清理历史 Registry 字段和旧索引，不保留已废弃的 Base64 图标或兼容双轨；正式外部迁移若成为需求，另行设计一次性迁移工具。默认关闭 Android Auto Backup，并配置适用版本的数据提取规则；不同厂商设备迁移行为需实测，不能靠一个布尔配置保证完整排除。
 
 ## 12. 数据结构、执行模型与诊断
 

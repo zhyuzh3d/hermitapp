@@ -62,8 +62,8 @@
     $("#managePin").disabled = isDirty() || managePinState === "unsupported";
     $("#updateApp").disabled = !canUpdateFromSource(app) || isDirty();
     $("#reinstallApp").disabled = !app.downloadUrl || isDirty();
-    $("#removeCustomAppIcon").classList.toggle("hidden", !draft.customIconDataUrl);
-    renderIconPreview("#editIconPreview", draft.customIconDataUrl || app.defaultIconDataUrl || "");
+    $("#removeCustomAppIcon").classList.toggle("hidden", !draft.customIcon);
+    renderIconPreview("#editIconPreview", draft.customIcon || app.defaultIconUrl || "");
     setDraftSwitch("#notificationSwitch", draft.notificationEnabled);
     setDraftSwitch("#crossOriginSwitch", draft.allowCrossOriginNetwork);
     $("#runtimeHint").textContent = hasLocal(app) && hasDraftLive
@@ -78,12 +78,10 @@
     const epoch = ++state.managedEpoch;
     if (!app) throw new Error("应用已不存在，请刷新应用库。");
     state.selected = app;
-    const customIconDataUrl = Object.prototype.hasOwnProperty.call(app, "customIconDataUrl")
-      ? (app.customIconDataUrl || "")
-      : (app.iconDataUrl || "");
-    state.manageDraft = { runtimeMode: appRuntime(app), notificationEnabled: !!app.notificationEnabled, allowCrossOriginNetwork: !!app.allowCrossOriginNetwork, customIconDataUrl };
+    const customIcon = app.customIconUrl || "";
+    state.manageDraft = { runtimeMode: appRuntime(app), notificationEnabled: !!app.notificationEnabled, allowCrossOriginNetwork: !!app.allowCrossOriginNetwork, customIcon };
     $("#editName").value = app.name; $("#editUrl").value = app.liveUrl || ""; $("#editUpdateUrl").value = app.updateUrl || "";
-    renderIconPreview("#editIconPreview", customIconDataUrl || app.defaultIconDataUrl || "");
+    renderIconPreview("#editIconPreview", customIcon || app.defaultIconUrl || "");
     $("#downloadUrl").textContent = app.downloadUrl || "无";
     $("#updateApp").disabled = !canUpdateFromSource(app);
     $("#reinstallApp").disabled = !app.downloadUrl;
@@ -213,17 +211,17 @@
     if (!state.manageDraft) throw new Error("应用设置已失效，请重新打开。");
     const value = await host.call("apps.pickIcon", {});
     if (value.cancelled) { say("已取消操作。"); return; }
-    const cropped = await H.ui.cropIcon(value.dataUrl);
+    const cropped = await H.ui.cropIcon(value.preview);
     if (!cropped) return;
-    state.manageDraft.customIconDataUrl = cropped;
+    state.manageDraft.customIcon = cropped;
     renderIconPreview("#editIconPreview", cropped);
     renderManageDraft();
   });
   bind("#removeCustomAppIcon", () => {
     const app = state.selected, draft = state.manageDraft;
     if (!app || !draft) throw new Error("应用设置已失效，请重新打开。");
-    draft.customIconDataUrl = "";
-    renderIconPreview("#editIconPreview", app.defaultIconDataUrl || "");
+    draft.customIcon = "";
+    renderIconPreview("#editIconPreview", app.defaultIconUrl || "");
     renderManageDraft();
   });
   $("#notificationSwitch").onclick = () => { if (state.manageDraft) { state.manageDraft.notificationEnabled = !state.manageDraft.notificationEnabled; renderManageDraft(); } };
@@ -273,8 +271,8 @@
   });
   function isDirty() {
     const app = state.selected, draft = state.manageDraft;
-    const customIconDataUrl = app && Object.prototype.hasOwnProperty.call(app, "customIconDataUrl") ? (app.customIconDataUrl || "") : ((app && app.iconDataUrl) || "");
-    return !!(app && draft && ($("#editName").value.trim() !== app.name || $("#editUrl").value.trim() !== (app.liveUrl || "") || $("#editUpdateUrl").value.trim() !== (app.updateUrl || "") || draft.customIconDataUrl !== customIconDataUrl || draft.runtimeMode !== appRuntime(app) || draft.notificationEnabled !== !!app.notificationEnabled || draft.allowCrossOriginNetwork !== !!app.allowCrossOriginNetwork));
+    const customIcon = app ? (app.customIconUrl || "") : "";
+    return !!(app && draft && ($("#editName").value.trim() !== app.name || $("#editUrl").value.trim() !== (app.liveUrl || "") || $("#editUpdateUrl").value.trim() !== (app.updateUrl || "") || draft.customIcon !== customIcon || draft.runtimeMode !== appRuntime(app) || draft.notificationEnabled !== !!app.notificationEnabled || draft.allowCrossOriginNetwork !== !!app.allowCrossOriginNetwork));
   }
   H.features.manage = { openManage, isDirty, renderManageDraft };
 })();

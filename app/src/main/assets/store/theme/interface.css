@@ -47,6 +47,10 @@ main { max-width:1000px; margin:auto; padding:12px 24px calc(110px + env(safe-ar
 .quick-add-button { min-width:0; padding:14px 7px; flex-direction:column; gap:9px; border-radius:18px; background:var(--surface); box-shadow:var(--shadow); }
 .quick-add-button strong { font-size:12px; white-space:nowrap; }
 .quick-add-button .tool-icon { width:42px; height:42px; background:transparent; }
+.add-favorite-choice { margin:-5px 0 17px; padding:10px 12px; border:1px solid var(--line); border-radius:14px; background:var(--surface); }
+.add-favorite-choice strong { margin-bottom:3px; font-size:13px; }
+.add-favorite-choice small { font-size:10px; }
+.sheet-favorite-choice { margin:-8px 0 17px; }
 .compatibility-banner{display:flex;gap:12px;align-items:flex-start;margin:0 0 18px;padding:14px 16px;border:1px solid var(--orange);border:1px solid color-mix(in srgb,var(--orange) 42%,var(--line));border-radius:18px;background:var(--surface);background:color-mix(in srgb,var(--orange) 10%,var(--surface));box-shadow:var(--shadow)}
 .compatibility-banner>i{color:var(--orange);margin-top:3px}.compatibility-banner span{display:grid;gap:3px}.compatibility-banner small{color:var(--muted);line-height:1.45}
 .page-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 0 26px; }

@@ -6,13 +6,14 @@ import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
 import android.graphics.BitmapFactory
 import android.graphics.drawable.Icon
-import android.util.Base64
+import io.github.zhyuzh3d.hermit.data.HostImageStore
 import io.github.zhyuzh3d.hermit.MainActivity
 import io.github.zhyuzh3d.hermit.R
 import io.github.zhyuzh3d.hermit.model.WebAppInstance
 
 class ShortcutHost(private val context: Context) {
     private val manager = context.getSystemService(ShortcutManager::class.java)
+    private val images = HostImageStore(context)
 
     enum class PinState(val value: String) {
         PINNED("pinned"),
@@ -75,10 +76,9 @@ class ShortcutHost(private val context: Context) {
     private fun shortcutId(appId: String) = "webapp-$appId"
 
     private fun iconFor(instance: WebAppInstance): Icon {
-        val prefix = "data:image/png;base64,"
-        val encoded = instance.effectiveIconDataUrl?.takeIf { it.startsWith(prefix) }?.removePrefix(prefix)
-        val bitmap = encoded?.let { runCatching { Base64.decode(it, Base64.NO_WRAP) }.getOrNull() }
-            ?.let { bytes -> BitmapFactory.decodeByteArray(bytes, 0, bytes.size) }
+        val bitmap = images.open(instance.effectiveIconUrl)?.let { image ->
+            runCatching { BitmapFactory.decodeFile(image.file.absolutePath) }.getOrNull()
+        }
         return bitmap?.let(Icon::createWithBitmap) ?: Icon.createWithResource(context, R.mipmap.ic_launcher)
     }
 }

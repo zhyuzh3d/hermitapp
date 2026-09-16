@@ -12,6 +12,6 @@ export HERMIT_KEY_PASSWORD=$HERMIT_STORE_PASSWORD
 export HERMIT_KEY_ALIAS=${HERMIT_KEY_ALIAS:-hermit-v1}
 export JAVA_HOME=${JAVA_HOME:-/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home}
 export ANDROID_HOME=${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}
-VERSION_NAME=${HERMIT_VERSION_NAME:-1.10.19}
-VERSION_CODE=${HERMIT_VERSION_CODE:-53}
+VERSION_NAME=${HERMIT_VERSION_NAME:-1.10.21}
+VERSION_CODE=${HERMIT_VERSION_CODE:-55}
 "$ROOT/gradlew" :app:assembleRelease -PhermitVersionName="$VERSION_NAME" -PhermitVersionCode="$VERSION_CODE"

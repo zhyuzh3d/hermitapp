@@ -3,6 +3,7 @@ package io.github.zhyuzh3d.hermit.backup
 import android.content.Context
 import android.net.Uri
 import io.github.zhyuzh3d.hermit.data.FileStore
+import io.github.zhyuzh3d.hermit.data.HostImageStore
 import io.github.zhyuzh3d.hermit.data.RecordsStore
 import io.github.zhyuzh3d.hermit.install.InstallCoordinator
 import io.github.zhyuzh3d.hermit.model.ErrorCodes
@@ -33,6 +34,8 @@ class BackupCoordinator(
     private val records: RecordsStore,
     private val files: FileStore,
 ) {
+    private val images = HostImageStore(context)
+
     suspend fun export(appId: String, destination: Uri): JSONObject = withContext(Dispatchers.IO) {
         val app = registry.getInstance(appId) ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "页面应用不存在")
         val releaseId = app.activeReleaseId
@@ -72,6 +75,16 @@ class BackupCoordinator(
                         finish(name, state)
                     }
 
+                    val customIconEntry = app.customIconUrl?.let { url ->
+                        val image = images.open(url)
+                            ?: throw HermitException(ErrorCodes.STORAGE, "自定义图标对象不存在")
+                        val name = "presentation/custom-icon.${image.file.extension}"
+                        val state = begin(name)
+                        FileInputStream(image.file).use { it.copyBounded(state.second, MAX_BACKUP_BYTES - total) }
+                        finish(name, state)
+                        name
+                    }
+
                     var codeFiles = 0
                     if (app.activeReleaseId != null) {
                         val release = app.activeReleaseId?.let(registry::getRelease)
@@ -86,14 +99,14 @@ class BackupCoordinator(
                             codeFiles++
                         }
                     }
-                    val manifest = JSONObject().put("schema", 2).put("createdAt", System.currentTimeMillis())
+                    val manifest = JSONObject().put("schema", 3).put("createdAt", System.currentTimeMillis())
                         .put("app", JSONObject().put("name", app.name).put("source", app.source.name.lowercase())
                             .put("runtimeMode", app.runtimeMode.name.lowercase())
                             .put("liveUrl", app.liveUrl ?: JSONObject.NULL)
                             .put("happId", app.happId ?: JSONObject.NULL)
                             .put("updateUrl", app.updateUrl ?: JSONObject.NULL)
                             .put("downloadUrl", app.downloadUrl ?: JSONObject.NULL)
-                            .put("customIconDataUrl", app.iconDataUrl ?: JSONObject.NULL)
+                            .put("customIconEntry", customIconEntry ?: JSONObject.NULL)
                             .put("allowCrossOriginNetwork", app.allowCrossOriginNetwork)
                             .put("sourceAdapter", app.sourceAdapter)
                             .put("sourceSpec", JSONObject(app.sourceSpec)))
@@ -123,25 +136,22 @@ class BackupCoordinator(
                 if (manifestEntry.size !in 1..MAX_MANIFEST_BYTES) throw HermitException(ErrorCodes.QUOTA, "备份清单大小异常")
                 val manifest = zip.getInputStream(manifestEntry).use { JSONObject(it.reader().readText()) }
                 val schema = manifest.optInt("schema")
-                if (schema !in setOf(1, 2)) throw HermitException(ErrorCodes.UNSUPPORTED, "不支持的备份版本")
+                if (schema != 3) throw HermitException(ErrorCodes.UNSUPPORTED, "旧版备份含内联文件数据，请重新导出")
                 validateArchive(zip, manifest.getJSONObject("entries"))
                 val appJson = manifest.getJSONObject("app")
                 val name = appJson.getString("name").trim().take(80).ifBlank { "恢复的应用" }
                 val adapter = appJson.getString("sourceAdapter")
-                val source = if (schema == 2) when (appJson.getString("source")) {
+                val source = when (appJson.getString("source")) {
                     "local" -> HappSource.LOCAL
                     "online" -> HappSource.ONLINE
                     else -> throw HermitException(ErrorCodes.INVALID_ARGUMENT, "备份 happ 来源无效")
-                } else if (appJson.getString("mode") == "online" || adapter in setOf("online", "online-manifest", "https-package", "github")) {
-                    HappSource.ONLINE
-                } else HappSource.LOCAL
-                val runtimeMode = if (schema == 2) when (appJson.getString("runtimeMode")) {
+                }
+                val runtimeMode = when (appJson.getString("runtimeMode")) {
                     "local" -> HappRuntimeMode.LOCAL
                     "live" -> HappRuntimeMode.LIVE
                     else -> throw HermitException(ErrorCodes.INVALID_ARGUMENT, "备份 happ 运行方式无效")
-                } else if (appJson.getString("mode") == "online") HappRuntimeMode.LIVE else HappRuntimeMode.LOCAL
-                val liveUrl = if (schema == 2) appJson.optString("liveUrl").takeIf { it.isNotBlank() && it != "null" }
-                    else appJson.optString("startUrl").takeIf { appJson.getString("mode") == "online" }
+                }
+                val liveUrl = appJson.optString("liveUrl").takeIf { it.isNotBlank() && it != "null" }
                 val codeEntries = zip.entries().asSequence().filter { !it.isDirectory && it.name.startsWith("code/") }.toList()
                 val restored = if (codeEntries.isNotEmpty()) {
                     val codeZip = File(context.cacheDir, "restore-code-${UUID.randomUUID()}.zip")
@@ -181,17 +191,16 @@ class BackupCoordinator(
                     }
                 }
                 registry.updateInstance(restored, name, app.liveUrl, null)
-                if (schema == 2 && appJson.has("customIconDataUrl")) {
-                    registry.updatePresentation(
-                        restored,
-                        name,
-                        appJson.optString("customIconDataUrl").takeIf { it.isNotBlank() && it != "null" },
-                    )
+                if (appJson.has("customIconEntry")) {
+                    appJson.optString("customIconEntry").takeIf { it.isNotBlank() && it != "null" }?.let { iconPath ->
+                        val entry = zip.getEntry(iconPath)
+                            ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "备份自定义图标缺失")
+                        val bytes = zip.getInputStream(entry).use { it.readBytes() }
+                        registry.updatePresentation(restored, name, bytes, replaceIcon = true)
+                    }
                 }
-                if (schema == 2) {
-                    registry.updateUrls(restored, liveUrl, appJson.optString("updateUrl").takeIf { it.isNotBlank() && it != "null" })
-                    if (appJson.optBoolean("allowCrossOriginNetwork")) registry.setCrossOriginNetworkEnabled(restored, true)
-                }
+                registry.updateUrls(restored, liveUrl, appJson.optString("updateUrl").takeIf { it.isNotBlank() && it != "null" })
+                if (appJson.optBoolean("allowCrossOriginNetwork")) registry.setCrossOriginNetworkEnabled(restored, true)
                 registry.updateSource(restored, adapter, appJson.getJSONObject("sourceSpec").toString())
                 if (runtimeMode == HappRuntimeMode.LIVE && app.runtimeMode != HappRuntimeMode.LIVE) {
                     registry.setRuntimeMode(restored, HappRuntimeMode.LIVE)
@@ -222,7 +231,7 @@ class BackupCoordinator(
                     ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "不是 Hermit 备份")
                 if (manifestEntry.size !in 1..MAX_MANIFEST_BYTES) throw HermitException(ErrorCodes.QUOTA, "备份清单大小异常")
                 val manifest = zip.getInputStream(manifestEntry).use { JSONObject(it.reader().readText()) }
-                if (manifest.optInt("schema") !in setOf(1, 2)) throw HermitException(ErrorCodes.UNSUPPORTED, "不支持的备份版本")
+                if (manifest.optInt("schema") != 3) throw HermitException(ErrorCodes.UNSUPPORTED, "旧版备份含内联文件数据，请重新导出")
                 validateArchive(zip, manifest.getJSONObject("entries"))
                 zip.getEntry("records.jsonl")?.let { entry ->
                     zip.getInputStream(entry).use { records.importJsonLines(targetAppId, nextGeneration, it) }

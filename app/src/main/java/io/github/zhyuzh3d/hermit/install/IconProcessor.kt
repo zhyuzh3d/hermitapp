@@ -9,7 +9,7 @@ import java.io.ByteArrayOutputStream
 import java.io.InputStream
 
 object IconProcessor {
-    fun centeredPngDataUrl(open: () -> InputStream?): String {
+    fun centeredPngBytes(open: () -> InputStream?): ByteArray {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
         open()?.use { BitmapFactory.decodeStream(it, null, bounds) }
         if (bounds.outWidth <= 0 || bounds.outHeight <= 0) {
@@ -42,7 +42,22 @@ object IconProcessor {
         if (bytes.size > MAX_OUTPUT_BYTES) {
             throw HermitException(ErrorCodes.QUOTA, "图标处理后仍然过大，请使用较简单的图片")
         }
-        return DATA_URL_PREFIX + Base64.encodeToString(bytes, Base64.NO_WRAP)
+        return bytes
+    }
+
+    fun centeredPngDataUrl(open: () -> InputStream?): String =
+        DATA_URL_PREFIX + Base64.encodeToString(centeredPngBytes(open), Base64.NO_WRAP)
+
+    fun decodePngDataUrl(value: String): ByteArray {
+        if (!value.startsWith(DATA_URL_PREFIX)) throw HermitException(ErrorCodes.INVALID_ARGUMENT, "图标格式无效")
+        val bytes = runCatching { Base64.decode(value.removePrefix(DATA_URL_PREFIX), Base64.NO_WRAP) }
+            .getOrElse { throw HermitException(ErrorCodes.INVALID_ARGUMENT, "图标格式无效") }
+        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+        BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+        if (bytes.isEmpty() || bytes.size > MAX_OUTPUT_BYTES || bounds.outWidth != OUTPUT_SIZE || bounds.outHeight != OUTPUT_SIZE) {
+            throw HermitException(ErrorCodes.QUOTA, "图标文件无效或过大")
+        }
+        return bytes
     }
 
     const val DATA_URL_PREFIX = "data:image/png;base64,"

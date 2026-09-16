@@ -17,7 +17,7 @@ import java.security.MessageDigest
 import java.util.UUID
 
 class FileStore(private val context: Context) {
-    data class StoredFile(val logicalId: String, val name: String, val mime: String, val size: Long, val sha256: String)
+    data class StoredFile(val logicalId: String, val name: String, val mime: String, val size: Long, val sha256: String, val url: String)
 
     fun import(appId: String, generation: String, input: InputStream, name: String, mime: String): JSONObject {
         return importWithId(appId, generation, UUID.randomUUID().toString(), input, name, mime)
@@ -64,14 +64,14 @@ class FileStore(private val context: Context) {
             openIndex(appId, generation).use { db ->
                 db.insertOrThrow("files", null, ContentValues().apply {
                     put("logical_id", logicalId); put("display_name", safeName); put("mime", normalizeMime(mime))
-                    put("size", size); put("sha256", hash); put("created_at", System.currentTimeMillis())
+                    put("size", size); put("sha256", hash); put("object_url", objectUrl(logicalId)); put("created_at", System.currentTimeMillis())
                 })
             }
         } catch (error: Throwable) {
             target.delete()
             throw error
         }
-        return StoredFile(logicalId, safeName, normalizeMime(mime), size, hash).json()
+        return StoredFile(logicalId, safeName, normalizeMime(mime), size, hash, objectUrl(logicalId)).json()
     }
 
     fun writeText(appId: String, generation: String, name: String, text: String): JSONObject {
@@ -101,6 +101,7 @@ class FileStore(private val context: Context) {
                     c.getString(c.getColumnIndexOrThrow("mime")),
                     c.getLong(c.getColumnIndexOrThrow("size")),
                     c.getString(c.getColumnIndexOrThrow("sha256")),
+                    c.getString(c.getColumnIndexOrThrow("object_url")),
                 ).json())
             }
         }
@@ -142,6 +143,7 @@ class FileStore(private val context: Context) {
                     c.getString(c.getColumnIndexOrThrow("mime")),
                     c.getLong(c.getColumnIndexOrThrow("size")),
                     c.getString(c.getColumnIndexOrThrow("sha256")),
+                    c.getString(c.getColumnIndexOrThrow("object_url")),
                 )
             }
         }
@@ -162,6 +164,7 @@ class FileStore(private val context: Context) {
                     c.getString(c.getColumnIndexOrThrow("mime")),
                     c.getLong(c.getColumnIndexOrThrow("size")),
                     c.getString(c.getColumnIndexOrThrow("sha256")),
+                    c.getString(c.getColumnIndexOrThrow("object_url")),
                 )
             }
         }
@@ -189,9 +192,32 @@ class FileStore(private val context: Context) {
                 CREATE TABLE IF NOT EXISTS files (
                   logical_id TEXT PRIMARY KEY, display_name TEXT NOT NULL,
                   mime TEXT NOT NULL, size INTEGER NOT NULL, sha256 TEXT NOT NULL,
+                  object_url TEXT NOT NULL,
                   created_at INTEGER NOT NULL
                 )
             """.trimIndent())
+            val hasObjectUrl = db.rawQuery("PRAGMA table_info(files)", null).use { cursor ->
+                var found = false
+                while (cursor.moveToNext()) if (cursor.getString(cursor.getColumnIndexOrThrow("name")) == "object_url") found = true
+                found
+            }
+            if (!hasObjectUrl) {
+                // File bodies are intentionally not reconstructed through a
+                // legacy index. This test-device cutover removes stale metadata
+                // and starts with the single current object-storage contract.
+                db.execSQL("DROP TABLE IF EXISTS files")
+                db.execSQL("""
+                    CREATE TABLE files (
+                      logical_id TEXT PRIMARY KEY, display_name TEXT NOT NULL,
+                      mime TEXT NOT NULL, size INTEGER NOT NULL, sha256 TEXT NOT NULL,
+                      object_url TEXT NOT NULL,
+                      created_at INTEGER NOT NULL
+                    )
+                """.trimIndent())
+                root(appId, generation).listFiles()
+                    ?.filter { it.isFile && it.name.matches(ID) }
+                    ?.forEach(File::delete)
+            }
         }
 
     private fun usage(appId: String, generation: String): Pair<Long, Long> = openIndex(appId, generation).use { db ->
@@ -218,8 +244,9 @@ class FileStore(private val context: Context) {
         name.replace(Regex("[\\/\u0000-\u001F]"), "_").trim().take(120).ifBlank { "file" }
     private fun normalizeMime(mime: String): String =
         mime.lowercase().takeIf { it.matches(Regex("[a-z0-9.+-]+/[a-z0-9.+-]+")) } ?: "application/octet-stream"
-    private fun StoredFile.json() = JSONObject().put("logicalFileId", logicalId).put("name", name)
+    private fun StoredFile.json() = JSONObject().put("logicalFileId", logicalId).put("url", url).put("name", name)
         .put("mime", mime).put("size", size).put("sha256", sha256)
+    private fun objectUrl(logicalId: String) = "/__hermit/files/$logicalId"
     private fun ByteArray.hex() = joinToString("") { "%02x".format(it) }
 
     companion object {

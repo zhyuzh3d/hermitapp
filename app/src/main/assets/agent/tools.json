@@ -66,11 +66,51 @@
     }
   },
   {
+    "name": "hermit_capture_screen",
+    "description": "Capture the current HermitApp window and return it as an MCP image for visual review. For an ordinary happ, appId must match the visible DEV copy. Omit appId only while HermitUI is visible. This does not capture other apps or bypass Android screen-capture consent.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "appId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80,
+          "description": "Required for an ordinary happ and must match the visible DEV copy. Omit for HermitUI."
+        },
+        "maxEdge": {
+          "type": "integer",
+          "minimum": 720,
+          "maximum": 2048,
+          "description": "Maximum output width or height in pixels. Defaults to 1600."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "annotations": {
+      "readOnlyHint": true,
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false
+    }
+  },
+  {
     "name": "hermit_list_apps",
     "description": "List ordinary installed happs. The protected HermitUI control plane is never returned.",
     "inputSchema": {
       "type": "object",
-      "properties": {},
+      "properties": {
+        "includeIcons": {
+          "type": "boolean",
+          "description": "Include object URLs for app icons; omitted by default for fast app matching."
+        },
+        "happId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "description": "Optional stable happ identity filter for fast matching."
+        }
+      },
       "required": [],
       "additionalProperties": false
     },
@@ -92,6 +132,10 @@
           "minLength": 1,
           "maxLength": 80,
           "description": "Hermit instance appId"
+        },
+        "includeIcons": {
+          "type": "boolean",
+          "description": "Include the app icon object URL; omitted by default to keep the response compact."
         }
       },
       "required": [
@@ -886,177 +930,6 @@
       "required": [
         "appId",
         "requestId"
-      ],
-      "additionalProperties": false
-    },
-    "annotations": {
-      "readOnlyHint": false,
-      "destructiveHint": true,
-      "idempotentHint": false,
-      "openWorldHint": false
-    }
-  },
-  {
-    "name": "hermit_create_app",
-    "description": "Deprecated compatibility: create a minimal stable happ.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "name": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 80
-        },
-        "requestId": {
-          "type": "string",
-          "minLength": 8,
-          "maxLength": 128,
-          "description": "Unique idempotency key for this server run"
-        }
-      },
-      "required": [
-        "name",
-        "requestId"
-      ],
-      "additionalProperties": false
-    },
-    "annotations": {
-      "readOnlyHint": false,
-      "destructiveHint": true,
-      "idempotentHint": false,
-      "openWorldHint": false
-    }
-  },
-  {
-    "name": "hermit_list_files",
-    "description": "Deprecated compatibility: list active stable release files.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "appId": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 80,
-          "description": "Hermit instance appId"
-        }
-      },
-      "required": [
-        "appId"
-      ],
-      "additionalProperties": false
-    },
-    "annotations": {
-      "readOnlyHint": true,
-      "destructiveHint": false,
-      "idempotentHint": true,
-      "openWorldHint": false
-    }
-  },
-  {
-    "name": "hermit_read_file",
-    "description": "Deprecated compatibility: read an active stable release text file.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "appId": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 80,
-          "description": "Hermit instance appId"
-        },
-        "path": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 240
-        }
-      },
-      "required": [
-        "appId",
-        "path"
-      ],
-      "additionalProperties": false
-    },
-    "annotations": {
-      "readOnlyHint": true,
-      "destructiveHint": false,
-      "idempotentHint": true,
-      "openWorldHint": false
-    }
-  },
-  {
-    "name": "hermit_apply_files",
-    "description": "Deprecated compatibility: publish text edits directly as a new stable release.",
-    "inputSchema": {
-      "type": "object",
-      "properties": {
-        "appId": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 80,
-          "description": "Hermit instance appId"
-        },
-        "expectedReleaseId": {
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 80
-        },
-        "requestId": {
-          "type": "string",
-          "minLength": 8,
-          "maxLength": 128,
-          "description": "Unique idempotency key for this server run"
-        },
-        "files": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 256,
-          "items": {
-            "type": "object",
-            "properties": {
-              "path": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 512,
-                "description": "Relative target path"
-              },
-              "content": {
-                "type": "string",
-                "minLength": 0,
-                "maxLength": 524288,
-                "description": "UTF-8 text content"
-              },
-              "delete": {
-                "type": "boolean"
-              },
-              "from": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 512,
-                "description": "Relative move source"
-              },
-              "to": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 512,
-                "description": "Relative move target"
-              },
-              "move": {
-                "type": "boolean"
-              }
-            },
-            "required": [],
-            "additionalProperties": false
-          }
-        },
-        "reload": {
-          "type": "boolean"
-        }
-      },
-      "required": [
-        "appId",
-        "expectedReleaseId",
-        "requestId",
-        "files"
       ],
       "additionalProperties": false
     },

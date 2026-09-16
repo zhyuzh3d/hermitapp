@@ -36,7 +36,13 @@ class AgentDevelopmentServer(
     private val workspace = AgentWorkspace(context.cacheDir, registry, installer)
     private val catalogText by lazy { asset("agent/tools.json") }
     private val catalog by lazy { JSONArray(catalogText) }
-    private val guidanceVersion by lazy { AgentWorkspace.sha((guide() + resource("hermit://webapp-guide") + resource("hermit://page-api")).toByteArray()) }
+    private val guidanceVersion by lazy { AgentWorkspace.sha(guide().toByteArray()) }
+    private val resourceDigests by lazy {
+        JSONObject().put("guide", guidanceVersion)
+            .put("tools", AgentWorkspace.sha(catalogText.toByteArray()))
+            .put("webappGuide", AgentWorkspace.sha(asset("agent/webapp-authoring.md").toByteArray()))
+            .put("pageApi", AgentWorkspace.sha(asset("agent/hermit-api.d.ts").toByteArray()))
+    }
     @Volatile private var active: Endpoint? = null
     @Volatile private var uiHandler: (suspend (String, JSONObject) -> JSONObject)? = null
     private data class RenderOperation(
@@ -278,13 +284,26 @@ class AgentDevelopmentServer(
     }
 
     private fun asset(path: String) = context.assets.open(path).bufferedReader().use { it.readText() }
-    private fun guide() = asset("agent/hermit-device/SKILL.md")
+    private val guideText by lazy { asset("agent/hermit-device/SKILL.md") }
+    private val webappGuideText by lazy { asset("agent/webapp-authoring.md") }
+    private val pageApiText by lazy { asset("agent/hermit-api.d.ts") }
+    private fun guide() = guideText
+    private fun toolIndex() = JSONArray().apply {
+        for (index in 0 until catalog.length()) {
+            val tool = catalog.getJSONObject(index)
+            put(JSONObject().put("name", tool.getString("name"))
+                .put("description", tool.optString("description")))
+        }
+    }
     private fun resource(uri: String) = when (uri) {
         "hermit://guide" -> guide()
+        "hermit://tool-index" -> toolIndex().toString()
         "hermit://tools" -> catalogText
-        "hermit://webapp-guide" -> asset("agent/webapp-authoring.md")
-        "hermit://page-api" -> asset("agent/hermit-api.d.ts")
-        else -> throw RpcError(-32602, "Unknown resource URI")
+        "hermit://webapp-guide" -> webappGuideText
+        "hermit://page-api" -> pageApiText
+        else -> uri.removePrefix("hermit://tool/").takeIf { uri.startsWith("hermit://tool/") && it.matches(Regex("[a-zA-Z0-9_-]+")) }
+            ?.let { name -> (0 until catalog.length()).asSequence().map { catalog.getJSONObject(it) }.firstOrNull { it.optString("name") == name }?.toString() }
+            ?: throw RpcError(-32602, "Unknown resource URI")
     }
 
     private class RpcError(val code: Int, override val message: String) : RuntimeException(message)
@@ -320,7 +339,8 @@ class AgentDevelopmentServer(
                     "/skills/hermit-device/SKILL.md" -> return text(200, "text/markdown", guide())
                     "/hermit-agent.py" -> return text(200, "text/x-python", asset("agent/hermit-agent.py"))
                 }
-                val authorization = session.headers["authorization"].orEmpty()
+                val authorization = session.headers["authorization"]
+                if (authorization.isNullOrBlank()) return authenticationRequired()
                 val now = SystemClock.elapsedRealtime()
                 val failure = failures[peer]
                 if (failure != null && failure.first >= 5 && now - failure.second < 60_000)
@@ -332,7 +352,7 @@ class AgentDevelopmentServer(
                         val previous = failures[peer]
                         failures[peer] = ((previous?.first ?: 0) + 1) to (previous?.second ?: now)
                     }
-                    return httpError(401, "Current six-digit password required; GET /connect for instructions").apply { addHeader("WWW-Authenticate", "Bearer realm=\"Hermit developer\"") }
+                    return authenticationRequired("invalid_credentials")
                 }
                 failures.remove(peer)
                 lastAccess = SystemClock.elapsedRealtime()
@@ -355,7 +375,7 @@ class AgentDevelopmentServer(
             catch (error: Exception) { return httpError(400, error.message?.take(300) ?: "Invalid request") }
         }
 
-        private fun discovery() = JSONObject().put("product", "Hermit").put("schema", 2).put("serverVersion", BuildConfig.VERSION_NAME)
+        private fun discovery() = JSONObject().put("product", "Hermit").put("schema", 3).put("serverVersion", BuildConfig.VERSION_NAME)
             .put("runId", runId).put("mcpUrl", "$address/mcp").put("protocolVersions", JSONArray(PROTOCOLS))
             .put("skillUrl", "$address/skills/hermit-device/SKILL.md")
             .put("helperUrl", "$address/hermit-agent.py").put("helperSha256", AgentWorkspace.sha(asset("agent/hermit-agent.py").toByteArray()))
@@ -364,18 +384,19 @@ class AgentDevelopmentServer(
                 .put("preferred", JSONObject().put("transport", "streamable-http").put("url", "$address/mcp")
                     .put("authorizationHeader", "Bearer <current six-digit password>"))
                 .put("prompt", "develop-webapp")
-                .put("resources", JSONArray(listOf("hermit://guide", "hermit://tools", "hermit://webapp-guide", "hermit://page-api")))
+                .put("resources", JSONArray(listOf("hermit://guide", "hermit://tool-index", "hermit://webapp-guide", "hermit://page-api")))
                 .put("fallback", JSONObject().put("runtime", "Python 3.10+ standard library")
                     .put("url", "$address/hermit-agent.py").put("stdioCommand", "<python> hermit-agent.py --address $address stdio")))
             .put("guidanceVersion", guidanceVersion).put("schemaDigest", AgentWorkspace.sha(catalogText.toByteArray()))
+            .put("resourceDigests", resourceDigests).put("toolIndex", toolIndex())
             .put("transport", "streamable-http").put("authentication", "Authorization: Bearer <current six-digit password>")
-            .put("tools", catalog).put("limits", JSONObject().put("rpcBytes", MAX_RPC).put("zipBytes", MAX_ZIP)
+            .put("limits", JSONObject().put("rpcBytes", MAX_RPC).put("zipBytes", MAX_ZIP)
                 .put("textFileBytes", 512 * 1024).put("binaryFileBytes", 64 * 1024 * 1024))
 
         private fun connectionGuide() = """
             Hermit ${BuildConfig.VERSION_NAME} agent development connection
             Address: $address
-            Read GET /.well-known/hermit-agent and GET /skills/hermit-device/SKILL.md after first connection or when runId/schemaDigest changes.
+            Read GET /.well-known/hermit-agent on each connection. It is a small cache manifest, not the tool catalog. Fetch the short skill only when guidanceVersion changes. Cache tools/list by schemaDigest, or read hermit://tool-index and one hermit://tool/TOOL_NAME schema on demand. Page-authoring and Bridge resources have independent digests.
             This is a trusted-LAN HTTP service, not an encrypted Internet endpoint.
             Ask the user for the current six-digit password displayed in Hermit. No pairing or per-computer identity.
             POST MCP JSON-RPC to /mcp with Authorization: Bearer <password> and Accept: application/json, text/event-stream.
@@ -385,16 +406,36 @@ class AgentDevelopmentServer(
             The helper and direct MCP endpoint work on Windows, macOS and Linux; no files from the developer's computer are assumed.
             python3 hermit-agent.py --address $address connect
             Windows launcher alternative: py -3 hermit-agent.py --address $address connect
+            Continuous local development: python3 hermit-agent.py --address $address develop-dir /path/to/happ --quiet
+            One-shot local preparation: python3 hermit-agent.py --address $address prepare-dir /path/to/happ
             python3 hermit-agent.py --address $address install-skill
             python3 hermit-agent.py --address $address client-config
-            A successful MCP connection already proves the global development service is enabled; never check that switch again. Before a write cycle call hermit_runtime_status once. If the foreground appId is not the target or launchChannel is not dev, call hermit_enter_dev_mode once to create or reuse its dev workspace, switch it to DEV and open it. HermitUI is protected and never exposed as a development target.
+            A successful MCP connection already proves the global development service is enabled; never check that switch again. For a local happ directory, prefer the helper's develop-dir command: it reads hermit.json, matches happId, enters DEV, compares file SHA-256, skips unchanged trees, sends only differences, waits for render and then keeps watching incremental saves. The lower-level prepare-dir, sync-dir and watch commands remain available. Before a direct write cycle call hermit_runtime_status once. If the foreground appId is not the target or launchChannel is not dev, call hermit_enter_dev_mode once to create or reuse its dev workspace, switch it to DEV and open it. HermitUI is protected and never exposed as a development target.
             No frontend build or framework support is needed. Author native HTML + JS + CSS; other tools' finished static output is accepted neutrally.
             Optimize for fast iteration: make focused edits, run only the smallest directly relevant technical check, then sync and refresh immediately. Do not default to full-suite tests, release packaging, screenshots or visual inspection unless the change or user requires them.
             Android 10 / API 29 devices with older vendor WebViews are the recommended compatibility baseline unless the task chooses a newer target. Android has no fixed "WebView 10": prefer older-compatible JavaScript syntax or transpiled output, feature-detect newer browser APIs, and provide fallbacks. For Android system abilities, use only capabilities HermitApp supports through its public Bridge, query availability first, and treat anything absent from the Bridge as unavailable rather than calling undocumented Native or vendor interfaces. This is agent guidance only; HermitApp does not scan, certify or reject happ code for these choices. Keep any compatibility check focused rather than expanding each edit into a full test.
             The developer switch persists across app restarts. Wi-Fi changes update the advertised address without disabling developer mode; use the current address shown by Hermit.
         """.trimIndent()
 
-        private fun serverInstructions() = "Authenticate with the password shown by HermitApp. A successful MCP connection already proves the global development service is enabled; never check that switch again. Before a write cycle call hermit_runtime_status once. If its foreground appId is the target and launchChannel is dev, write immediately; otherwise call hermit_enter_dev_mode once to create or reuse the dev workspace, switch the target to DEV and open it. Do not repeat this with hermit_get_dev_status, hermit_get_page_state or hermit_open_app. HermitUI is protected. Develop directly runnable HTML/JS/CSS without framework or build assumptions. Use Android 10 / API 29 devices with older vendor WebViews as the recommended compatibility baseline unless the task chooses a newer target; Android has no fixed WebView 10. Prefer older-compatible JavaScript syntax or transpiled output, feature-detect newer browser APIs, and provide fallbacks. For Android system abilities, use only capabilities HermitApp supports through its public Bridge, query capabilities and availability first, and treat anything absent from the Bridge as unavailable instead of calling undocumented Native or vendor interfaces; handle E_UNSUPPORTED and permission errors without crashing. This is guidance for the agent: HermitApp does not scan, certify or reject happ code based on these choices, and the agent decides the appropriate tradeoff. Optimize for the shortest reliable edit-to-device loop: inspect only relevant files, batch focused edits, run the smallest directly relevant technical check, then sync and refresh immediately when deployment is authorized. Do not default to full test suites, release packaging, rebuilds, screenshots or visual inspection; expand validation only for affected high-risk contracts or artifacts, an actual failure, or an explicit user request. Update only the single dev workspace with expectedDevRevision and a unique requestId; preserve app identity, business data and grants. Use hermit_sync_dev_changes for fast saves and hermit_wait_dev_render only when render evidence is needed. The same endpoint and tools work from Windows, macOS and Linux. Server version ${BuildConfig.VERSION_NAME}; guidance $guidanceVersion."
+        private fun authenticationRequired(error: String = "authentication_required") = json(401, JSONObject()
+            .put("error", error)
+            .put("message", "Current six-digit password required")
+            .put("discoveryUrl", "$address/.well-known/hermit-agent")
+            .put("instructionsUrl", "$address/connect")
+            .put("authentication", "Authorization: Bearer <current six-digit password>"))
+            .apply {
+                addHeader("WWW-Authenticate", "Bearer realm=\"Hermit developer\"")
+                addHeader("Link", "<$address/.well-known/hermit-agent>; rel=\"service-desc\", <$address/connect>; rel=\"help\"")
+            }
+
+        private fun conciseServerInstructions() = """
+            Authenticate with the password shown by HermitApp; a successful request proves the development service is enabled.
+            Cache the short guide by guidanceVersion and tools/list by schemaDigest. Read page-authoring and Bridge resources only when the task needs them.
+            For a local directory prefer hermit-agent.py develop-dir: it prepares once and keeps the same process watching incremental saves. Content hashes, not version labels, decide whether synchronization is needed.
+            Direct callers should check hermit_runtime_status once, enter DEV only when needed, batch writes with expectedDevRevision and a fresh requestId, and wait for render only after a returned renderOperationId.
+            Preserve app identity, data and grants. Do not publish, reset, capture the screen or expand validation without task authority. Server ${BuildConfig.VERSION_NAME}; guide $guidanceVersion.
+        """.trimIndent()
+
 
         private fun capabilities() = JSONObject().put("tools", JSONObject()).put("resources", JSONObject()).put("prompts", JSONObject())
 
@@ -426,7 +467,7 @@ class AgentDevelopmentServer(
                 val params = if (!request.has("params")) JSONObject() else request.optJSONObject("params") ?: throw RpcError(-32602, "params must be an object")
                 val result: JSONObject = when (method) {
                     "server/discover" -> JSONObject().put("supportedVersions", JSONArray(PROTOCOLS))
-                        .put("capabilities", capabilities()).put("instructions", serverInstructions())
+                        .put("capabilities", capabilities()).put("instructions", conciseServerInstructions())
                         .put("ttlMs", 60_000).put("cacheScope", "private")
                     "initialize" -> {
                         if (modern) throw RpcError(-32601, "initialize is not used by MCP $MODERN_PROTOCOL")
@@ -436,14 +477,21 @@ class AgentDevelopmentServer(
                         JSONObject().put("protocolVersion", selected)
                             .put("capabilities", capabilities())
                             .put("serverInfo", JSONObject().put("name", "hermit-device").put("version", BuildConfig.VERSION_NAME))
-                            .put("instructions", serverInstructions())
+                            .put("instructions", conciseServerInstructions())
                     }
                     "ping" -> JSONObject()
                     "tools/list" -> { noCursor(params); JSONObject().put("tools", catalog).put("ttlMs", 60_000).put("cacheScope", "private") }
                     "tools/call" -> callTool(authorization, params)
-                    "resources/list" -> { noCursor(params); JSONObject().put("resources", JSONArray(listOf("guide", "tools", "webapp-guide", "page-api").map { JSONObject().put("uri", "hermit://$it").put("name", it).put("mimeType", "text/plain") })).put("ttlMs", 60_000).put("cacheScope", "private") }
-                    "resources/read" -> { val uri = params.optString("uri"); JSONObject().put("contents", JSONArray().put(JSONObject().put("uri", uri).put("mimeType", "text/plain").put("text", resource(uri)))).put("ttlMs", 60_000).put("cacheScope", "private") }
-                    "resources/templates/list" -> JSONObject().put("resourceTemplates", JSONArray()).put("ttlMs", 60_000).put("cacheScope", "private")
+                    "resources/list" -> { noCursor(params); JSONObject().put("resources", JSONArray(listOf("guide", "tool-index", "webapp-guide", "page-api").map { JSONObject().put("uri", "hermit://$it").put("name", it).put("mimeType", "text/plain") })).put("ttlMs", 60_000).put("cacheScope", "private") }
+                    "resources/read" -> {
+                        val uri = params.optString("uri")
+                        val mime = if (uri == "hermit://tool-index" || uri.startsWith("hermit://tool/")) "application/json" else "text/plain"
+                        JSONObject().put("contents", JSONArray().put(JSONObject().put("uri", uri).put("mimeType", mime).put("text", resource(uri)))).put("ttlMs", 60_000).put("cacheScope", "private")
+                    }
+                    "resources/templates/list" -> JSONObject().put("resourceTemplates", JSONArray().put(JSONObject()
+                        .put("uriTemplate", "hermit://tool/{name}").put("name", "tool-schema")
+                        .put("description", "Detailed schema for one Hermit tool").put("mimeType", "application/json")))
+                        .put("ttlMs", 60_000).put("cacheScope", "private")
                     "prompts/list" -> { noCursor(params); JSONObject().put("prompts", JSONArray().put(JSONObject().put("name", "develop-webapp").put("description", "Current Hermit native page development workflow"))).put("ttlMs", 60_000).put("cacheScope", "private") }
                     "prompts/get" -> { if (params.optString("name") != "develop-webapp") throw RpcError(-32602, "Unknown prompt"); JSONObject().put("messages", JSONArray().put(JSONObject().put("role", "user").put("content", JSONObject().put("type", "text").put("text", guide())))) }
                     else -> throw RpcError(-32601, "Method not found")
@@ -489,14 +537,25 @@ class AgentDevelopmentServer(
                 }
                 val result = when (name) {
                     "hermit_get_guide" -> JSONObject().put("serverVersion", BuildConfig.VERSION_NAME)
-                        .put("runId", runId).put("guidanceVersion", guidanceVersion).put("text", guide())
+                        .put("runId", runId).put("guidanceVersion", guidanceVersion)
+                        .put("resourceDigests", resourceDigests).put("text", guide())
                     "hermit_runtime_status" -> runtimeStatus(authorization)
                     "hermit_get_page_state" -> ui("page-state", args, authorization)
-                    "hermit_list_apps" -> JSONObject().put("apps", JSONArray(registry.listInstances().map { app ->
-                        app.toJson().put("devWorkspace", devWorkspaces.status(app.appId))
+                    "hermit_capture_screen" -> ui("capture-screen", args, authorization)
+                    "hermit_list_apps" -> JSONObject().put("apps", JSONArray(registry.listInstances()
+                        .filter { args.optString("happId").isBlank() || it.happId == args.optString("happId") }
+                        .map { app ->
+                        app.toJson().apply {
+                            if (!args.optBoolean("includeIcons", false)) {
+                                remove("iconUrl"); remove("customIconUrl"); remove("defaultIconUrl")
+                            }
+                        }.put("devWorkspace", devWorkspaces.status(app.appId))
                     }))
-                    "hermit_get_app" -> registry.getInstance(appId!!)!!.toJson()
-                        .put("devWorkspace", devWorkspaces.status(appId))
+                    "hermit_get_app" -> registry.getInstance(appId!!)!!.toJson().apply {
+                        if (!args.optBoolean("includeIcons", false)) {
+                            remove("iconUrl"); remove("customIconUrl"); remove("defaultIconUrl")
+                        }
+                    }.put("devWorkspace", devWorkspaces.status(appId))
                     "hermit_create_dev_app" -> workspace.createDev(
                         args.getString("name"), args.getString("happId"), devWorkspaces
                     ) { guarded(authorization, it) }
@@ -594,23 +653,19 @@ class AgentDevelopmentServer(
                         it.put("runtime", safeUi("switch", JSONObject().put("appId", appId), authorization))
                     }
 
-                    // One compatibility cycle: these methods still publish immutable releases directly.
-                    "hermit_create_app" -> workspace.create(args.getString("name")) { guarded(authorization, it) }
-                    "hermit_list_files" -> workspace.files(appId!!)
-                    "hermit_read_file" -> workspace.read(appId!!, args.getString("path"))
-                    "hermit_apply_files" -> workspace.apply(appId!!, args) { guarded(authorization, it) }
-                        .also { if (args.optBoolean("reload", true)) it.put("runtime", safeUi("switch", JSONObject().put("appId", appId), authorization)) }
-                    "hermit_list_releases" -> JSONObject().put("activeReleaseId", workspace.local(appId!!).activeReleaseId)
+                    "hermit_list_releases" -> JSONObject().put("activeReleaseId", registry.getInstance(appId!!)?.activeReleaseId ?: JSONObject.NULL)
                         .put("releases", JSONArray(registry.listReleases(appId).map {
                             JSONObject().put("releaseId", it.releaseId).put("treeHash", it.treeHash)
                                 .put("createdAt", it.createdAt).put("provenance", it.provenance)
                         }))
                     "hermit_rollback" -> {
-                        workspace.local(appId!!)
+                        registry.getInstance(appId!!)
+                            ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "App not found")
                         guarded(authorization) { registry.activateRelease(appId, args.getString("releaseId"), args.getString("expectedReleaseId")) }
                         JSONObject().put("appId", appId).put("releaseId", args.getString("releaseId"))
                             .put("runtime", safeUi("switch", JSONObject().put("appId", appId), authorization))
                     }
+
                     else -> throw RpcError(-32602, "Unknown tool")
                 }
                 if (requestId != null) synchronized(receipts) {
@@ -618,7 +673,7 @@ class AgentDevelopmentServer(
                     receipts[requestId] = fingerprint to result
                 }
                 record(name, appId, "ok")
-                return toolResult(result)
+                return if (name == "hermit_capture_screen") imageToolResult(result) else toolResult(result)
             } catch (error: Exception) {
                 val code = (error as? HermitException)?.code ?: "E_OPERATION_FAILED"
                 record(name, appId, code)
@@ -811,7 +866,7 @@ class AgentDevelopmentServer(
         }
 
         private fun record(tool: String, appId: String?, result: String) = synchronized(events) {
-            if (events.size >= 20) events.removeFirst()
+            if (events.size >= MAX_RECENT_OPERATIONS) events.removeFirst()
             events.addLast(JSONObject().put("tool", tool).put("appId", appId ?: JSONObject.NULL).put("result", result).put("time", System.currentTimeMillis()))
         }
     }
@@ -831,6 +886,7 @@ class AgentDevelopmentServer(
         private const val NETWORK_MONITOR_MS = 15_000L
         private const val MAX_RPC = 4L * 1024 * 1024
         private const val MAX_ZIP = 64L * 1024 * 1024
+        private const val MAX_RECENT_OPERATIONS = 20
         private const val RENDER_TTL_MS = 2L * 60 * 1000
         private fun constantEquals(a: String, b: String) = MessageDigest.isEqual(a.toByteArray(), b.toByteArray())
         private fun noCursor(params: JSONObject) { if (params.has("cursor")) throw RpcError(-32602, "No pagination cursor is available") }
@@ -881,6 +937,13 @@ class AgentDevelopmentServer(
         }
         private fun rpcError(id: Any, code: Int, message: String) = JSONObject().put("jsonrpc", "2.0").put("id", id).put("error", JSONObject().put("code", code).put("message", message))
         private fun toolResult(value: JSONObject, error: Boolean = false) = JSONObject().put("content", JSONArray().put(JSONObject().put("type", "text").put("text", value.toString()))).put("structuredContent", value).put("isError", error)
+        private fun imageToolResult(value: JSONObject): JSONObject {
+            val data = value.remove("_imageData") as? String ?: throw RpcError(-32603, "Screenshot data unavailable")
+            val content = JSONArray()
+                .put(JSONObject().put("type", "text").put("text", value.toString()))
+                .put(JSONObject().put("type", "image").put("data", data).put("mimeType", value.getString("mimeType")))
+            return JSONObject().put("content", content).put("structuredContent", value).put("isError", false)
+        }
         private fun text(code: Int, mime: String, body: String): NanoHTTPD.Response = NanoHTTPD.newFixedLengthResponse(NanoHTTPD.Response.Status.lookup(code), "$mime; charset=utf-8", body).apply {
             // Early authentication/Origin failures leave the body unread. Never reuse that socket.
             addHeader("Connection", "close")

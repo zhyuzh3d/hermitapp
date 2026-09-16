@@ -13,6 +13,7 @@
 <div id="browserNotice" class="info-card hidden" role="status"><i class="fa-solid fa-mobile-screen-button" aria-hidden="true"></i><div><strong>在 HermitApp 中，管理你的应用</strong><p>这是 HermitUI 界面。普通浏览器无法读取手机上的应用或调用设备能力。</p><a href="/pages/download.html">下载 HermitApp</a><span aria-hidden="true"> · </span><a href="/pages/guide.html">阅读使用指南</a></div></div>
 <div id="hostActions"><p id="homePrompt" class="home-prompt">添加一个HAPP应用</p>
 <div class="quick-add" aria-label="添加新应用"><button id="addZip" class="quick-add-button"><span class="tool-icon orange"><i class="fa-solid fa-file-zipper" aria-hidden="true"></i></span><strong>从压缩包</strong></button><button id="addUrl" class="quick-add-button"><span class="tool-icon green"><i class="fa-solid fa-link"></i></span><strong>从网址</strong></button><button id="scanQr" class="quick-add-button"><span class="tool-icon violet"><i class="fa-solid fa-qrcode"></i></span><strong>扫码添加</strong></button></div>
+<div class="add-favorite-choice switch-row"><div><strong>添加后收藏</strong><small>三种添加方式都会使用这个选择。</small></div><button class="switch" data-add-favorite role="switch" aria-checked="true" aria-label="添加后收藏"><span></span></button></div>
 </div>
 <div id="libraryTabs" class="segmented library-tabs" aria-label="应用列表"><button data-collection="favorites" class="selected" aria-pressed="true">收藏</button><button data-collection="all" aria-pressed="false">全部</button></div>
 <div id="libraryUnavailable" class="empty glass-panel hidden" role="status"><h2>暂时无法读取应用库</h2><p id="libraryErrorText"></p><button id="retryLibrary" class="primary">重新读取</button></div>
@@ -22,7 +23,7 @@
 </section>
 <section id="developmentView" class="view hidden" aria-label="开发服务">
 <div class="developer-card"><div class="switch-row"><div><strong>智能体开发模式</strong><small id="agentStatus" role="status">正在读取状态…</small></div><button id="agentToggle" class="switch" role="switch" aria-checked="false" aria-label="开启智能体开发模式"><span></span></button></div>
-<p class="hint">请把下面的开发服务地址和开发服务密码告知你的 WorkBuddy、Codex 等智能体软件。连接后，你就可以让智能体对所有已安装的 happ 应用进行开发和定制，打造属于自己的应用体验；HermitUI 管理界面始终受保护。</p>
+<p class="hint">请把下面的开发服务地址和开发服务密码告知你的 WorkBuddy、Codex 等智能体软件。连接后，你就可以让智能体对所有已安装的 happ 应用进行开发和定制，打造属于自己的应用体验。</p>
 <div class="agent-address-row"><div><span class="field-label">开发服务地址</span><output id="agentUrl" class="agent-url">未连接 Wi-Fi</output></div><div class="agent-address-actions"><button id="refreshAgentAddress" aria-label="刷新开发服务地址"><i class="fa-solid fa-rotate accent-green" aria-hidden="true"></i>刷新</button><button id="copyAgentAddress" aria-label="复制开发服务地址"><i class="fa-solid fa-copy accent-blue" aria-hidden="true"></i>复制</button></div></div>
 <div class="agent-address-row"><div><span class="field-label">备用开发服务(USB连接)</span><output id="agentUsb" class="agent-url">adb forward tcp:8766 tcp:8766</output></div><button id="copyAgentUsb" aria-label="复制 USB 命令"><i class="fa-solid fa-copy accent-violet" aria-hidden="true"></i>复制</button></div>
 <button id="startAgentUsb" class="wide"><i class="fa-solid fa-usb accent-violet" aria-hidden="true"></i>仅 USB 启动</button>
@@ -77,7 +78,7 @@
 <section id="addPanel" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="addTitle"><div class="modal-card"><div class="sheet-handle" aria-hidden="true"></div>
 <div class="panel-head"><div><p id="addSourceLabel" class="eyebrow">应用配置</p><h2 id="addTitle">确认添加应用</h2></div><button data-close="#addPanel" class="icon-button" aria-label="关闭添加"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>
 <div class="app-editor-head"><button id="pickAppIcon" class="icon-picker" type="button"><span id="addIconPreview"><i class="fa-solid fa-image"></i></span><small>选择图标</small></button><div><label>应用名称<input id="name" maxlength="80" placeholder="给它取个好记的名字" autocomplete="off"></label><label id="versionField">版本<input id="addVersion" maxlength="80" value="1.0.0" autocomplete="off"></label></div></div>
-<p id="manifestStatus" class="manifest-status"></p><p id="favoriteOnAdd" class="context-note hidden"><i class="fa-solid fa-heart accent-orange"></i>从收藏页添加，将加入收藏</p>
+<p id="manifestStatus" class="manifest-status"></p><div class="add-favorite-choice sheet-favorite-choice switch-row"><div><strong>添加后收藏</strong><small>安装完成后直接显示在收藏列表。</small></div><button class="switch" data-add-favorite role="switch" aria-checked="true" aria-label="添加后收藏"><span></span></button></div>
 <label id="urlField">页面网址<input id="url" type="url" inputmode="url" placeholder="https://example.com、ZIP 或 Git 仓库" autocomplete="url" autocapitalize="none" spellcheck="false"></label>
 <button id="confirmAdd" class="primary wide"><i class="fa-solid fa-check accent-lime" aria-hidden="true"></i>确认添加</button>
 </div></section>

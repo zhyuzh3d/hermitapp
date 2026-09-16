@@ -4,7 +4,7 @@ export type HermitErrorCode =
   | "E_CONFLICT" | "E_QUOTA" | "E_STORAGE" | "E_NETWORK" | "E_INTERNAL";
 
 export interface HermitRecord<T = unknown> { collection: string; key: string; value: T; revision: string }
-export interface HermitFile { logicalFileId: string; name: string; mime: string; size: number; sha256: string }
+export interface HermitFile { logicalFileId: string; url: string; name: string; mime: string; size: number; sha256: string }
 export interface HermitCapability { name: string; implemented: boolean; supported: boolean; usable: boolean; lifecycle: string; features?: Record<string, unknown>; authorization?: Record<string, { implemented: boolean; supported: boolean; grant: "ask" | "allow" | "deny" | "host"; system: "granted" | "missing" | "not-required"; missingPermissions?: string[]; usable: boolean }> }
 export type HermitNotificationRecurrence = "once" | "daily" | "weekly" | "monthly" | "yearly";
 export interface HermitNotification { id: string; title: string; body?: string; data?: Record<string, unknown> }
@@ -38,7 +38,7 @@ export interface HermitApi {
   };
   files: {
     import(params?: { accept?: string }): Promise<HermitFile & { cancelled?: boolean }>;
-    pickImage(params?: { maxDimension?: number; maxBytes?: number }): Promise<{ cancelled: true } | { cancelled: false; name: string; mime: "image/jpeg"; size: number; dataUrl: string }>;
+    pickImage(params?: { maxDimension?: number; maxBytes?: number }): Promise<{ cancelled: true } | (HermitFile & { cancelled: false })>;
     pickInline(params: { accept: string; maxBytes?: number }): Promise<{ cancelled: true } | { cancelled: false; name: string; mime: string; size: number; dataUrl: string }>;
     writeText(params: { name: string; text: string }): Promise<HermitFile>;
     readText(params: { logicalFileId: string; maxBytes?: number }): Promise<HermitFile & { text: string }>;

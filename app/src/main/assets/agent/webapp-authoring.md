@@ -146,7 +146,7 @@ document.body.append(hermit.icons.create('heart', { style: 'regular', label: '�
 
 Hermit 提供全应用“智能体开发模式”：在 HermitUI 的开发 Tab 开启，向可信智能体提供手机显示的局域网 HTTP 基址和六位数字密码；没有 Wi-Fi 时可仅启动 USB 服务并执行 `adb forward tcp:8766 tcp:8766`。局域网和 USB 使用同一套接口、同一个密码和同一份开发数据。所有电脑共用密码，不配对、不绑定电脑或客户端；修改密码后旧密码立即失效。密码只用于 Hermit 已开放的开发管理接口，不替代系统和逐应用能力授权。局域网 HTTP 未加密，只适用于可信网络，不应公网暴露。
 
-访问根地址获取连接说明；`/.well-known/hermit-agent` 提供当前工具与指南版本，`/mcp` 是标准 Streamable HTTP 接口，`/skills/hermit-device/SKILL.md` 是随 APK 更新的动态指南。智能体每次开发先获取当前指南，不把密码写入页面、Skill、日志或仓库。Skill 安装和 MCP 注册由客户端执行，不能承诺所有智能体软件收到地址就自动完成注册；服务同时提供无需第三方 Python 库的 HTTP/stdio 助手。
+访问无需密码的根地址获取连接说明；`/.well-known/hermit-agent` 提供当前工具与指南版本，`/mcp` 是标准 Streamable HTTP 接口，`/skills/hermit-device/SKILL.md` 是随 APK 更新的动态指南。未带认证访问受保护接口时，服务以结构化 401 返回发现地址、说明地址和 `Authorization: Bearer <password>` 模板，智能体据此向用户索取当前密码；密码不得放入 URL 路径、查询参数、fragment、页面、Skill、日志或仓库。Skill 安装和 MCP 注册由客户端执行，不能承诺所有智能体软件收到地址就自动完成注册；服务同时提供无需第三方 Python 库的 HTTP/stdio 助手。
 
 HermitUI 仍不是可写开发目标，但它是页面调度的受保护例外。只要全局智能体开发服务已开启、调用方通过密码授权且 HermitUI 正在前台，智能体就能调用 `hermit_get_page_state` 获取其白名单快照，并调用 `hermit_reload_shell` 刷新。传入 `runtimeMode: "online"` 可选择官方实时页面，普通进程重启保留该选择，APK 替换则按恢复机制回到内置 UI。HermitUI 不接收任意 JavaScript；刷新后只由 APK 调用官方固定的 `window.hermitDevState.restore(state)`，也不开放 HermitUI 文件。
 
@@ -172,7 +172,9 @@ window.hermitDevState = {
 
 典型调度顺序是“读取快照 → 原子更新文件但不自动刷新 → 原 WebView 刷新并传回快照 → 按需等待渲染确认”。开发工具不能对稳定版 happ 使用这套页面调度；要测试稳定版必须先明确切回 DEV 副本。
 
-新 happ 先通过 `hermit_create_dev_app` 安装最小包并进入开发模式。现有 happ 使用 `hermit_enter_dev_mode`，随后用 `hermit_sync_dev_changes` 或助手的 `sync-dir` / `watch` 增量更新。完成后，`hermit_build_dev_package` 生成带新版本号的确定性 ZIP；`hermit_install_dev_package` 通过标准更新事务安装并切回正式版本。开发副本继承原 `appId` 的数据、登录态与授权，发布也不会新建实例。详见 [统一开发工作区计划](../plans/hermitapp-unified-dev-workspace-plan.md)。
+初始化 happ 开发前必须绑定本地目录。用户明确指定的目录优先；否则复用 `~/hermit/happ-dev.json` 中该 `happId` 的绝对路径。没有记录时由智能体判断当前项目工作空间是否合适：合适则在其中创建或使用 `happ-<happId 中的点改为横线>`，否则使用 `~/hermit/happs/` 下的同名目录，并在进入 DEV 前写入记录。一个 `happId` 只锁定一个活动目录；用户移动、更名或改用其他目录时原子更新记录，旧路径失效时询问新位置，不扫描磁盘或静默创建第二份。记录可附带由智能体维护的版本信息，但 Hermit 不使用它判断目录、比较新旧或同步代码，也不得在其中保存密码和设备凭据。
+
+新 happ 先通过 `hermit_create_dev_app` 安装最小包并进入开发模式。现有 happ 使用 `hermit_enter_dev_mode`，随后用 `hermit_sync_dev_changes` 或助手的 `sync-dir` / `watch` 增量更新。本地目录绑定后优先使用助手的 `develop-dir`：它从本地 `hermit.json` 匹配 `happId`、进入 DEV、按文件 SHA-256 比较并只在有差异时同步，随后在同一进程内持续监听已稳定的保存操作；只需一次初始化时使用 `prepare-dir`。若 `hermit-install.json` 指向有效本地发布 ZIP，则只比较该 ZIP 的可运行文件集合，避免传输文档、测试和历史归档。完成后，`hermit_build_dev_package` 生成带新版本号的确定性 ZIP；`hermit_install_dev_package` 通过标准更新事务安装并切回正式版本。开发副本继承原 `appId` 的数据、登录态与授权，发布也不会新建实例。详见 [统一开发工作区计划](../plans/hermitapp-unified-dev-workspace-plan.md)。
 
 本地相对路径建议写成 `./app.js`、`./style.css`。有 `liveUrl` 时，本地 release 会挂载到这个真实 URL：包内存在的 GET/HEAD 静态文件优先，包内不存在的同源路径和 POST 等动态请求才访问服务器，因此 `./app.js` 读取本地文件，而缺失的 `/api/getinfo` 正常请求远端。页面不需要也不应注入 `<base>` 或改写 `fetch`。纯本地 happ 使用 Hermit 派生的内部 URL，所有页面网络请求均被阻止。
 
@@ -195,7 +197,7 @@ await hermit.notifications.schedule({
 
 有 `liveUrl` 的 happ 可以用 `notifications.setEndpoint({ endpoint: '/api/hermit/notifications' })` 登记严格同源的 HTTP(S) 地址。Hermit 最低每 15 分钟统一 GET 一次，也会在登记时触发一次补查；请求只携带该 Origin Cookie 中名为 `notify-token` 的字段。响应只接受 `notifications`、`cancel` 与 `cursor` 数据，不执行代码。纯本地 happ、跨 Origin 和本机回环地址不能登记 endpoint。
 
-业务数据建议用 `hermit.data` / `hermit.files`，代码更新不会清除这些数据。`hermit.files.pickImage()` 使用 Android 照片选择器让用户从图库选择图片，并返回经过尺寸和体积约束的 JPEG data URL；`hermit.files.pickInline()` 用于用户主动选择不超过调用方上限的小型文件（例如待提交给 ASR 的短音频），不把 Android 物理路径暴露给页面。`hermit.files.import({ accept: "video/*" })` 可将用户选择的大文件保存为逻辑文件，供后续上传使用。`hermit.files.readText()` 默认只内联 256 KiB，处理模型返回的较大 JSON 时可显式传 `maxBytes`，宿主最高限制为 8 MiB。页面使用相机、定位等能力仍须经过逐应用授权与相应 Android 系统授权。图标资源不涉及敏感权限。
+业务数据建议用 `hermit.data` / `hermit.files`，代码更新不会清除这些数据。Hermit 的文件采用本地对象存储：内容落在宿主文件系统，数据库和接口只保留 `logicalFileId`、`url`、摘要等元数据；`hermit.files.pickImage()` 使用 Android 照片选择器并返回持久化的 `HermitFile`（可直接使用其 `url`），不会返回或持久化 Base64。`hermit.files.import({ accept: "video/*" })` 可将用户选择的大文件保存为逻辑文件，视频缩略图也作为独立文件对象返回。只有明确调用 `hermit.files.pickInline()` 选择不超过调用方上限的小文件时，才会返回临时 data URL；它适合提交给 ASR 等必须内联的协议，不应写入 `hermit.data`。`hermit.files.readText()` 默认只内联 256 KiB，处理模型返回的较大 JSON 时可显式传 `maxBytes`，宿主最高限制为 8 MiB。页面使用相机、定位等能力仍须经过逐应用授权与相应 Android 系统授权。图标资源不涉及敏感权限。
 
 跨域流式响应使用 `network.openStream/readStream/closeStream`。`openStream` 与 `network.request` 接受同样的 URL、方法、Header 和超时设置，也接受 `bodyLogicalFileId` 或由文本与逻辑文件组成的 `multipart`；宿主逐 Origin 授权，跨 Origin 重定向会移除凭据。页面应循环读取不超过 64 KiB 的 Base64 字节块，并在取消、离开当前任务或解析失败时调用 `closeStream`。流 ID 只属于创建它的页面会话，页面退出后宿主自动关闭。
 

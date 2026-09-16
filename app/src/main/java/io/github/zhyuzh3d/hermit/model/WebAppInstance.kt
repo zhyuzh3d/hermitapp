@@ -25,7 +25,7 @@ data class WebAppInstance(
     val sourceSpec: String,
     val developerEnabled: Boolean,
     val favorite: Boolean,
-    val iconDataUrl: String?,
+    val iconUrl: String?,
     val createdAt: Long,
     val updatedAt: Long,
     val happId: String? = null,
@@ -36,7 +36,7 @@ data class WebAppInstance(
     val updateUrl: String? = null,
     val notificationEnabled: Boolean = false,
     val allowCrossOriginNetwork: Boolean = false,
-    val defaultIconDataUrl: String? = null,
+    val defaultIconUrl: String? = null,
 ) {
     val instanceId: String get() = appId
     val dataGenerationId: String get() = activeDataGeneration
@@ -47,7 +47,8 @@ data class WebAppInstance(
         requireNotNull(liveUrl)
     } else liveUrl ?: localUrl
     val runtimeOrigin: String get() = originOf(runtimeUrl)
-    val effectiveIconDataUrl: String? get() = iconDataUrl ?: defaultIconDataUrl
+    val effectiveIconUrl: String? get() = iconUrl ?: defaultIconUrl
+    val customIconUrl: String? get() = iconUrl
 
     fun toJson(): JSONObject = JSONObject()
         .put("appId", appId)
@@ -57,9 +58,6 @@ data class WebAppInstance(
         .put("source", source.name.lowercase())
         .put("runtimeMode", runtimeMode.name.lowercase())
         .put("launchChannel", launchChannel.name.lowercase())
-        // Compatibility for already published HermitUI versions. New code must
-        // use source and runtimeMode instead of this overloaded field.
-        .put("mode", if (runtimeMode == HappRuntimeMode.LIVE) "online" else "local")
         .put("startUrl", runtimeUrl)
         .put("liveUrl", liveUrl ?: JSONObject.NULL)
         .put("origin", runtimeOrigin)
@@ -75,13 +73,10 @@ data class WebAppInstance(
         .put("sourceAdapter", sourceAdapter)
         .put("developerEnabled", developerEnabled)
         .put("favorite", favorite)
-        // iconDataUrl remains the effective presentation for older HermitUI
-        // versions. The explicit fields let current clients edit only the user
-        // override without losing the package-provided default.
-        .put("iconDataUrl", effectiveIconDataUrl)
-        .put("customIconDataUrl", iconDataUrl ?: JSONObject.NULL)
-        .put("defaultIconDataUrl", defaultIconDataUrl ?: JSONObject.NULL)
-        .put("hasCustomIcon", iconDataUrl != null)
+        .put("iconUrl", effectiveIconUrl ?: JSONObject.NULL)
+        .put("customIconUrl", customIconUrl ?: JSONObject.NULL)
+        .put("defaultIconUrl", defaultIconUrl ?: JSONObject.NULL)
+        .put("hasCustomIcon", iconUrl != null)
         .put("createdAt", createdAt)
         .put("updatedAt", updatedAt)
 
@@ -121,7 +116,7 @@ data class WebAppInstance(
                 sourceSpec = JSONObject().put("url", url).toString(),
                 developerEnabled = false,
                 favorite = favorite,
-                iconDataUrl = null,
+                iconUrl = null,
                 createdAt = now,
                 updatedAt = now,
             )

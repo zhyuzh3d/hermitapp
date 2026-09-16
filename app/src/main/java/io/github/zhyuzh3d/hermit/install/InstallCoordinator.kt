@@ -10,6 +10,7 @@ import io.github.zhyuzh3d.hermit.model.HappSource
 import io.github.zhyuzh3d.hermit.model.LaunchChannel
 import io.github.zhyuzh3d.hermit.model.HermitException
 import io.github.zhyuzh3d.hermit.model.WebAppInstance
+import io.github.zhyuzh3d.hermit.data.HostImageStore
 import io.github.zhyuzh3d.hermit.launcher.ShortcutHost
 import io.github.zhyuzh3d.hermit.registry.AppRegistry
 import kotlinx.coroutines.Dispatchers
@@ -47,6 +48,7 @@ class InstallCoordinator(
     private val locks = ConcurrentHashMap<String, Mutex>()
     private val releaseLeases = ConcurrentHashMap<String, AtomicInteger>()
     private val shortcuts = ShortcutHost(context)
+    private val images = HostImageStore(context)
     private val appsRoot get() = File(context.filesDir, "instances")
 
     suspend fun installZip(
@@ -143,12 +145,12 @@ class InstallCoordinator(
                 check(File(webRoot, entry).isFile) { "入口文件不存在：$entry" }
                 val treeHash = treeHash(webRoot)
                 val publisher = PackageManifestReader.verifyPublisher(webRoot, treeHash)
-                val packageIconDataUrl = metadata?.icon?.let { icon ->
+                val packageIconBytes = metadata?.icon?.let { icon ->
                     val iconFile = File(webRoot, icon)
                     if (!iconFile.isFile || iconFile.length() > MAX_ICON_BYTES || icon.substringAfterLast('.', "").lowercase() !in IMAGE_EXTENSIONS) {
                         throw HermitException(ErrorCodes.INVALID_ARGUMENT, "hermit.json 的 icon 文件无效")
                     }
-                    IconProcessor.centeredPngDataUrl { iconFile.inputStream() }
+                    IconProcessor.centeredPngBytes { iconFile.inputStream() }
                 }
                 if (currentInstance != null) {
                     if (currentInstance.happId != null && metadata?.happId != currentInstance.happId) {
@@ -199,7 +201,7 @@ class InstallCoordinator(
                             commitGuard { registry.activateRelease(appId, duplicate.releaseId, currentInstance?.activeReleaseId) }
                         }
                         if (replacePackageIdentity) registry.updatePackageIdentity(appId, metadata?.happId, publisher?.keyId)
-                        registry.updateDefaultIcon(appId, packageIconDataUrl)
+                        registry.updateDefaultIcon(appId, packageIconBytes)
                         refreshShortcut(appId)
                         registry.updateOperation(operationId, "succeeded", duplicate.releaseId)
                         pruneReleases(appId, duplicate.releaseId)
@@ -247,11 +249,11 @@ class InstallCoordinator(
                         webProfileName = "app-${appId.replace("-", "")}", trustRevision = 1,
                         activeReleaseId = null, activeDataGeneration = UUID.randomUUID().toString(),
                         sourceAdapter = provenance, sourceSpec = JSONObject().put("kind", provenance).toString(),
-                        developerEnabled = false, favorite = false, iconDataUrl = null, createdAt = now, updatedAt = now,
+                        developerEnabled = false, favorite = false, iconUrl = null, createdAt = now, updatedAt = now,
                         happId = metadata?.happId, publisherKeyId = publisher?.keyId,
                         downloadUrl = downloadUrl, downloadVersionCode = metadata?.versionCode?.takeIf { downloadUrl != null },
                         downloadVersionName = metadata?.versionName?.takeIf { downloadUrl != null }, updateUrl = metadata?.updateUrl,
-                        defaultIconDataUrl = packageIconDataUrl,
+                        defaultIconUrl = packageIconBytes?.let { images.put(appId, it, "image/png") },
                     )
                     commitGuard { registry.insertLocalWithRelease(app, release) }
                     registryCommitted = true
@@ -266,7 +268,7 @@ class InstallCoordinator(
                     }
                 }
                 val installedInstance = archivedInstance ?: currentInstance
-                if (installedInstance != null) registry.updateDefaultIcon(appId, packageIconDataUrl)
+                if (installedInstance != null) registry.updateDefaultIcon(appId, packageIconBytes)
                 makeReleaseReadOnly(File(destination, "web"))
                 refreshShortcut(appId)
                 registry.updateOperation(operationId, "succeeded", releaseId)
@@ -366,7 +368,9 @@ class InstallCoordinator(
         require(appId.matches(Regex("[0-9a-fA-F-]{36}")))
         val dir = File(appsRoot, appId)
         check(dir.canonicalPath.startsWith(appsRoot.canonicalPath + File.separator))
-        return !dir.exists() || dir.deleteRecursively()
+        val deleted = !dir.exists() || dir.deleteRecursively()
+        if (deleted) images.deleteApp(appId)
+        return deleted
     }
 
     fun deleteAppCode(appId: String): Boolean {
@@ -394,12 +398,15 @@ class InstallCoordinator(
             File(appRoot, "data").listFiles()?.filter { it.isDirectory && it.name != instance.activeDataGeneration }
                 ?.forEach { it.deleteRecursively() }
         }
+        File(context.filesDir, "objects/images").listFiles()?.filter { it.isDirectory && it.name !in instances }
+            ?.forEach { it.deleteRecursively() }
         registry.pendingProfileCleanup().map { it.second }.distinct().forEach(registry::finishDelete)
     }
 
     private fun cleanupProvisionalRoot(appId: String, existingAppId: String?) {
         if (existingAppId == null && registry.getInstance(appId) == null) {
             File(appsRoot, appId).deleteRecursively()
+            images.deleteApp(appId)
         }
     }
 

@@ -33,26 +33,33 @@ try {
   const one = await connect("computer-one", config.password);
   const two = await connect("computer-two", config.password);
   const [a, b] = await Promise.all([one.listTools(), two.listTools()]);
-  assert.equal(a.tools.length, 29); assert.equal(b.tools.length, 29);
+  assert.equal(a.tools.length, 26); assert.equal(b.tools.length, 26);
   const guide = await one.callTool({ name: "hermit_get_guide", arguments: {} });
   assert(guide.structuredContent.text.includes("six-digit"));
   const resource = await two.readResource({ uri: "hermit://page-api" });
   assert(resource.contents[0].text.includes("Hermit"));
-  const created = (await one.callTool({ name: "hermit_create_app", arguments: { name: "SDK interoperability", requestId: crypto.randomUUID() } })).structuredContent;
-  const patched = await two.callTool({ name: "hermit_apply_files", arguments: { appId: created.appId, expectedReleaseId: created.activeReleaseId, requestId: crypto.randomUUID(), reload: false, files: [{ path: "index.html", content: "<!doctype html><title>SDK native</title><h1>SDK connected</h1>" }] } });
+  const created = (await one.callTool({ name: "hermit_create_dev_app", arguments: { name: "SDK interoperability", happId: "com.example.sdkinterop", requestId: crypto.randomUUID() } })).structuredContent;
+  const patched = await two.callTool({ name: "hermit_apply_dev_files", arguments: { appId: created.appId, expectedDevRevision: created.devWorkspace.revision, requestId: crypto.randomUUID(), refreshMode: "none", files: [{ path: "index.html", content: "<!doctype html><title>SDK native</title><h1>SDK connected</h1>" }] } });
   assert.equal(patched.isError, false);
   const opened = await one.callTool({ name: "hermit_open_app", arguments: { appId: created.appId } });
   assert.equal(opened.structuredContent.state, "opening");
 
   temp = fs.mkdtempSync(path.join(os.tmpdir(), "hermit-interop-"));
   const source = path.join(temp, "source"); fs.mkdirSync(source);
+  fs.writeFileSync(path.join(source, "hermit.json"), JSON.stringify({
+    schemaVersion: 1,
+    happId: "com.example.sdkinterop",
+    name: "SDK interoperability",
+    version: "1.0.0",
+    entry: "index.html"
+  }));
   fs.writeFileSync(path.join(source, "index.html"), "<!doctype html><title>Python ZIP</title><h1>binary directory deployment</h1>");
   fs.writeFileSync(path.join(source, "sample.bin"), Buffer.from([0, 1, 2, 255]));
   const helper = path.resolve("app/src/main/assets/agent/hermit-agent.py");
-  const py = spawnSync("python3", [helper, "--address", config.address, "deploy-dir", created.appId, source], { encoding: "utf8", env: { ...process.env, HERMIT_PASSWORD: config.password, HERMIT_CONFIG_HOME: path.join(temp, "credentials") } });
+  const py = spawnSync("python3", [helper, "--address", config.address, "sync-dir", created.appId, source], { encoding: "utf8", env: { ...process.env, HERMIT_PASSWORD: config.password, HERMIT_CONFIG_HOME: path.join(temp, "credentials") } });
   assert.equal(py.status, 0, py.stderr);
-  assert(JSON.parse(py.stdout).releaseId);
-  const read = await one.callTool({ name: "hermit_read_file", arguments: { appId: created.appId, path: "index.html" } });
+  assert(JSON.parse(py.stdout).revision);
+  const read = await one.callTool({ name: "hermit_read_dev_file", arguments: { appId: created.appId, path: "index.html" } });
   assert(read.structuredContent.content.includes("directory deployment"));
 
   adb("shell", "run-as", "io.github.zhyuzh3d.hermit.debug", "touch", "files/agent-interop.rotate");
@@ -62,7 +69,7 @@ try {
   await assert.rejects(() => one.listTools());
   await assert.rejects(() => two.listTools());
   const three = await connect("new-password-computer", changed.password);
-  assert.equal((await three.listTools()).tools.length, 29);
+  assert.equal((await three.listTools()).tools.length, 26);
   console.log("PASS: real LAN MCP SDK initialize, two concurrent password-sharing clients, tools/resources, create/patch/open, Python binary ZIP publish, and live password rotation invalidating both old clients.");
 } finally {
   await Promise.allSettled(clients.map(client => client.close()));

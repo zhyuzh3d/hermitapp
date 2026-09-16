@@ -96,6 +96,8 @@ class PersistenceInstrumentedTest {
         val generation = UUID.randomUUID().toString()
         createdApps += appId
         val saved = store.import(appId, generation, "hello".byteInputStream(), "hello.txt", "text/plain")
+        assertEquals("/__hermit/files/${saved.getString("logicalFileId")}", saved.getString("url"))
+        assertTrue(File(context.filesDir, "instances/$appId/data/$generation/files/${saved.getString("logicalFileId")}").isFile)
         assertEquals("hello", store.readText(appId, generation, saved.getString("logicalFileId")).getString("text"))
     }
 
@@ -317,33 +319,29 @@ class PersistenceInstrumentedTest {
         assertEquals("https://example.test/apps/notes/latest.json", instance.updateUrl)
         assertEquals("history", release.routing)
         assertEquals("web/index.html", release.entryPath)
-        assertEquals(null, instance.iconDataUrl)
-        val encodedIcon = instance.defaultIconDataUrl!!.removePrefix("data:image/png;base64,")
-        val iconBytes = android.util.Base64.decode(encodedIcon, android.util.Base64.NO_WRAP)
-        val iconBounds = android.graphics.BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        android.graphics.BitmapFactory.decodeByteArray(iconBytes, 0, iconBytes.size, iconBounds)
-        assertEquals(192, iconBounds.outWidth)
-        assertEquals(192, iconBounds.outHeight)
+        assertEquals(null, instance.iconUrl)
+        assertTrue(instance.defaultIconUrl!!.startsWith("/__hermit/objects/images/${installed.appId}/"))
 
         val customIcon = "data:image/png;base64," + android.util.Base64.encodeToString(
             pngIcon(192, 192, android.graphics.Color.RED), android.util.Base64.NO_WRAP,
         )
-        app.registry.updatePresentation(installed.appId, instance.name, customIcon)
+        val customIconBytes = android.util.Base64.decode(customIcon.removePrefix("data:image/png;base64,"), android.util.Base64.NO_WRAP)
+        app.registry.updatePresentation(installed.appId, instance.name, customIconBytes, replaceIcon = true)
         val updateManifest = manifest.replace("\"code\":2", "\"code\":3").replace("2.0.0", "3.0.0")
         app.installer.installZip(ByteArrayInputStream(zipBytesOf(mapOf(
             "hermit.json" to updateManifest.toByteArray(),
             "web/index.html" to "<h1>updated</h1>".toByteArray(),
             "assets/icon.png" to pngIcon(64, 96, android.graphics.Color.GREEN),
         ))), null, installed.appId, expectedReleaseId = installed.releaseId)
-        assertEquals(customIcon, app.registry.getInstance(installed.appId)!!.iconDataUrl)
+        assertTrue(app.registry.getInstance(installed.appId)!!.iconUrl!!.startsWith("/__hermit/objects/images/${installed.appId}/"))
         val afterUpdate = app.registry.getInstance(installed.appId)!!
-        assertTrue(afterUpdate.defaultIconDataUrl != null)
-        assertTrue(afterUpdate.defaultIconDataUrl != customIcon)
-        assertEquals(customIcon, afterUpdate.effectiveIconDataUrl)
-        app.registry.updatePresentation(installed.appId, instance.name, null)
+        assertTrue(afterUpdate.defaultIconUrl != null)
+        assertTrue(afterUpdate.defaultIconUrl != afterUpdate.iconUrl)
+        assertEquals(afterUpdate.iconUrl, afterUpdate.effectiveIconUrl)
+        app.registry.updatePresentation(installed.appId, instance.name, null, replaceIcon = true)
         val reset = app.registry.getInstance(installed.appId)!!
-        assertEquals(null, reset.iconDataUrl)
-        assertEquals(reset.defaultIconDataUrl, reset.effectiveIconDataUrl)
+        assertEquals(null, reset.iconUrl)
+        assertEquals(reset.defaultIconUrl, reset.effectiveIconUrl)
     }
 
     @Test fun repeatedHappIdNeedsAnExplicitInstanceChoice() = runBlocking {

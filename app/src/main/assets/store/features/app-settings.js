@@ -15,12 +15,12 @@
     try {
       if (desired.liveUrl !== (app.liveUrl || "") || desired.updateUrl !== (app.updateUrl || ""))
         await step("apps.updateUrls", { liveUrl: desired.liveUrl, updateUrl: desired.updateUrl, insecureConfirmed:!!desired.insecureConfirmed }, "应用地址");
-      const currentCustomIcon = Object.prototype.hasOwnProperty.call(app, "customIconDataUrl") ? (app.customIconDataUrl || "") : (app.iconDataUrl || "");
-      const desiredIcon = typeof desired.customIconDataUrl === "string" ? desired.customIconDataUrl : currentCustomIcon;
+      const currentCustomIcon = app.customIconUrl || "";
+      const desiredIcon = typeof desired.customIcon === "string" ? desired.customIcon : currentCustomIcon;
       const iconChanged = desiredIcon !== currentCustomIcon;
       if (desired.name !== app.name || iconChanged) {
         const presentation = { name: desired.name };
-        if (iconChanged) presentation.iconDataUrl = desiredIcon;
+        if (iconChanged) presentation.iconPreviewDataUrl = desiredIcon;
         await step(iconChanged ? "apps.updatePresentation" : "apps.update", presentation, desired.name !== app.name && iconChanged ? "名称和图标" : iconChanged ? "图标" : "名称");
       }
       if (desired.notificationEnabled !== !!current.notificationEnabled)

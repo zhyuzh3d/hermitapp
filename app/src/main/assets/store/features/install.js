@@ -6,8 +6,8 @@
   const { resetFilters } = H.features.library;
   const { showView, cachedViewState } = H.navigation;
   function resetAddIcon() {
-    state.addDraft.customIconDataUrl = null;
-    state.addDraft.defaultIconDataUrl = null;
+    state.addDraft.customIcon = null;
+    state.addDraft.defaultIcon = null;
     $("#addIconPreview").style.backgroundImage = "";
     $("#addIconPreview").classList.remove("custom");
     $("#addIconPreview").replaceChildren(Object.assign(document.createElement("i"), { className:"fa-solid fa-image" }));
@@ -18,13 +18,18 @@
     $("#addIconPreview").classList.add("custom");
   }
   function setCustomAddIcon(dataUrl) {
-    state.addDraft.customIconDataUrl = dataUrl;
+    state.addDraft.customIcon = dataUrl;
     showAddIcon(dataUrl);
   }
+  function renderFavoriteChoice() {
+    $$('[data-add-favorite]').forEach(button => {
+      button.classList.toggle("on", state.addToFavorites);
+      button.setAttribute("aria-checked", String(state.addToFavorites));
+    });
+  }
   function openAdd(kind, value = {}) {
-    state.addToFavorites = state.libraryFilter === "favorites";
-    state.addDraft = { kind, token:value.token || null, customIconDataUrl:null, defaultIconDataUrl:value.iconDataUrl || null };
-    $("#favoriteOnAdd").classList.toggle("hidden", !state.addToFavorites);
+    state.addDraft = { kind, token:value.token || null, customIcon:null, defaultIcon:value.iconUrl || null };
+    renderFavoriteChoice();
     $("#urlField").classList.remove("hidden");
     $("#versionField").classList.add("hidden");
     $("#url").value = value.url || "";
@@ -33,14 +38,20 @@
     $("#addSourceLabel").textContent = value.scanned ? "二维码链接" : "在线网址";
     $("#manifestStatus").textContent = "普通网页会实时运行；ZIP 会下载校验后本地安装；Git 仓库优先读取 hermit-install.json，缺失时再选择仓库中实际存在的发布目录。";
     resetAddIcon();
-    if (value.iconDataUrl) showAddIcon(value.iconDataUrl);
+    if (value.iconPreview) showAddIcon(value.iconPreview);
     open("#addPanel");
     setTimeout(() => $("#url").focus({ preventScroll:true }), 80);
   }
   bind("#addZip", async () => {
-    state.addToFavorites = state.libraryFilter === "favorites";
     await installed(await host.call("apps.importZip", { favorite: state.addToFavorites }), "压缩包已校验并安装。" );
   });
+  $$('[data-add-favorite]').forEach(button => {
+    button.onclick = () => {
+      state.addToFavorites = !state.addToFavorites;
+      renderFavoriteChoice();
+    };
+  });
+  renderFavoriteChoice();
   $("#addUrl").onclick = () => openAdd("online");
   async function scanQr() {
     const value = await host.call("apps.scanQr", {});
@@ -63,7 +74,7 @@
   bind("#pickAppIcon", async () => {
     const value = await host.call("apps.pickIcon", {});
     if (value.cancelled) { say("已取消操作。"); return; }
-    const cropped = await H.ui.cropIcon(value.dataUrl);
+    const cropped = await H.ui.cropIcon(value.preview);
     if (cropped) setCustomAddIcon(cropped);
   });
   bind("#confirmAdd", async () => {
@@ -71,7 +82,7 @@
     if (!draft) throw new Error("添加信息已失效，请重新选择来源。");
     const name = $("#name").value.trim();
     if (!name) { $("#name").focus(); throw new Error("应用名称不能为空。"); }
-    const common = { name, version:$("#addVersion").value.trim(), favorite:state.addToFavorites, iconDataUrl:draft.customIconDataUrl || "" };
+    const common = { name, version:$("#addVersion").value.trim(), favorite:state.addToFavorites, iconPreviewDataUrl:draft.customIcon || "" };
     let onlineUrl = null;
     if (draft.kind === "online") {
       onlineUrl = validUrl("#url");

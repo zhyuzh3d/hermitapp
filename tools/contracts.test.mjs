@@ -62,14 +62,40 @@ test("all upstream free font assets referenced by the bundled CSS are present", 
 test("agent catalog, guide snapshots and shared-password authority stay aligned", () => {
   const root = "app/src/main/assets/agent/";
   const tools = JSON.parse(fs.readFileSync(root + "tools.json", "utf8"));
+  const guide = fs.readFileSync(root + "hermit-device/SKILL.md", "utf8");
   const server = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/deploy/AgentDevelopmentServer.kt", "utf8");
-  assert.equal(new Set(tools.map(tool => tool.name)).size, 29);
+  const discovery = server.slice(server.indexOf("private fun discovery()"), server.indexOf("private fun connectionGuide()"));
+  assert.equal(new Set(tools.map(tool => tool.name)).size, 26);
+  const toolIndex = tools.map(({ name, description }) => ({ name, description }));
+  assert.ok(Buffer.byteLength(JSON.stringify(toolIndex)) < 6 * 1024, "the public tool index must stay compact and schema-free");
+  assert.deepEqual(Object.keys(toolIndex[0]).sort(), ["description", "name"]);
+  assert.ok(Buffer.byteLength(guide) < 8192, "the default device guide must remain a short, cacheable operating guide");
+  assert.match(guide, /~\/hermit\/happ-dev\.json/);
+  assert.match(guide, /happ-<happId-with-dots-replaced-by-hyphens>/);
+  assert.match(guide, /one `happId` has one active local directory/);
+  assert.match(guide, /does not use those notes to select, compare or synchronize code/);
+  assert.match(discovery, /put\("schema", 3\)/);
+  assert.match(discovery, /put\("resourceDigests", resourceDigests\)/);
+  assert.match(discovery, /put\("toolIndex", toolIndex\(\)\)/);
+  assert.doesNotMatch(discovery, /put\("tools", catalog\)/);
+  assert.match(server, /hermit:\/\/tool\/\{name\}/);
   assert.deepEqual(tools.find(tool => tool.name === "hermit_get_guide").inputSchema.properties, {});
   assert.deepEqual(tools.find(tool => tool.name === "hermit_reload_shell").inputSchema.properties.runtimeMode.enum, ["current", "online", "local"]);
   assert.deepEqual(tools.find(tool => tool.name === "hermit_reload_app").inputSchema.properties.strategy.enum, ["reload", "recreate"]);
+  assert.equal(tools.find(tool => tool.name === "hermit_capture_screen").inputSchema.properties.maxEdge.maximum, 2048);
   assert.ok(tools.find(tool => tool.name === "hermit_reload_app").inputSchema.properties.postReloadScript);
   assert.equal(tools.find(tool => tool.name === "hermit_reload_shell").inputSchema.properties.postReloadScript, undefined);
+  assert.equal(tools.find(tool => tool.name === "hermit_list_apps").inputSchema.properties.includeIcons.type, "boolean");
+  assert.equal(tools.find(tool => tool.name === "hermit_list_apps").inputSchema.properties.happId.type, "string");
+  assert.equal(tools.find(tool => tool.name === "hermit_get_app").inputSchema.properties.includeIcons.type, "boolean");
   assert.match(server, /"hermit_reload_shell"\s*->\s*ui\("reload-shell",\s*args,\s*authorization\)/);
+  assert.match(server, /"hermit_capture_screen"\s*->\s*ui\("capture-screen",\s*args,\s*authorization\)/);
+  assert.match(server, /MAX_RECENT_OPERATIONS = 20/);
+  assert.match(server, /put\("type", "image"\).*put\("mimeType"/s);
+  assert.match(server, /includeIcons/);
+  assert.match(server, /authorization\.isNullOrBlank\(\).*authenticationRequired\(\)/);
+  assert.match(server, /put\("error", error\).*put\("discoveryUrl".*put\("instructionsUrl".*Authorization: Bearer/s);
+  assert.doesNotMatch(server, /\/pw\/|password.*(?:path|query|fragment)/i);
   for (const tool of tools) {
     const dispatch = new RegExp(`(?:"[^"]+"\\s*,\\s*)*"${tool.name}"(?:\\s*,\\s*"[^"]+")*\\s*->`);
     assert.match(server, dispatch);
@@ -94,6 +120,9 @@ test("agent catalog, guide snapshots and shared-password authority stay aligned"
   assert.match(activity, /window\.hermitDevState/);
   assert.equal(fs.readFileSync(root + "webapp-authoring.md", "utf8"), fs.readFileSync("docs/webapp-authoring.md", "utf8"));
   assert.equal(fs.readFileSync(root + "hermit-api.d.ts", "utf8"), fs.readFileSync("sdk/hermit-api.d.ts", "utf8"));
+  const helper = fs.readFileSync(root + "hermit-agent.py", "utf8");
+  assert.match(helper, /reuse the exact happId binding in ~\/hermit\/happ-dev\.json/);
+  assert.match(helper, /never scan the disk or silently create a second copy/);
 });
 
 function shellSources(extension, directory = "app/src/main/assets/store") {
@@ -135,22 +164,36 @@ test("package defaults and custom happ icon overrides stay distinct", () => {
   const registry = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/registry/AppRegistry.kt", "utf8");
   const shortcuts = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/launcher/ShortcutHost.kt", "utf8");
   assert.match(activity, /"host\.apps\.updatePresentation"/);
-  assert.match(activity, /validateIconDataUrl\(params\.optString\("iconDataUrl"\)\)/);
-  assert.match(activity, /put\("dataUrl", iconSourceDataUrl\(uri\)\)/);
-  assert.match(installer, /IconProcessor\.centeredPngDataUrl/);
-  assert.match(installer, /iconDataUrl = null/);
-  assert.match(installer, /defaultIconDataUrl = packageIconDataUrl/);
-  assert.match(installer, /registry\.updateDefaultIcon\(appId, packageIconDataUrl\)/);
+  assert.match(activity, /decodePngDataUrl/);
+  assert.match(activity, /put\("preview", iconSourceDataUrl\(uri\)\)/);
+  assert.match(installer, /IconProcessor\.centeredPngBytes/);
+  assert.match(installer, /iconUrl = null/);
+  assert.match(installer, /defaultIconUrl = packageIconBytes/);
+  assert.match(installer, /registry\.updateDefaultIcon\(appId, packageIconBytes\)/);
   assert.match(processor, /OUTPUT_SIZE = 192/);
-  assert.match(registry, /fun updatePresentation\(appId: String, name: String, iconDataUrl: String\?\)/);
-  assert.match(registry, /put\("icon_data_url", iconDataUrl\)/);
-  assert.match(registry, /put\("default_icon_data_url", defaultIconDataUrl\)/);
-  assert.match(shortcuts, /instance\.effectiveIconDataUrl/);
+  assert.match(registry, /fun updatePresentation\(appId: String, name: String, iconBytes: ByteArray\? = null/);
+  assert.match(registry, /put\("icon_url", iconUrl\)/);
+  assert.match(registry, /put\("default_icon_url", defaultIconUrl\)/);
+  assert.match(shortcuts, /instance\.effectiveIconUrl/);
   assert.match(shortcuts, /Icon::createWithBitmap/);
   assert.match(shortcuts, /manager\.pinnedShortcuts/);
   assert.match(shortcuts, /enum class PinState/);
   assert.match(activity, /put\("desktopShortcutState"/);
   assert.match(activity, /new Event\('hermitresume'\)/);
+});
+
+test("host media uses object URLs and keeps inline bytes transient", () => {
+  const imageStore = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/data/HostImageStore.kt", "utf8");
+  const fileStore = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/data/FileStore.kt", "utf8");
+  const gateway = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/runtime/ObjectAssetGateway.kt", "utf8");
+  const registry = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/registry/AppRegistry.kt", "utf8");
+  assert.match(imageStore, /objects\/images/);
+  assert.match(imageStore, /objectUrl/);
+  assert.match(fileStore, /object_url TEXT NOT NULL/);
+  assert.match(fileStore, /put\("url", url\)/);
+  assert.match(gateway, /private object URLs/);
+  assert.match(gateway, /dataGeneration/);
+  assert.doesNotMatch(registry, /icon_data_url|default_icon_data_url/);
 });
 
 test("launcher uses the compressed Hermit brand icon while notifications keep a monochrome glyph", () => {
@@ -238,7 +281,7 @@ test("shared WebView profile follows origin rules while Hermit data remains app 
   assert.match(activity, /"shared-web-message"/);
   assert.match(activity, /"shared-legacy-bridge"/);
   assert.match(activity, /"siteDataPolicy", "shared-by-origin"/);
-  assert.match(registry, /icon_data_url/);
+  assert.match(registry, /icon_url/);
 });
 
 test("happ source and runtime mode remain independent across Native and HermitUI", () => {
@@ -254,7 +297,7 @@ test("happ source and runtime mode remain independent across Native and HermitUI
   assert.match(model, /enum class HappRuntimeMode \{ LOCAL, LIVE \}/);
   assert.match(registry, /source_kind TEXT NOT NULL/);
   assert.match(registry, /runtime_mode TEXT NOT NULL/);
-  assert.match(registry, /private const val VERSION = 9/);
+  assert.match(registry, /private const val VERSION = 11/);
   assert.match(registry, /current\.activeReleaseId/);
   assert.match(remote, /encodedPath\("\/hermit-install\.json"\)/);
   assert.match(remote, /downloadSameOrigin\(packageUrl, updateUrl\)/);
@@ -268,7 +311,7 @@ test("happ source and runtime mode remain independent across Native and HermitUI
   assert.match(shell, /"apps\.setRuntimeMode"/);
   assert.match(shell, /"apps\.updateUrls"/);
   assert.match(shell, /card\.dataset\.source/);
-  assert.equal(backup.properties.schema.const, 2);
+  assert.equal(backup.properties.schema.const, 3);
   assert.deepEqual(backup.properties.app.required.slice(0, 4), ["name", "source", "runtimeMode", "liveUrl"]);
   assert.equal(install.properties.schema.const, 1);
   assert.deepEqual(install.required, ["schema", "package"]);

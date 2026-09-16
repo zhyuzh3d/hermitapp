@@ -87,7 +87,7 @@
       fragment.querySelector(".app-source").textContent = runningDev ? "运行开发副本 · 本机代码" : runtimeLabel(app) + (appRuntime(app) === "live" ? " · " + app.startUrl : " · 本机代码");
       const color = ["blue", "violet", "orange", "green"][[...app.appId].reduce((n,c) => n + c.charCodeAt(0), 0) % 4];
       const appIcon = fragment.querySelector(".app-icon"), appIconMark = appIcon.querySelector("i");
-      if (app.iconDataUrl) { appIcon.style.backgroundImage = "url(" + JSON.stringify(app.iconDataUrl).slice(1,-1) + ")"; appIcon.classList.add("custom"); appIconMark.classList.add("hidden"); }
+      if (app.iconUrl) { appIcon.style.backgroundImage = "url(" + JSON.stringify(app.iconUrl).slice(1,-1) + ")"; appIcon.classList.add("custom"); appIconMark.classList.add("hidden"); }
       else { appIcon.classList.add(color); appIconMark.className = "fa-solid " + (appSource(app) === "local" ? "fa-cube" : "fa-globe"); }
       fragment.querySelector(".version-badge").textContent = versionLabel(app);
       fragment.querySelector(".launch").onclick = event => busy(event.currentTarget, () => host.call("apps.launch", { appId: app.appId }));

@@ -56,7 +56,7 @@
     $("#agentUrl").dataset.address = address;
     $("#agentUsb").textContent = value.usbCommand || "adb forward tcp:8766 tcp:8766";
     if (document.activeElement !== $("#agentPassword")) $("#agentPassword").value = value.password || "";
-    $("#agentEvents").textContent = (value.events || []).slice().reverse().map(event => new Date(event.time).toLocaleTimeString() + "  " + event.tool + "  " + event.result).join("\n") || "暂无操作";
+    $("#agentEvents").textContent = (value.events || []).slice(-20).reverse().map(event => new Date(event.time).toLocaleTimeString() + "  " + event.tool + "  " + event.result).join("\n") || "暂无操作";
     maybeShowEndpointChange(value);
   }
 

@@ -125,7 +125,7 @@ requestId
 
 对于本地目录镜像，首次连接下载完整路径与摘要清单；后续只比较编辑器已报告的变更或本地缓存的 mtime/size，候选变化才计算 SHA-256。服务端返回的 tree hash 和 revision 是并发权威，本地全树扫描只能用于显式 reconcile，不能成为每次保存的前置步骤。
 
-现有 `hermit_apply_files` 和 `/v1/apps/{appId}/release` 在迁移期保留为兼容接口，但动态指南标记为旧的“直接发布正式 release”行为。新的助手和 Skill 只使用 dev workspace API。完成一个兼容周期后移除旧写接口，避免智能体误把日常保存当成正式发布。
+开发主路径只使用 dev workspace API。旧的 `hermit_apply_files` MCP 写接口已经删除，不保留迁移期或双轨合同；`/v1/apps/{appId}/release` 仅作为用户明确要求正式发布时使用的独立发布端点，不参与日常开发同步。
 
 ## 四、打开页面、指定路由与自动刷新
 

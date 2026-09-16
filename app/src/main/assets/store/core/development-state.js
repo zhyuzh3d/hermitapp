@@ -14,7 +14,6 @@
     const ids = state.modals.map(item => item.element.id);
     if (!ids.includes("managePanel") || !state.selected) return null;
     const draft = state.manageDraft || {};
-    const icon = text(draft.customIconDataUrl, 196608);
     return {
       kind:"manage",
       appId:state.selected.appId,
@@ -31,7 +30,8 @@
         runtimeMode:["local", "live"].includes(draft.runtimeMode) ? draft.runtimeMode : "local",
         notificationEnabled:!!draft.notificationEnabled,
         allowCrossOriginNetwork:!!draft.allowCrossOriginNetwork,
-        customIconDataUrl:icon
+        // Image bytes are intentionally not serialized into the UI snapshot.
+        // The selected icon is transient until the user presses Save.
       }
     };
   }
@@ -63,7 +63,6 @@
       state.manageDraft.runtimeMode = ["local", "live"].includes(draft.runtimeMode) ? draft.runtimeMode : state.manageDraft.runtimeMode;
       state.manageDraft.notificationEnabled = !!draft.notificationEnabled;
       state.manageDraft.allowCrossOriginNetwork = !!draft.allowCrossOriginNetwork;
-      if (typeof draft.customIconDataUrl === "string") state.manageDraft.customIconDataUrl = text(draft.customIconDataUrl, 196608);
       H.features.manage.renderManageDraft();
     }
     const scroll = $("#managePanel .manage-sheet-scroll");

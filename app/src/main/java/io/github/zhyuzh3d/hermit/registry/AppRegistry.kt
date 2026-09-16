@@ -6,6 +6,7 @@ import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import android.net.Uri
+import io.github.zhyuzh3d.hermit.data.HostImageStore
 import io.github.zhyuzh3d.hermit.model.CodeRelease
 import io.github.zhyuzh3d.hermit.model.HappRuntimeMode
 import io.github.zhyuzh3d.hermit.model.HappSource
@@ -16,7 +17,8 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
-class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry.sqlite", null, VERSION) {
+class AppRegistry(private val context: Context) : SQLiteOpenHelper(context, "hermit-registry.sqlite", null, VERSION) {
+    private val images = HostImageStore(context)
     override fun onConfigure(db: SQLiteDatabase) {
         db.setForeignKeyConstraintsEnabled(true)
         db.enableWriteAheadLogging()
@@ -26,7 +28,6 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
         db.execSQL("""
             CREATE TABLE instances (
               app_id TEXT PRIMARY KEY, name TEXT NOT NULL,
-              mode TEXT NOT NULL CHECK(mode IN ('ONLINE','LOCAL')),
               source_kind TEXT NOT NULL CHECK(source_kind IN ('ONLINE','LOCAL')),
               runtime_mode TEXT NOT NULL CHECK(runtime_mode IN ('LOCAL','LIVE')),
               launch_channel TEXT NOT NULL DEFAULT 'STABLE' CHECK(launch_channel IN ('STABLE','DEV')),
@@ -37,8 +38,8 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
               source_adapter TEXT NOT NULL, source_spec TEXT NOT NULL,
               developer_enabled INTEGER NOT NULL DEFAULT 0,
               favorite INTEGER NOT NULL DEFAULT 0,
-              icon_data_url TEXT,
-              default_icon_data_url TEXT,
+              icon_url TEXT,
+              default_icon_url TEXT,
               happ_id TEXT,
               publisher_key_id TEXT,
               download_url TEXT,
@@ -104,53 +105,22 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        if (oldVersion < 2) {
-            db.execSQL("ALTER TABLE releases ADD COLUMN entry_path TEXT NOT NULL DEFAULT 'index.html'")
-        }
-        if (oldVersion < 3) createSystemPermissionObservations(db)
-        if (oldVersion < 4) db.execSQL("ALTER TABLE instances ADD COLUMN favorite INTEGER NOT NULL DEFAULT 0")
-        if (oldVersion < 5) db.execSQL("ALTER TABLE instances ADD COLUMN icon_data_url TEXT")
-        if (oldVersion < 6) {
-            db.execSQL("ALTER TABLE instances ADD COLUMN source_kind TEXT NOT NULL DEFAULT 'LOCAL'")
-            db.execSQL("ALTER TABLE instances ADD COLUMN runtime_mode TEXT NOT NULL DEFAULT 'LOCAL'")
-            db.execSQL("ALTER TABLE instances ADD COLUMN live_url TEXT")
-            db.execSQL("""
-                UPDATE instances SET
-                  source_kind = CASE
-                    WHEN mode = 'ONLINE' OR source_adapter IN ('online','online-manifest','https-package','github') THEN 'ONLINE'
-                    ELSE 'LOCAL'
-                  END,
-                  runtime_mode = CASE WHEN mode = 'ONLINE' THEN 'LIVE' ELSE 'LOCAL' END,
-                  live_url = CASE WHEN mode = 'ONLINE' THEN start_url ELSE NULL END
-            """.trimIndent())
-        }
-        if (oldVersion < 7) {
-            db.execSQL("ALTER TABLE instances ADD COLUMN happ_id TEXT")
-            db.execSQL("ALTER TABLE instances ADD COLUMN publisher_key_id TEXT")
-            db.execSQL("ALTER TABLE instances ADD COLUMN download_url TEXT")
-            db.execSQL("ALTER TABLE instances ADD COLUMN download_version_code INTEGER")
-            db.execSQL("ALTER TABLE instances ADD COLUMN download_version_name TEXT")
-            db.execSQL("ALTER TABLE instances ADD COLUMN update_url TEXT")
-            db.execSQL("ALTER TABLE instances ADD COLUMN notification_enabled INTEGER NOT NULL DEFAULT 0")
-            db.execSQL("ALTER TABLE instances ADD COLUMN allow_cross_origin_network INTEGER NOT NULL DEFAULT 0")
-            db.execSQL("ALTER TABLE releases ADD COLUMN routing TEXT NOT NULL DEFAULT 'hash'")
-            db.execSQL("ALTER TABLE releases ADD COLUMN happ_id TEXT")
-            db.execSQL("ALTER TABLE releases ADD COLUMN publisher_key_id TEXT")
-            db.execSQL("DELETE FROM grants WHERE rowid NOT IN (SELECT MAX(rowid) FROM grants GROUP BY app_id, capability, resource_scope)")
-            db.execSQL("UPDATE grants SET trust_revision = 0")
-        }
-        if (oldVersion < 8) {
-            db.execSQL("ALTER TABLE instances ADD COLUMN default_icon_data_url TEXT")
-            // Older databases did not distinguish a package default from a
-            // user override. Copying the value preserves the visible icon;
-            // the next package install refreshes the real default.
-            db.execSQL("UPDATE instances SET default_icon_data_url = icon_data_url")
-        }
-        if (oldVersion < 9) {
-            db.execSQL("ALTER TABLE instances ADD COLUMN launch_channel TEXT NOT NULL DEFAULT 'STABLE'")
-            createDevWorkspaces(db)
-        }
         if (newVersion > VERSION) throw IllegalStateException("Unsupported registry version $newVersion")
+        if (oldVersion >= VERSION) return
+        // Current installations are development/test devices. Make the object-
+        // storage schema a clean cutover: remove all legacy tables (including
+        // Base64 icon columns) and create only the current contract.
+        listOf(
+            "dev_workspaces",
+            "grants",
+            "releases",
+            "operations",
+            "diagnostic_events",
+            "profile_cleanup",
+            "system_permission_observations",
+            "instances",
+        ).forEach { db.execSQL("DROP TABLE IF EXISTS $it") }
+        onCreate(db)
     }
 
     fun listInstances(): List<WebAppInstance> =
@@ -231,7 +201,7 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
                 .use { if (it.moveToFirst()) if (it.isNull(0)) null else it.getString(0) else throw IllegalStateException("Archived app not found") }
             val target = current ?: "${localOrigin(instanceId)}/"
             check(update("instances", ContentValues().apply {
-                put("state", "ready"); put("active_release_id", release.releaseId); put("runtime_mode", "LOCAL"); put("mode", "LOCAL")
+                put("state", "ready"); put("active_release_id", release.releaseId); put("runtime_mode", "LOCAL")
                 put("start_url", target); put("primary_origin", originOf(target)); put("notification_enabled", 0)
                 put("updated_at", System.currentTimeMillis())
             }, "app_id = ? AND state = 'archived'", arrayOf(instanceId)) == 1)
@@ -352,7 +322,6 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
             val now = System.currentTimeMillis()
             val changed = update("instances", ContentValues().apply {
                 put("runtime_mode", requested.name)
-                put("mode", if (requested == HappRuntimeMode.LIVE) "ONLINE" else "LOCAL")
                 put("start_url", targetUrl)
                 put("primary_origin", targetOrigin)
                 put("developer_enabled", 0)
@@ -407,7 +376,6 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
                 put("launch_channel", channel.name)
                 if (channel == LaunchChannel.DEV) {
                     put("runtime_mode", HappRuntimeMode.LOCAL.name)
-                    put("mode", "LOCAL")
                     val target = current.liveUrl ?: current.localUrl
                     put("start_url", target)
                     put("primary_origin", originOf(target))
@@ -492,7 +460,6 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
                 if (liveUrl == null) putNull("live_url") else put("live_url", liveUrl)
                 if (updateUrl == null) putNull("update_url") else put("update_url", updateUrl)
                 put("runtime_mode", nextMode.name)
-                put("mode", if (nextMode == HappRuntimeMode.LIVE) "ONLINE" else "LOCAL")
                 val target = if (nextMode == HappRuntimeMode.LIVE) requireNotNull(liveUrl) else liveUrl ?: current.localUrl
                 put("start_url", target)
                 put("primary_origin", originOf(target))
@@ -514,24 +481,32 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
         }, "app_id = ?", arrayOf(appId))
     }
 
-    fun updatePresentation(appId: String, name: String, iconDataUrl: String?): WebAppInstance {
+    fun updatePresentation(appId: String, name: String, iconBytes: ByteArray? = null, replaceIcon: Boolean = false): WebAppInstance {
+        if (getInstance(appId) == null) throw IllegalArgumentException("App not found")
+        val iconUrl = if (replaceIcon && iconBytes != null) images.put(appId, iconBytes, "image/png") else null
         val changed = writableDatabase.update("instances", ContentValues().apply {
             put("name", name.trim().take(80))
-            if (iconDataUrl == null) putNull("icon_data_url") else put("icon_data_url", iconDataUrl)
+            if (replaceIcon) {
+                if (iconUrl == null) putNull("icon_url") else put("icon_url", iconUrl)
+            }
             put("updated_at", System.currentTimeMillis())
         }, "app_id = ? AND state = 'ready'", arrayOf(appId))
         check(changed == 1) { "App not found" }
-        return getInstance(appId) ?: error("App not found")
+        val updated = getInstance(appId) ?: error("App not found")
+        if (replaceIcon) images.pruneApp(appId, setOf(updated.iconUrl, updated.defaultIconUrl))
+        return updated
     }
 
-    fun updateDefaultIcon(appId: String, defaultIconDataUrl: String?): WebAppInstance {
+    fun updateDefaultIcon(appId: String, bytes: ByteArray?): WebAppInstance {
+        val path = bytes?.let { images.put(appId, it, "image/png") }
         val changed = writableDatabase.update("instances", ContentValues().apply {
-            if (defaultIconDataUrl == null) putNull("default_icon_data_url")
-            else put("default_icon_data_url", defaultIconDataUrl)
+            if (path == null) putNull("default_icon_url") else put("default_icon_url", path)
             put("updated_at", System.currentTimeMillis())
         }, "app_id = ? AND state = 'ready'", arrayOf(appId))
         check(changed == 1) { "App not found" }
-        return getInstance(appId) ?: error("App not found")
+        val updated = getInstance(appId) ?: error("App not found")
+        images.pruneApp(appId, setOf(updated.iconUrl, updated.defaultIconUrl))
+        return updated
     }
 
     fun updateReleaseVersion(releaseId: String, versionName: String?) {
@@ -663,7 +638,7 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
         writableDatabase.inTransaction {
             delete("releases", "app_id = ?", arrayOf(appId))
             check(update("instances", ContentValues().apply {
-                put("state", "archived"); putNull("active_release_id"); put("runtime_mode", "LOCAL"); put("mode", "LOCAL")
+                put("state", "archived"); putNull("active_release_id"); put("runtime_mode", "LOCAL")
                 put("notification_enabled", 0); put("updated_at", System.currentTimeMillis())
             }, "app_id = ? AND state = 'ready'", arrayOf(appId)) == 1)
         }
@@ -691,7 +666,6 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
 
     private fun WebAppInstance.values() = ContentValues().apply {
         put("app_id", appId); put("name", name)
-        put("mode", if (runtimeMode == HappRuntimeMode.LIVE) "ONLINE" else "LOCAL")
         put("source_kind", source.name); put("runtime_mode", runtimeMode.name)
         put("launch_channel", launchChannel.name)
         put("start_url", startUrl); put("live_url", liveUrl)
@@ -700,8 +674,8 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
         put("source_adapter", sourceAdapter); put("source_spec", sourceSpec)
         put("developer_enabled", if (developerEnabled) 1 else 0); put("state", "ready")
         put("favorite", if (favorite) 1 else 0)
-        put("icon_data_url", iconDataUrl)
-        put("default_icon_data_url", defaultIconDataUrl)
+        put("icon_url", iconUrl)
+        put("default_icon_url", defaultIconUrl)
         put("happ_id", happId); put("publisher_key_id", publisherKeyId)
         put("download_url", downloadUrl); put("download_version_code", downloadVersionCode)
         put("download_version_name", downloadVersionName); put("update_url", updateUrl)
@@ -728,14 +702,14 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
         activeDataGeneration = string("active_data_generation"), sourceAdapter = string("source_adapter"),
         sourceSpec = string("source_spec"), developerEnabled = int("developer_enabled") != 0,
         favorite = int("favorite") != 0,
-        iconDataUrl = stringOrNull("icon_data_url"),
+        iconUrl = stringOrNull("icon_url"),
         createdAt = long("created_at"), updatedAt = long("updated_at"),
         happId = stringOrNull("happ_id"), publisherKeyId = stringOrNull("publisher_key_id"),
         downloadUrl = stringOrNull("download_url"), downloadVersionCode = longOrNull("download_version_code"),
         downloadVersionName = stringOrNull("download_version_name"), updateUrl = stringOrNull("update_url"),
         notificationEnabled = int("notification_enabled") != 0,
         allowCrossOriginNetwork = int("allow_cross_origin_network") != 0,
-        defaultIconDataUrl = stringOrNull("default_icon_data_url"),
+        defaultIconUrl = stringOrNull("default_icon_url"),
     )
 
     private fun Cursor.toRelease() = CodeRelease(
@@ -805,5 +779,5 @@ class AppRegistry(context: Context) : SQLiteOpenHelper(context, "hermit-registry
         return "${uri.scheme!!.lowercase()}://${uri.host!!.lowercase()}$port"
     }
 
-    companion object { private const val VERSION = 9 }
+    companion object { private const val VERSION = 11 }
 }
