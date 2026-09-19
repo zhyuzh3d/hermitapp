@@ -9,6 +9,7 @@
     "schema": { "const": 2 },
     "happId": { "type": "string", "minLength": 3, "maxLength": 160, "pattern": "^[a-z][a-z0-9]*(?:\\.[a-z][a-z0-9]*)+$" },
     "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+    "author": { "type": "string", "minLength": 1, "maxLength": 80 },
     "version": {
       "type": "object",
       "additionalProperties": false,

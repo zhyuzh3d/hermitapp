@@ -1,6 +1,6 @@
 {
   "apiMajor": 1,
-  "apiMinor": 11,
+  "apiMinor": 12,
   "roles": ["store", "web_app"],
   "public": {
     "runtime": ["info", "capabilities"],
@@ -23,7 +23,7 @@
     "bluetooth": ["status", "paired", "scan", "stopScan", "connect", "disconnect", "services", "read", "write", "subscribe", "openSettings"],
     "infrared": ["status", "transmit"],
     "battery": ["status", "watch", "clearWatch"],
-    "system": ["openSettings"],
+    "system": ["language", "openSettings"],
     "notifications": ["notify", "schedule", "cancel", "cancelAll", "getScheduled", "setEndpoint", "getStatus"]
   },
   "storeOnly": {

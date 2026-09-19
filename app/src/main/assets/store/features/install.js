@@ -40,7 +40,9 @@
     resetAddIcon();
     if (value.iconPreview) showAddIcon(value.iconPreview);
     open("#addPanel");
-    setTimeout(() => $("#url").focus({ preventScroll:true }), 80);
+    if (!value.url && !value.token && !value.scanned && !value.shared) {
+      setTimeout(() => $("#url").focus({ preventScroll:true }), 80);
+    }
   }
   bind("#addZip", async () => {
     await installed(await host.call("apps.importZip", { favorite: state.addToFavorites }), "压缩包已校验并安装。" );
@@ -56,6 +58,7 @@
   async function scanQr() {
     const value = await host.call("apps.scanQr", {});
     if (value.cancelled) { say("已取消操作。"); return; }
+    if (value.kind === "happ-share") { H.features.share.openInbound(value); return; }
     openAdd("online", { url:value.url, scanned:true });
   }
   bind("#scanQr", scanQr);

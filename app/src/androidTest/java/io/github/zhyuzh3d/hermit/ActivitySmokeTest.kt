@@ -166,6 +166,50 @@ class ActivitySmokeTest {
         }
     }
 
+    @Test fun desktopLaunchRecoversByHappIdentityAndFollowsCurrentCardMode() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val app = context.applicationContext as HermitApplication
+        val happId = "test.desktop.launch"
+        val server = object : fi.iki.elonen.NanoHTTPD("127.0.0.1", 0) {
+            override fun serve(request: IHTTPSession): Response =
+                newFixedLengthResponse("<!doctype html><meta charset=utf-8><title>Desktop live</title>")
+        }
+        server.start()
+        val installed = app.installer.installZip(
+            ByteArrayInputStream(identifiedAppZip("Desktop local", happId)),
+            "Desktop launch",
+            liveUrl = "http://127.0.0.1:${server.listeningPort}/",
+        )
+        val desktopIntent = Intent(context, MainActivity::class.java)
+            .putExtra(MainActivity.EXTRA_APP_ID, UUID.randomUUID().toString())
+            .putExtra(MainActivity.EXTRA_HAPP_ID, happId)
+        fun assertLaunch(runtimeMode: String, launchChannel: String) {
+            ActivityScenario.launch<MainActivity>(desktopIntent).use { scenario ->
+                assertTrue(waitUntilReady(scenario))
+                val info = evaluateAsync(
+                    scenario,
+                    "hermit.app.info().then(x=>({appId:x.appId,runtimeMode:x.runtimeMode,launchChannel:x.launchChannel}))",
+                )
+                assertTrue("Unexpected desktop launch info: $info", info?.contains("\"appId\":\"${installed.appId}\"") == true)
+                assertTrue("Unexpected desktop launch info: $info", info?.contains("\"runtimeMode\":\"$runtimeMode\"") == true)
+                assertTrue("Unexpected desktop launch info: $info", info?.contains("\"launchChannel\":\"$launchChannel\"") == true)
+            }
+        }
+        try {
+            assertLaunch("local", "stable")
+            app.registry.setRuntimeMode(installed.appId, io.github.zhyuzh3d.hermit.model.HappRuntimeMode.LIVE)
+            assertLaunch("live", "stable")
+            app.devWorkspaces.enter(installed.appId)
+            assertLaunch("local", "dev")
+        } finally {
+            server.stop()
+            app.devWorkspaces.delete(installed.appId)
+            app.registry.deleteInstance(installed.appId)
+            app.installer.deleteAppFiles(installed.appId)
+            app.registry.finishDelete(installed.appId)
+        }
+    }
+
     @Test fun onlinePageUsesSameOriginOfflineIconsWithoutRequestingThemFromServer() {
         val context = ApplicationProvider.getApplicationContext<android.content.Context>()
         val app = context.applicationContext as HermitApplication
@@ -365,6 +409,22 @@ class ActivitySmokeTest {
                 "hermit.json" to "{\"schema\":1,\"name\":\"Bridge fixture\",\"version\":{\"code\":$version,\"name\":\"$version\"}}",
             )
             entries.forEach { (name, value) -> zip.putNextEntry(ZipEntry(name)); zip.write(value.toByteArray()); zip.closeEntry() }
+        }
+        return bytes.toByteArray()
+    }
+
+    private fun identifiedAppZip(label: String, happId: String): ByteArray {
+        val bytes = ByteArrayOutputStream()
+        ZipOutputStream(bytes).use { zip ->
+            val entries = mapOf(
+                "index.html" to "<!doctype html><meta charset=utf-8><title>$label</title><h1>$label</h1>",
+                "hermit.json" to """{"schema":2,"happId":"$happId","name":"$label","version":{"code":1,"name":"1"},"entry":"index.html","routing":"hash"}""",
+            )
+            entries.forEach { (name, value) ->
+                zip.putNextEntry(ZipEntry(name))
+                zip.write(value.toByteArray())
+                zip.closeEntry()
+            }
         }
         return bytes.toByteArray()
     }

@@ -5,12 +5,12 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
-import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import androidx.core.content.ContextCompat
 import io.github.zhyuzh3d.hermit.MainActivity
 import io.github.zhyuzh3d.hermit.R
+import io.github.zhyuzh3d.hermit.launcher.HappTaskHost
 import io.github.zhyuzh3d.hermit.model.WebAppInstance
 
 class NotificationDispatcher(private val context: Context) {
@@ -27,9 +27,7 @@ class NotificationDispatcher(private val context: Context) {
         manager.createNotificationChannel(NotificationChannel(channelId, instance.name, NotificationManager.IMPORTANCE_DEFAULT).apply {
             description = "${instance.name} 发送的通知"
         })
-        val intent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-            putExtra(MainActivity.EXTRA_APP_ID, instance.appId)
+        val intent = HappTaskHost.intent(context, instance).apply {
             putExtra(MainActivity.EXTRA_NOTIFICATION_ID, spec.id)
             putExtra(MainActivity.EXTRA_NOTIFICATION_DATA, spec.data.toString())
         }

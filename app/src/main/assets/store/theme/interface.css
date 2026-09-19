@@ -79,9 +79,10 @@ main { max-width:1000px; margin:auto; padding:12px 24px calc(110px + env(safe-ar
 .app-copy small { color:var(--muted); font-size:11px; font-weight:400; margin-top:4px; }
 .launch-arrow { font-size:12px; color:var(--muted); }
 .card-footer { border-top:1px solid var(--line); display:flex; align-items:center; justify-content:space-between; min-height:52px; gap:10px; }
-.card-footer > div { display:flex; gap:8px; }
+.card-footer > div { display:flex; gap:3px; }
 .card-footer button { border:0; font-size:12px; min-height:46px; padding:10px; background:transparent; color:var(--muted); }
 .card-footer .manage i { color:var(--blue); }
+.card-footer .share i { color:var(--green); }
 .version-badge { color:var(--muted); font-size:10px; letter-spacing:.2px; }
 .empty { text-align:center; padding:40px 10px 22px; }
 .plain-empty { background:transparent; border:0; box-shadow:none; -webkit-backdrop-filter:none; backdrop-filter:none; }
@@ -131,6 +132,23 @@ main { max-width:1000px; margin:auto; padding:12px 24px calc(110px + env(safe-ar
 .icon-crop-toolbar output { text-align:center; color:var(--muted); font-size:12px; font-weight:650; }
 .icon-crop-toolbar .icon-button { width:44px; height:44px; min-height:44px; border:1px solid var(--line); background:var(--soft); }
 .manifest-status { margin:4px 0 16px; padding:11px 13px; border-radius:12px; background:var(--green-bg); color:var(--green); font-size:11px; line-height:1.6; }
+.share-card,.share-install-card { max-width:460px; }
+.share-app-summary { display:flex; align-items:center; gap:13px; margin:10px 0 16px; }
+.share-app-summary > div { min-width:0; display:grid; gap:4px; }
+.share-app-summary strong { font-size:17px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.share-app-summary small { color:var(--muted); line-height:1.45; }
+.share-app-icon { width:58px; height:58px; flex:0 0 58px; display:grid; place-items:center; overflow:hidden; border-radius:15px; background:var(--blue); color:white; font-size:26px; font-weight:800; background-position:center; background-size:cover; box-shadow:var(--shadow); }
+.share-app-icon.custom { color:transparent; }
+.share-qr-box { display:grid; place-items:center; margin:4px auto 14px; padding:12px; width:min(300px,100%); box-sizing:border-box; border-radius:22px; background:white; border:1px solid var(--line); }
+.share-qr-box img { display:block; width:100%; height:auto; aspect-ratio:1; }
+.share-network-hint { margin:0; color:var(--ink); font-size:13px; line-height:1.55; text-align:center; }
+.share-card > .danger { margin-top:10px; }
+.share-details { display:grid; gap:0; margin:0 0 16px; border:1px solid var(--line); border-radius:15px; overflow:hidden; }
+.share-details div { display:grid; grid-template-columns:64px minmax(0,1fr); gap:12px; padding:11px 13px; background:var(--bg); }
+.share-details div + div { border-top:1px solid var(--line); }
+.share-details dt { color:var(--muted); }
+.share-details dd { margin:0; text-align:right; overflow-wrap:anywhere; }
+.share-shortcut-choice { margin:0 0 16px; padding:13px; border:1px solid var(--line); border-radius:15px; background:var(--surface); }
 .compact-toolbar { margin-bottom:15px; }
 .compact-toolbar button { padding-left:12px; }
 .panel-head { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; margin-bottom:22px; }
@@ -308,7 +326,11 @@ code { font-family:ui-monospace,monospace; }
 .agent-secret { display:flex; align-items:flex-end; justify-content:flex-start; gap:0; padding:20px 0 4px; }
 .agent-secret label { flex:0 1 210px; min-width:0; margin:0; }
 .agent-secret input { width:100%; height:48px; margin-top:8px; font:700 20px/1 ui-monospace,monospace; letter-spacing:.13em; }
+.agent-secret input[readonly] { cursor:default; background:var(--soft); color:var(--ink); }
 .agent-secret button { flex:none; align-self:flex-end; min-height:48px; height:48px; margin:0 0 0 14px; font-size:12px; white-space:nowrap; }.agent-warning { display:flex; gap:12px; margin-top:20px; padding:16px; border:1px solid var(--line); border-radius:14px; }.agent-warning p { margin:0; font-size:12px; color:var(--muted); line-height:1.7; }.agent-warning i { margin-top:4px; }
+.agent-password-card { max-width:430px; }
+.agent-password-card label { margin-bottom:0; }
+.agent-password-card input { font:700 22px/1 ui-monospace,monospace; letter-spacing:.16em; }
 .endpoint-change-grid { display:grid; gap:16px; margin:4px 0 20px; }
 .endpoint-change-grid > div { min-width:0; padding:14px 0; border-bottom:1px solid var(--line); }
 .legacy-webview .topbar-note .status-dot{margin-right:7px}

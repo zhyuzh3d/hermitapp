@@ -18,6 +18,12 @@
   }
   $$('[data-settings-tab]').forEach(button => { button.onclick = () => showSettingsTab(button.dataset.settingsTab); });
   showSettingsTab(state.settingsTab);
+  function renderLanguageChoice() { selected("#languageChoices", "languageChoice", H.i18n.preference()); }
+  renderLanguageChoice();
+  $$('[data-language-choice]').forEach(button => {
+    button.onclick = () => { H.i18n.setPreference(button.dataset.languageChoice); renderLanguageChoice(); };
+  });
+  addEventListener("hermitlanguagechange", renderLanguageChoice);
   let theme = "system";
   const systemDark = matchMedia("(prefers-color-scheme: dark)");
   try { theme = localStorage.getItem("hermit.theme") || "system"; } catch (_) {}

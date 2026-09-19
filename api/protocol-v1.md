@@ -7,3 +7,5 @@ Every request carries `documentId`, Native-issued `sessionId`, and `documentEpoc
 Responses use `{kind:"response", id, documentEpoch, ok, result}` or an error object `{code,message,retryable}`. Events use `{kind:"event", event, documentEpoch, data}`. Messages larger than 256 KiB and calls not completed within 60 seconds are rejected. Large binary data moves through logical file IDs, not RPC JSON.
 
 Stable error codes are `E_INVALID_ARGUMENT`, `E_UNSUPPORTED`, `E_ORIGIN_DENIED`, `E_CAPABILITY_DENIED`, `E_OS_PERMISSION_DENIED`, `E_SESSION_EXPIRED`, `E_CANCELLED`, `E_TIMEOUT`, `E_CONFLICT`, `E_QUOTA`, `E_STORAGE`, `E_NETWORK`, and `E_INTERNAL`.
+
+`system.language` is a permission-free system-fact call. It returns the current Android system locale as a primary BCP-47 `languageTag`, split `language`/`script`/`region` fields, and the ordered `preferredLanguages` list. It does not read or change a happ's own language preference.

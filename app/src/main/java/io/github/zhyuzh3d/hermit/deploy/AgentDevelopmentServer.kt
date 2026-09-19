@@ -45,6 +45,7 @@ class AgentDevelopmentServer(
     }
     @Volatile private var active: Endpoint? = null
     @Volatile private var uiHandler: (suspend (String, JSONObject) -> JSONObject)? = null
+    @Volatile private var uiHandlerOwner: Any? = null
     private data class RenderOperation(
         val id: String, val appId: String, val revision: Long, val createdAt: Long,
         val result: CompletableDeferred<JSONObject> = CompletableDeferred(),
@@ -56,7 +57,17 @@ class AgentDevelopmentServer(
     private var monitor: Job? = null
     @Volatile private var networkAvailable = false
     @Volatile private var stateHandler: ((Boolean) -> Unit)? = null
-    fun setStateHandler(handler: ((Boolean) -> Unit)?) { stateHandler = handler; handler?.invoke(enabled()) }
+    @Volatile private var stateHandlerOwner: Any? = null
+    @Synchronized fun setStateHandler(owner: Any, handler: (Boolean) -> Unit) {
+        stateHandlerOwner = owner
+        stateHandler = handler
+        handler(enabled())
+    }
+    @Synchronized fun clearStateHandler(owner: Any) {
+        if (stateHandlerOwner !== owner) return
+        stateHandlerOwner = null
+        stateHandler = null
+    }
     private val preferences = context.getSharedPreferences("agent-development", Context.MODE_PRIVATE)
 
     private fun enabled() = preferences.getBoolean("enabled", false)
@@ -87,7 +98,16 @@ class AgentDevelopmentServer(
 
     private fun authorized(header: String) = constantEquals("Bearer " + passwordForUi(), header)
 
-    fun setUiHandler(handler: (suspend (String, JSONObject) -> JSONObject)?) { uiHandler = handler }
+    @Synchronized fun setUiHandler(owner: Any, handler: suspend (String, JSONObject) -> JSONObject) {
+        uiHandlerOwner = owner
+        uiHandler = handler
+    }
+
+    @Synchronized fun clearUiHandler(owner: Any) {
+        if (uiHandlerOwner !== owner) return
+        uiHandlerOwner = null
+        uiHandler = null
+    }
 
     fun reportDevRender(appId: String, revision: Long, url: String) {
         renderOperations.values.filter { it.appId == appId && it.revision == revision && !it.result.isCompleted }.forEach { operation ->

@@ -1,13 +1,12 @@
 package io.github.zhyuzh3d.hermit.launcher
 
 import android.content.Context
-import android.content.Intent
 import android.content.pm.ShortcutInfo
 import android.content.pm.ShortcutManager
 import android.graphics.BitmapFactory
 import android.graphics.drawable.Icon
-import io.github.zhyuzh3d.hermit.data.HostImageStore
 import io.github.zhyuzh3d.hermit.MainActivity
+import io.github.zhyuzh3d.hermit.data.HostImageStore
 import io.github.zhyuzh3d.hermit.R
 import io.github.zhyuzh3d.hermit.model.WebAppInstance
 
@@ -27,53 +26,98 @@ class ShortcutHost(private val context: Context) {
      * this package. Call this from a worker thread: some launchers may take
      * noticeable time to return their pinned shortcut list.
      */
-    fun pinStates(appIds: Collection<String>): Map<String, PinState> {
+    fun pinStates(instances: Collection<WebAppInstance>): Map<String, PinState> {
         val supported = runCatching { manager.isRequestPinShortcutSupported }.getOrNull()
-        val pinnedIds = runCatching {
-            manager.pinnedShortcuts.asSequence()
-                .filter(ShortcutInfo::isPinned)
-                .map(ShortcutInfo::getId)
-                .toSet()
-        }.getOrElse { return appIds.associateWith { PinState.UNKNOWN } }
-        return appIds.associateWith { appId ->
+        val pinned = runCatching { manager.pinnedShortcuts.filter(ShortcutInfo::isPinned) }
+            .getOrElse { return instances.associate { it.appId to PinState.UNKNOWN } }
+        val byAppId = instances.associateBy(WebAppInstance::appId)
+        val pinnedAppIds = buildSet {
+            pinned.forEach { shortcut ->
+                val intent = shortcut.intent
+                val direct = intent?.getStringExtra(MainActivity.EXTRA_APP_ID)?.let(byAppId::get)
+                val resolved = direct ?: resolveStableIdentity(
+                    instances,
+                    intent?.getStringExtra(MainActivity.EXTRA_HAPP_ID),
+                    intent?.getStringExtra(MainActivity.EXTRA_PUBLISHER_KEY_ID),
+                )
+                if (resolved != null) {
+                    add(resolved.appId)
+                    val identityChanged = direct == null ||
+                        intent.getStringExtra(MainActivity.EXTRA_HAPP_ID) != resolved.happId ||
+                        intent.getStringExtra(MainActivity.EXTRA_PUBLISHER_KEY_ID) != resolved.publisherKeyId
+                    if (identityChanged) runCatching { updateShortcut(shortcut.id, resolved) }
+                }
+            }
+        }
+        val pinnedIds = pinned.map(ShortcutInfo::getId).toSet()
+        return instances.associate { instance ->
+            val appId = instance.appId
             when {
-                shortcutId(appId) in pinnedIds -> PinState.PINNED
-                supported == true -> PinState.NOT_PINNED
-                supported == false -> PinState.UNSUPPORTED
-                else -> PinState.UNKNOWN
+                appId in pinnedAppIds || shortcutId(appId) in pinnedIds -> appId to PinState.PINNED
+                supported == true -> appId to PinState.NOT_PINNED
+                supported == false -> appId to PinState.UNSUPPORTED
+                else -> appId to PinState.UNKNOWN
             }
         }
     }
 
     fun requestPin(instance: WebAppInstance): Boolean {
         if (!manager.isRequestPinShortcutSupported) return false
-        val shortcut = ShortcutInfo.Builder(context, shortcutId(instance.appId))
-            .setShortLabel(instance.name.take(10))
-            .setLongLabel(instance.name.take(25))
-            .setIcon(iconFor(instance))
-            .setIntent(Intent(context, MainActivity::class.java).apply {
-                action = Intent.ACTION_VIEW
-                putExtra(MainActivity.EXTRA_APP_ID, instance.appId)
-            })
-            .build()
+        val shortcut = shortcut(shortcutId(instance.appId), instance)
         return manager.requestPinShortcut(shortcut, null)
     }
 
     fun update(instance: WebAppInstance) {
-        manager.updateShortcuts(listOf(ShortcutInfo.Builder(context, shortcutId(instance.appId))
-            .setShortLabel(instance.name.take(10)).setLongLabel(instance.name.take(25))
-            .setIcon(iconFor(instance))
-            .setIntent(Intent(context, MainActivity::class.java).apply {
-                action = Intent.ACTION_VIEW
-                putExtra(MainActivity.EXTRA_APP_ID, instance.appId)
-            }).build()))
+        val ids = runCatching {
+            manager.pinnedShortcuts.asSequence()
+                .filter { it.intent?.getStringExtra(MainActivity.EXTRA_APP_ID) == instance.appId }
+                .map(ShortcutInfo::getId)
+                .toMutableSet()
+        }.getOrDefault(mutableSetOf())
+        ids += shortcutId(instance.appId)
+        manager.updateShortcuts(ids.map { shortcut(it, instance) })
+    }
+
+    fun retarget(previousAppId: String?, instance: WebAppInstance) {
+        val oldId = previousAppId?.takeIf { it.isNotBlank() }?.let(::shortcutId) ?: return
+        updateShortcut(oldId, instance)
     }
 
     fun disable(appId: String) {
-        manager.disableShortcuts(listOf(shortcutId(appId)), "此页面应用已被删除")
+        val ids = runCatching {
+            manager.pinnedShortcuts.asSequence()
+                .filter { it.intent?.getStringExtra(MainActivity.EXTRA_APP_ID) == appId }
+                .map(ShortcutInfo::getId)
+                .toMutableSet()
+        }.getOrDefault(mutableSetOf())
+        ids += shortcutId(appId)
+        manager.disableShortcuts(ids.toList(), "此页面应用已被删除")
     }
 
     private fun shortcutId(appId: String) = "webapp-$appId"
+
+    private fun updateShortcut(id: String, instance: WebAppInstance) {
+        manager.updateShortcuts(listOf(shortcut(id, instance)))
+    }
+
+    private fun shortcut(id: String, instance: WebAppInstance) = ShortcutInfo.Builder(context, id)
+        .setShortLabel(instance.name.take(10))
+        .setLongLabel(instance.name.take(25))
+        .setIcon(iconFor(instance))
+        .setIntent(HappTaskHost.intent(context, instance))
+        .build()
+
+    private fun resolveStableIdentity(
+        instances: Collection<WebAppInstance>,
+        happId: String?,
+        publisherKeyId: String?,
+    ): WebAppInstance? {
+        val stableId = happId?.takeIf { it.isNotBlank() } ?: return null
+        val matches = instances.filter { instance ->
+            instance.happId == stableId && (publisherKeyId.isNullOrBlank() || instance.publisherKeyId == publisherKeyId)
+        }
+        return matches.singleOrNull()
+    }
 
     private fun iconFor(instance: WebAppInstance): Icon {
         val bitmap = images.open(instance.effectiveIconUrl)?.let { image ->

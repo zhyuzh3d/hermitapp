@@ -107,6 +107,11 @@
       const pinState = renderPinButton(pinButton, app);
       pinButton.disabled = pinState === "unsupported";
       pinButton.onclick = event => busy(event.currentTarget, () => pin(app));
+      const shareButton = fragment.querySelector(".share");
+      shareButton.disabled = !hasLocal(app);
+      shareButton.setAttribute("aria-label", hasLocal(app) ? "分享应用" : "没有可分享的本地安装包");
+      shareButton.title = hasLocal(app) ? "分享应用" : "没有可分享的本地安装包";
+      shareButton.onclick = event => busy(event.currentTarget, () => H.features.share.openOutbound(app));
       fragment.querySelector(".manage").onclick = () => H.features.manage.openManage(app).catch(error => say(error.message, true));
       cards.append(fragment);
     }

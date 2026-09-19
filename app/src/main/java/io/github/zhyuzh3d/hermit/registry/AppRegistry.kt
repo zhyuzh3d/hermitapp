@@ -176,6 +176,13 @@ class AppRegistry(private val context: Context) : SQLiteOpenHelper(context, "her
         readableDatabase.query("instances", null, "app_id = ? AND state = ?", arrayOf(appId, "ready"), null, null, null)
             .use { cursor -> if (cursor.moveToFirst()) cursor.toInstance() else null }
 
+    fun resolveLaunchTarget(appId: String?, happId: String?, publisherKeyId: String?): WebAppInstance? {
+        appId?.takeIf { it.isNotBlank() }?.let(::getInstance)?.let { return it }
+        val stableId = happId?.takeIf { it.isNotBlank() } ?: return null
+        val publisher = publisherKeyId?.takeIf { it.isNotBlank() }
+        return if (publisher == null) findAnyReady(stableId) else findReady(stableId, publisher)
+    }
+
     fun insertInstance(instance: WebAppInstance) {
         writableDatabase.insertOrThrow("instances", null, instance.values())
     }

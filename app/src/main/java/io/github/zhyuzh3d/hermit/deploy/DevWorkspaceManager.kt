@@ -270,6 +270,37 @@ class DevWorkspaceManager(
             .put("sha256", artifact.sha256).put("bytes", artifact.bytes).put("fileName", "${safeName(app.name)}-$versionName.zip")
     }
 
+    /** Builds the exact development revision currently selected for runtime sharing. */
+    fun buildShare(appId: String, expectedRevision: Long): BuildArtifact = synchronized(lock(appId)) {
+        val app = requireDevelopableApp(appId)
+        val before = writableSnapshot(appId, expectedRevision)
+        cleanupBuilds()
+        val buildId = UUID.randomUUID().toString()
+        val output = File(buildRoot().apply { mkdirs() }, "$buildId.zip")
+        ZipOutputStream(FileOutputStream(output)).use { zip ->
+            before.entries.values.sortedBy { it.path }.forEach { entry ->
+                if (entry.path == "hermit.sig" && before.workspace.dirty) return@forEach
+                zip.putNextEntry(ZipEntry(entry.path).apply { time = 0 })
+                FileInputStream(blob(appId, entry.sha256)).use { it.copyTo(zip) }
+                zip.closeEntry()
+            }
+        }
+        if (output.length() > SHARE_ZIP_BYTES) {
+            output.delete()
+            fail(ErrorCodes.QUOTA, "分享 ZIP 超过 64 MiB")
+        }
+        val validationRoot = File(context.cacheDir, "dev-share-check-$buildId")
+        try {
+            materialize(before, validationRoot, null, includeSignature = !before.workspace.dirty)
+            val metadata = PackageManifestReader.read(validationRoot)
+            if (app.happId != null && metadata?.happId != app.happId) fail(ErrorCodes.CONFLICT, "开发包的 happId 与当前实例不一致")
+            if (metadata?.entry?.let { File(validationRoot, it).isFile } == false) fail(ErrorCodes.INVALID_ARGUMENT, "开发包入口文件不存在")
+            if (!before.workspace.dirty) PackageManifestReader.verifyPublisher(validationRoot, before.workspace.treeHash)
+        } finally { validationRoot.deleteRecursively() }
+        BuildArtifact(buildId, appId, before.workspace.revision, output, AgentWorkspace.hashFile(output), output.length(), System.currentTimeMillis())
+            .also { builds[buildId] = it }
+    }
+
     fun artifact(buildId: String): BuildArtifact? {
         cleanupBuilds()
         return builds[buildId]?.takeIf { it.file.isFile }
@@ -432,10 +463,15 @@ class DevWorkspaceManager(
         if (!temporary.renameTo(destination)) { temporary.delete(); fail(ErrorCodes.STORAGE, "无法提交开发树清单") }
     }
 
-    private fun materialize(snapshot: Snapshot, destination: File, version: Pair<Long, String>?) {
+    private fun materialize(
+        snapshot: Snapshot,
+        destination: File,
+        version: Pair<Long, String>?,
+        includeSignature: Boolean = false,
+    ) {
         destination.deleteRecursively(); destination.mkdirs()
         snapshot.entries.values.forEach { entry ->
-            if (entry.path == "hermit.sig") return@forEach
+            if (entry.path == "hermit.sig" && !includeSignature) return@forEach
             val target = File(destination, entry.path); target.parentFile?.mkdirs()
             if (entry.path == "hermit.json" && version != null) {
                 val json = JSONObject(blob(snapshot.workspace.appId, entry.sha256).readText(Charsets.UTF_8))
@@ -495,6 +531,7 @@ class DevWorkspaceManager(
         private const val MAX_TREE_BYTES = 256L * 1024 * 1024
         private const val MAX_FILES = 10_000
         private const val BUILD_TTL_MS = 10L * 60 * 1000
+        private const val SHARE_ZIP_BYTES = 64L * 1024 * 1024
 
         fun safePath(path: String) {
             if (path.isBlank() || path.length > 512 || path.startsWith('/') || path.contains('\\') || path.contains('\u0000') || path.contains(':') ||

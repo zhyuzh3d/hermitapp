@@ -12,6 +12,7 @@ import io.github.zhyuzh3d.hermit.install.RemoteSourceInstaller
 import io.github.zhyuzh3d.hermit.registry.AppRegistry
 import io.github.zhyuzh3d.hermit.runtime.OfficialShellManager
 import io.github.zhyuzh3d.hermit.notification.NotificationCenter
+import io.github.zhyuzh3d.hermit.share.HappShareManager
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -35,6 +36,8 @@ class HermitApplication : Application(), DefaultLifecycleObserver {
         private set
     lateinit var notifications: NotificationCenter
         private set
+    lateinit var happShare: HappShareManager
+        private set
 
     override fun onCreate() {
         super<Application>.onCreate()
@@ -44,6 +47,7 @@ class HermitApplication : Application(), DefaultLifecycleObserver {
         remoteInstaller = RemoteSourceInstaller(this, registry, installer)
         developmentServer = DevelopmentServer(this, registry, installer, applicationScope)
         agentServer = AgentDevelopmentServer(this, registry, installer, devWorkspaces, applicationScope)
+        happShare = HappShareManager(this, registry, installer, devWorkspaces, applicationScope)
         officialShell = OfficialShellManager(this)
         notifications = NotificationCenter(this, registry)
         val installState = getSharedPreferences("hermit-install-state", MODE_PRIVATE)
@@ -69,6 +73,7 @@ class HermitApplication : Application(), DefaultLifecycleObserver {
     override fun onTerminate() {
         developmentServer.stop("Application terminated")
         agentServer.stop("Application terminated")
+        happShare.close()
         applicationScope.cancel()
         notifications.close()
         registry.close()

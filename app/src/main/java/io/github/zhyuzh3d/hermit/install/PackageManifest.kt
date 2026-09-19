@@ -15,6 +15,7 @@ data class PackageManifest(
     val schema: Int,
     val happId: String?,
     val name: String?,
+    val author: String?,
     val versionCode: Long?,
     val versionName: String?,
     val entry: String,
@@ -79,22 +80,23 @@ object PackageManifestReader {
         val version = optionalVersion(json, required = false)
         val entry = optionalPath(json, "entry") ?: "index.html"
         val routing = routing(json)
-        return PackageManifest(1, null, name, version.first, version.second, entry, routing, null, null, null)
+        return PackageManifest(1, null, name, null, version.first, version.second, entry, routing, null, null, null)
     }
 
     private fun readV2(json: JSONObject): PackageManifest {
-        rejectUnknown(json, setOf("schema", "happId", "name", "version", "entry", "routing", "icon", "liveUrl", "updateUrl", "display"), "hermit.json")
+        rejectUnknown(json, setOf("schema", "happId", "name", "author", "version", "entry", "routing", "icon", "liveUrl", "updateUrl", "display"), "hermit.json")
         val happId = requiredString(json, "happId")
         if (!HAPP_ID.matches(happId) || happId.length > 160) fail(ErrorCodes.INVALID_ARGUMENT, "hermit.json 的 happId 无效")
         if (happId in RESERVED_HAPP_IDS) fail(ErrorCodes.PROTECTED_TARGET, "此 happId 保留给 HermitUI，不能用于普通 happ")
         val name = requiredString(json, "name")
         if (name.length > 80) fail(ErrorCodes.INVALID_ARGUMENT, "hermit.json 的 name 无效")
+        val author = optionalText(json, "author", 80)
         val version = optionalVersion(json, required = true)
         val entry = optionalPath(json, "entry") ?: "index.html"
         val icon = optionalPath(json, "icon")
         val display = display(json)
         return PackageManifest(
-            2, happId, name, version.first, version.second, entry, routing(json), icon,
+            2, happId, name, author, version.first, version.second, entry, routing(json), icon,
             optionalNetworkUrl(json, "liveUrl"), optionalNetworkUrl(json, "updateUrl"),
             display.first, display.second,
         )
@@ -136,6 +138,13 @@ object PackageManifestReader {
         val value = json.opt("name") as? String
         if (value.isNullOrBlank() || value.length > 80) fail(ErrorCodes.INVALID_ARGUMENT, "hermit.json 的 name 无效")
         return value
+    }
+
+    private fun optionalText(json: JSONObject, field: String, maxLength: Int): String? {
+        if (!json.has(field)) return null
+        val value = json.opt(field) as? String
+        if (value.isNullOrBlank() || value.length > maxLength) fail(ErrorCodes.INVALID_ARGUMENT, "hermit.json 的 $field 无效")
+        return value.trim()
     }
 
     private fun routing(json: JSONObject): String = json.optString("routing", "hash").also {

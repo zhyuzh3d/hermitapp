@@ -47,6 +47,7 @@ class DevelopmentServer(
 ) {
     @Volatile private var active: Active? = null
     @Volatile private var reloadHandler: ((String) -> Boolean)? = null
+    @Volatile private var reloadHandlerOwner: Any? = null
     private var expiryJob: Job? = null
 
     private data class Active(
@@ -111,8 +112,17 @@ class DevelopmentServer(
             .put("message", "已开启${if (mode == "lan") "局域网 TLS" else " ADB"}开发连接；Hermit 进入后台后自动关闭")
     }
 
-    fun setReloadHandler(handler: ((String) -> Boolean)?) {
+    @Synchronized
+    fun setReloadHandler(owner: Any, handler: (String) -> Boolean) {
+        reloadHandlerOwner = owner
         reloadHandler = handler
+    }
+
+    @Synchronized
+    fun clearReloadHandler(owner: Any) {
+        if (reloadHandlerOwner !== owner) return
+        reloadHandlerOwner = null
+        reloadHandler = null
     }
 
     @Synchronized

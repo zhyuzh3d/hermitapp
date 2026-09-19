@@ -196,6 +196,74 @@ test("host media uses object URLs and keeps inline bytes transient", () => {
   assert.doesNotMatch(registry, /icon_data_url|default_icon_data_url/);
 });
 
+test("device happ sharing is a bounded one-hour file session with explicit install confirmation", () => {
+  const manager = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/share/HappShareManager.kt", "utf8");
+  const service = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/share/HappShareService.kt", "utf8");
+  const gateway = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/runtime/HappShareAssetGateway.kt", "utf8");
+  const activity = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
+  const manifest = fs.readFileSync("app/src/main/AndroidManifest.xml", "utf8");
+  const html = fs.readFileSync("app/src/main/assets/store/index.html", "utf8");
+  const ui = fs.readFileSync("app/src/main/assets/store/features/share.js", "utf8");
+  const host = fs.readFileSync("app/src/main/assets/store/platform/host.js", "utf8");
+  const schema = JSON.parse(fs.readFileSync("api/hermit.schema.json", "utf8"));
+  assert.match(manager, /SESSION_TTL_MS = 60L \* 60 \* 1000/);
+  assert.match(manager, /nextInt\(1_000_000\).*padStart\(6, '0'\)/);
+  assert.match(manager, /scheme\("hermit"\)\.authority\("share"\)/);
+  for (const key of ["v", "u", "p"]) assert.match(manager, new RegExp(`appendQueryParameter\\("${key}"`));
+  for (const path of ["/manifest", "/icon", "/package"]) assert.ok(manager.includes(`"${path}"`));
+  assert.match(manager, /Authorization", "Bearer \$password"/);
+  assert.match(manager, /cacheDir, "shared\/happ-share/);
+  assert.match(manager, /snapshotKind = "development"/);
+  assert.match(manager, /snapshotKind = "release"/);
+  assert.match(manager, /blockedPrefixes = listOf\("rmnet", "ccmni", "pdp", "wwan", "tun", "dummy"\)/);
+  assert.match(service, /startForeground/);
+  assert.match(service, /停止分享/);
+  assert.match(gateway, /short-lived QR and preview files/);
+  assert.match(manifest, /android:foregroundServiceType="dataSync"/);
+  for (const method of ["shareStart", "shareSave", "shareSend", "shareStop", "shareInstall"]) {
+    assert.match(activity, new RegExp(`"host\\.apps\\.${method}"`));
+    assert.ok(host.includes(`"apps.${method}"`));
+  }
+  for (const id of ["sharePanel", "shareInstallPanel", "shareQr", "shareCreateShortcut", "installSharedHapp"]) {
+    assert.match(html, new RegExp(`id="${id}"`));
+  }
+  assert.match(ui, /createShortcut:state\.shareCreateShortcut/);
+  assert.match(ui, /二维码已包含六位分享密码/);
+  assert.match(ui, /未检测到可用局域网/);
+  assert.equal(schema.properties.author.maxLength, 80);
+});
+
+test("HermitUI follows the system language, keeps a manual override, and avoids input focus for external installs", () => {
+  const html = fs.readFileSync("app/src/main/assets/store/index.html", "utf8");
+  const i18n = fs.readFileSync("app/src/main/assets/store/core/i18n.js", "utf8");
+  const settings = fs.readFileSync("app/src/main/assets/store/features/settings.js", "utf8");
+  const install = fs.readFileSync("app/src/main/assets/store/features/install.js", "utf8");
+  const ui = fs.readFileSync("app/src/main/assets/store/components/ui.js", "utf8");
+  for (const value of ["system", "zh-CN", "en"]) assert.match(html, new RegExp(`data-language-choice="${value}"`));
+  assert.match(i18n, /STORAGE_KEY = "hermit\.language"/);
+  assert.match(i18n, /toLowerCase\(\) === "zh" \? "zh-CN" : "en"/);
+  assert.match(i18n, /window\.hermit\.system\.language\(\)/);
+  assert.match(settings, /H\.i18n\.setPreference\(button\.dataset\.languageChoice\)/);
+  assert.match(ui, /element\.querySelector\("\[data-close\]"\) \|\| focusable\(element\)\[0\]/);
+  assert.match(install, /if \(!value\.url && !value\.token && !value\.scanned && !value\.shared\)/);
+  const shareInstall = html.slice(html.indexOf('id="shareInstallPanel"'), html.indexOf('id="managePanel"'));
+  assert.doesNotMatch(shareInstall, /<input\b/);
+});
+
+test("development password is read only outside a deliberate modal save", () => {
+  const html = fs.readFileSync("app/src/main/assets/store/index.html", "utf8");
+  const development = fs.readFileSync("app/src/main/assets/store/features/development.js", "utf8");
+  assert.match(html, /id="agentPassword"[^>]*readonly/);
+  assert.match(html, /id="editAgentPassword"/);
+  assert.match(html, /id="agentPasswordPanel"/);
+  assert.match(html, /id="agentPasswordDraft"[^>]*pattern="\[0-9\]\{6\}"/);
+  assert.match(html, /id="randomAgentPassword"/);
+  assert.match(development, /crypto\.getRandomValues\(random\)/);
+  assert.match(development, /host\.call\("agent\.resetPassword", \{ password \}\)/);
+  assert.match(development, /close\("#agentPasswordPanel"\)/);
+  assert.doesNotMatch(development, /#agentPassword"\)\.oninput/);
+});
+
 test("launcher uses the compressed Hermit brand icon while notifications keep a monochrome glyph", () => {
   const foreground = fs.readFileSync("app/src/main/res/drawable/ic_launcher_foreground.xml", "utf8");
   const notifications = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/notification/NotificationDispatcher.kt", "utf8");
@@ -388,7 +456,7 @@ test("system capability adapters are discoverable, permission-gated and foregrou
   const main = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
   const bridge = fs.readFileSync("app/src/main/assets/bridge/hermit-v1.js", "utf8");
   const types = fs.readFileSync("sdk/hermit-api.d.ts", "utf8");
-  assert.equal(caps.apiMinor, 11);
+  assert.equal(caps.apiMinor, 12);
   assert.deepEqual(caps.public.appearance, ["reportTheme"]);
   assert.deepEqual(caps.public.tts, ["availability", "preferences", "voices", "languageAvailability", "speak", "stop", "export"]);
   assert.deepEqual(caps.public.speech, ["availability", "preferences", "languages", "start", "recognizeOnce", "stop", "cancel"]);
@@ -397,6 +465,10 @@ test("system capability adapters are discoverable, permission-gated and foregrou
   assert.deepEqual(caps.public.wifi, ["status", "scan", "requestNetwork", "releaseNetwork", "openSettings"]);
   assert.ok(caps.public.bluetooth.includes("subscribe"));
   assert.deepEqual(caps.public.infrared, ["status", "transmit"]);
+  assert.deepEqual(caps.public.system, ["language", "openSettings"]);
+  assert.match(main, /"system\.language" -> systemLanguageInfo\(\)/);
+  assert.match(main, /\.put\("preferredLanguages", JSONArray\(tags\)\)/);
+  assert.match(types, /language\(\): Promise<HermitSystemLanguage>/);
   for (const namespace of ["appearance", "sensors", "wifi", "bluetooth", "infrared", "battery", "system"]) {
     assert.match(bridge, new RegExp(`${namespace}: namespace\\("${namespace}"\\)`));
     assert.match(types, new RegExp(`\\b${namespace}:`));

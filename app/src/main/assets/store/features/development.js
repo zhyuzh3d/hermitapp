@@ -55,7 +55,7 @@
     $("#agentUrl").textContent = address || "未连接 Wi-Fi";
     $("#agentUrl").dataset.address = address;
     $("#agentUsb").textContent = value.usbCommand || "adb forward tcp:8766 tcp:8766";
-    if (document.activeElement !== $("#agentPassword")) $("#agentPassword").value = value.password || "";
+    $("#agentPassword").value = value.password || "";
     $("#agentEvents").textContent = (value.events || []).slice(-20).reverse().map(event => new Date(event.time).toLocaleTimeString() + "  " + event.tool + "  " + event.result).join("\n") || "暂无操作";
     maybeShowEndpointChange(value);
   }
@@ -87,14 +87,24 @@
     say("USB 开发服务已启动，请在电脑执行转发命令。");
   });
 
+  bind("#editAgentPassword", () => {
+    $("#agentPasswordDraft").value = agentState && agentState.password || $("#agentPassword").value || "";
+    open("#agentPasswordPanel");
+  });
+  bind("#randomAgentPassword", () => {
+    const random = new Uint32Array(1);
+    crypto.getRandomValues(random);
+    $("#agentPasswordDraft").value = String(random[0] % 1_000_000).padStart(6, "0");
+  });
   bind("#saveAgentPassword", async () => {
-    const password = $("#agentPassword").value.trim();
+    const password = $("#agentPasswordDraft").value.trim();
     if (!/^[0-9]{6}$/.test(password)) throw new Error("密码必须是 6 位数字。");
     const value = await host.call("agent.resetPassword", { password });
     renderAgent(value);
+    close("#agentPasswordPanel");
     say("新密码已生效，旧密码已失效。");
   });
-  $("#agentPassword").oninput = event => { event.currentTarget.value = event.currentTarget.value.replace(/\D/g, "").slice(0, 6); };
+  $("#agentPasswordDraft").oninput = event => { event.currentTarget.value = event.currentTarget.value.replace(/\D/g, "").slice(0, 6); };
   bind("#copyAgentAddress", () => {
     const address = $("#agentUrl").dataset.address;
     if (!address) throw new Error("开发服务尚未启动。");

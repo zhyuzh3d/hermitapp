@@ -16,6 +16,7 @@ export interface HermitNetworkRequest { url: string; method?: "GET" | "HEAD" | "
 export interface HermitNetworkResponse { status: number; headers: Record<string, string>; url: string; body?: null; bodyText?: string; bodyBase64?: string; file?: HermitFile }
 export interface HermitNetworkStream extends HermitNetworkResponse { streamId: string; contentType: string; contentLength: number | null }
 export interface HermitNetworkSocket extends HermitNetworkResponse { socketId: string }
+export interface HermitSystemLanguage { languageTag: string; language: string; script: string | null; region: string | null; preferredLanguages: string[] }
 export interface HermitApi {
   icons: HermitIcons;
   call<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T>;
@@ -113,7 +114,10 @@ export interface HermitApi {
   };
   infrared: { status(): Promise<{ supported: boolean; transmitOnly: true; receiveSupported: false; frequencyRanges: Array<{ minHz: number; maxHz: number }> }>; transmit(params: { carrierFrequencyHz: number; patternUs: number[] }): Promise<{ transmitted: true; carrierFrequencyHz: number; segments: number; durationUs: number }> };
   battery: { status(): Promise<Record<string, unknown>>; watch(): Promise<{ subscriptionId: string; current: Record<string, unknown> }>; clearWatch(params: { subscriptionId: string }): Promise<{ cleared: boolean }> };
-  system: { openSettings(params: { page: "wifi" | "bluetooth" | "location" | "voiceInput" | "tts" | "app" | "notifications" }): Promise<{ opened: true; page: string }> };
+  system: {
+    language(): Promise<HermitSystemLanguage>;
+    openSettings(params: { page: "wifi" | "bluetooth" | "location" | "voiceInput" | "tts" | "app" | "notifications" }): Promise<{ opened: true; page: string }>;
+  };
   notifications: {
     notify(params: HermitNotification): Promise<{ posted: boolean; id: string }>;
     schedule(params: { notification: HermitNotification; triggerAt: number; recurrence?: HermitNotificationRecurrence }): Promise<{ scheduled: true; id: string; triggerAt: number; recurrence: HermitNotificationRecurrence }>;

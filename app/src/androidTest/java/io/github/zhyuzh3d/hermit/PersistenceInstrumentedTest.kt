@@ -481,7 +481,8 @@ class PersistenceInstrumentedTest {
         val first = app.installer.installZip(ByteArrayInputStream(zipOf(mapOf("index.html" to "v1"))), "Deploy fixture")
         createdApps += first.appId
         var reloadedAppId: String? = null
-        app.developmentServer.setReloadHandler { appId -> reloadedAppId = appId; true }
+        val reloadOwner = Any()
+        app.developmentServer.setReloadHandler(reloadOwner) { appId -> reloadedAppId = appId; true }
         val session = app.developmentServer.start(first.appId)
         try {
             val client = OkHttpClient()
@@ -506,7 +507,7 @@ class PersistenceInstrumentedTest {
             client.newCall(reload).execute().use { response -> assertEquals(response.body.string(), 202, response.code) }
             assertEquals(first.appId, reloadedAppId)
         } finally {
-            app.developmentServer.setReloadHandler(null)
+            app.developmentServer.clearReloadHandler(reloadOwner)
             app.developmentServer.stop("test complete")
         }
     }
