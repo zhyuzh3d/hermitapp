@@ -13,7 +13,6 @@
 <div id="browserNotice" class="info-card hidden" role="status"><i class="fa-solid fa-mobile-screen-button" aria-hidden="true"></i><div><strong>在 HermitApp 中，管理你的应用</strong><p>这是 HermitUI 界面。普通浏览器无法读取手机上的应用或调用设备能力。</p><a href="/pages/download.html">下载 HermitApp</a><span aria-hidden="true"> · </span><a href="/pages/guide.html">阅读使用指南</a></div></div>
 <div id="hostActions"><p id="homePrompt" class="home-prompt">添加一个HAPP应用</p>
 <div class="quick-add" aria-label="添加新应用"><button id="addZip" class="quick-add-button"><span class="tool-icon orange"><i class="fa-solid fa-file-zipper" aria-hidden="true"></i></span><strong>从压缩包</strong></button><button id="addUrl" class="quick-add-button"><span class="tool-icon green"><i class="fa-solid fa-link"></i></span><strong>从网址</strong></button><button id="scanQr" class="quick-add-button"><span class="tool-icon violet"><i class="fa-solid fa-qrcode"></i></span><strong>扫码添加</strong></button></div>
-<div class="add-favorite-choice switch-row"><div><strong>添加后收藏</strong><small>三种添加方式都会使用这个选择。</small></div><button class="switch" data-add-favorite role="switch" aria-checked="true" aria-label="添加后收藏"><span></span></button></div>
 </div>
 <div id="libraryTabs" class="segmented library-tabs" aria-label="应用列表"><button data-collection="favorites" class="selected" aria-pressed="true">收藏</button><button data-collection="all" aria-pressed="false">全部</button></div>
 <div id="libraryUnavailable" class="empty glass-panel hidden" role="status"><h2>暂时无法读取应用库</h2><p id="libraryErrorText"></p><button id="retryLibrary" class="primary">重新读取</button></div>
@@ -84,7 +83,7 @@
 <div class="app-editor-head"><button id="pickAppIcon" class="icon-picker" type="button"><span id="addIconPreview"><i class="fa-solid fa-image"></i></span><small>选择图标</small></button><div><label>应用名称<input id="name" maxlength="80" placeholder="给它取个好记的名字" autocomplete="off"></label><label id="versionField">版本<input id="addVersion" maxlength="80" value="1.0.0" autocomplete="off"></label></div></div>
 <p id="manifestStatus" class="manifest-status"></p><div class="add-favorite-choice sheet-favorite-choice switch-row"><div><strong>添加后收藏</strong><small>安装完成后直接显示在收藏列表。</small></div><button class="switch" data-add-favorite role="switch" aria-checked="true" aria-label="添加后收藏"><span></span></button></div>
 <label id="urlField">页面网址<input id="url" type="url" inputmode="url" placeholder="https://example.com、ZIP 或 Git 仓库" autocomplete="url" autocapitalize="none" spellcheck="false"></label>
-<button id="confirmAdd" class="primary wide"><i class="fa-solid fa-check accent-lime" aria-hidden="true"></i>确认添加</button>
+<button id="confirmAdd" class="primary wide" data-busy-preserve="true"><i class="fa-solid fa-check accent-lime" aria-hidden="true"></i><span id="confirmAddLabel">确认添加</span></button>
 </div></section>
 <section id="sharePanel" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="shareTitle"><div class="modal-card share-card"><div class="sheet-handle" aria-hidden="true"></div>
 <div class="panel-head"><div><p class="eyebrow">设备间分享</p><h2 id="shareTitle">分享 happ</h2></div><button data-close="#sharePanel" class="icon-button" aria-label="关闭分享弹窗"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button></div>

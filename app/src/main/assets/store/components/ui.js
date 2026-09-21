@@ -16,7 +16,10 @@
     const children = [...button.childNodes];
     const spinner = document.createElement("i"); spinner.className = "fa-solid fa-circle-notch fa-spin"; spinner.setAttribute("aria-hidden", "true");
     const preserveContents = button.classList.contains("icon-picker");
-    if (!preserveContents && button.classList.contains("icon-button")) button.replaceChildren(spinner);
+    // Buttons that relabel themselves while working keep their contents and only gain a spinner.
+    const keepContents = !preserveContents && button.dataset.busyPreserve === "true";
+    if (keepContents) button.appendChild(spinner);
+    else if (!preserveContents && button.classList.contains("icon-button")) button.replaceChildren(spinner);
     else if (!preserveContents) button.replaceChildren(spinner, document.createTextNode("处理中…"));
     button.disabled = true; button.setAttribute("aria-busy", "true");
     const modal = button.closest(".modal");
@@ -25,7 +28,8 @@
     if (modal) { modal.dataset.working = "true"; modal.classList.add("working"); }
     try { return await work(); }
     catch (error) { say(error.code === "E_CANCELLED" ? "已取消操作。" : (error.message || "操作失败，请重试。"), error.code !== "E_CANCELLED"); }
-    finally { locked.forEach(item => { item.control.disabled = item.disabled; }); if (modal) { delete modal.dataset.working; modal.classList.remove("working"); } button.disabled = false; button.removeAttribute("aria-busy"); if (!preserveContents) button.replaceChildren(...children);
+    finally { locked.forEach(item => { item.control.disabled = item.disabled; }); if (modal) { delete modal.dataset.working; modal.classList.remove("working"); } button.disabled = false; button.removeAttribute("aria-busy");
+      if (keepContents) spinner.remove(); else if (!preserveContents) button.replaceChildren(...children);
       if (H.onOperationSettled) H.onOperationSettled(modal);
     }
   }

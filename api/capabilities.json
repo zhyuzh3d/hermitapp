@@ -27,7 +27,7 @@
     "notifications": ["notify", "schedule", "cancel", "cancelAll", "getScheduled", "setEndpoint", "getStatus"]
   },
   "storeOnly": {
-    "host.apps": ["list", "favorite", "setNotificationEnabled", "setCrossOriginNetwork", "updateUrls", "scanQr", "installOnline", "importZip", "importDirectory", "installPackageUrl", "installGitHub", "updateFromSource", "reinstall", "update", "releases", "enterDev", "leaveDev", "resetDev", "exportDev", "setRuntimeMode", "rollback", "launch", "pin", "archive", "remove"],
+    "host.apps": ["list", "favorite", "setNotificationEnabled", "setCrossOriginNetwork", "updateUrls", "scanQr", "inspectUrl", "inspectZip", "confirmInspect", "installOnline", "importZip", "importDirectory", "installPackageUrl", "installGitHub", "updateFromSource", "reinstall", "update", "releases", "enterDev", "leaveDev", "resetDev", "exportDev", "setRuntimeMode", "rollback", "launch", "pin", "archive", "remove"],
     "host.permissions": ["list", "revoke"],
     "host.backup": ["export", "exportAll", "exportSettings", "restore", "restoreData", "autoBackup.get", "autoBackup.pickDirectory", "autoBackup.save", "autoBackup.runNow"],
     "host.settings": ["get", "set"],

@@ -82,6 +82,7 @@ import io.github.zhyuzh3d.hermit.launcher.ShortcutHost
 import io.github.zhyuzh3d.hermit.launcher.HappTaskHost
 import io.github.zhyuzh3d.hermit.install.IdentityInstallChoice
 import io.github.zhyuzh3d.hermit.install.IconProcessor
+import io.github.zhyuzh3d.hermit.install.PackageDescription
 import io.github.zhyuzh3d.hermit.install.PackageManifest
 import io.github.zhyuzh3d.hermit.install.PackageManifestReader
 import io.github.zhyuzh3d.hermit.install.RepositoryDirectory
@@ -115,6 +116,8 @@ import org.json.JSONTokener
 import java.net.InetAddress
 import java.io.File
 import java.io.ByteArrayOutputStream
+import java.io.FileInputStream
+import java.io.FileOutputStream
 import android.util.Base64
 import java.util.UUID
 import java.util.Locale
@@ -163,6 +166,16 @@ class MainActivity : ComponentActivity(), BridgeHost {
         val continuation: CancellableContinuation<String>,
     )
     private var pendingShellPrompt: PendingShellPrompt? = null
+    /** A package that was resolved for confirmation but not installed yet. */
+    private data class PendingSource(
+        val file: File,
+        val provenance: String,
+        val declaredSha256: String?,
+        val downloadUrl: String?,
+        val liveUrl: String?,
+        val suggestedName: String?,
+    )
+    private val pendingSourceImports = LinkedHashMap<String, PendingSource>()
     private var pendingOpenedNotification: JSONObject? = null
     private var forceLocalStoreOnce = false
     private var storeRunningMode = OfficialShellManager.Mode.LOCAL.value
@@ -1400,6 +1413,78 @@ class MainActivity : ComponentActivity(), BridgeHost {
             shortcuts.update(updated)
             JSONObject().put("cancelled", false).put("appId", result.appId).put("releaseId", result.releaseId)
         }
+        "host.apps.inspectUrl" -> {
+            val url = normalizeUrl(params.optString("url"))
+            if (Uri.parse(url).scheme.equals("http", true)
+                && !params.optBoolean("insecureConfirmed") && !confirmInsecureUrl(url)) {
+                return JSONObject().put("cancelled", true)
+            }
+            if (isLanUrl(url) && !ensureLanPermission()) {
+                throw HermitException(ErrorCodes.OS_PERMISSION_DENIED, "Android 未授予局域网权限")
+            }
+            val preview = hermitApp.remoteInstaller.previewOnline(url)
+            val file = preview.file
+            if (preview.kind != "package" || file == null) {
+                preview.file?.delete()
+                JSONObject().put("cancelled", false).put("kind", preview.kind)
+                    .put("suggestedName", preview.suggestedName ?: "")
+                    .put("pageUrl", preview.pageUrl ?: url)
+            } else {
+                val token = UUID.randomUUID().toString()
+                pendingSourceImports.clear()
+                pendingSourceImports[token] = PendingSource(
+                    file = file,
+                    provenance = preview.provenance,
+                    declaredSha256 = preview.declaredSha256,
+                    downloadUrl = preview.downloadUrl,
+                    liveUrl = preview.liveUrl,
+                    suggestedName = preview.suggestedName,
+                )
+                packagePreviewJson(file, preview.description ?: hermitApp.installer.describePackage(file))
+                    .put("cancelled", false).put("kind", "package").put("token", token)
+                    .put("downloadUrl", preview.downloadUrl ?: "")
+            }
+        }
+        "host.apps.inspectZip" -> {
+            val uri = pickZip() ?: return JSONObject().put("cancelled", true)
+            val file = copyToCache(uri)
+            val description = hermitApp.installer.describePackage(file)
+            val token = UUID.randomUUID().toString()
+            pendingSourceImports.clear()
+            pendingSourceImports[token] = PendingSource(
+                file = file, provenance = "import", declaredSha256 = null,
+                downloadUrl = null, liveUrl = null, suggestedName = null,
+            )
+            packagePreviewJson(file, description).put("cancelled", false).put("kind", "package").put("token", token)
+        }
+        "host.apps.confirmInspect" -> {
+            val token = params.getString("token")
+            val source = pendingSourceImports.remove(token)
+                ?: throw HermitException(ErrorCodes.SESSION_EXPIRED, "安装预览已失效，请重新选择来源")
+            val name = params.optString("name").takeIf { it.isNotBlank() }?.take(80)
+            try {
+                val result = hermitApp.installer.installPackageFile(
+                    source.file, name, provenance = source.provenance, declaredSha256 = source.declaredSha256,
+                    liveUrl = source.liveUrl, downloadUrl = source.downloadUrl, fallbackName = source.suggestedName,
+                    identityChoice = ::chooseIdentityInstall,
+                )
+                val updated = withContext(Dispatchers.IO) {
+                    val installedInstance = hermitApp.registry.getInstance(result.appId)!!
+                    val iconBytes = params.optString("iconPreviewDataUrl").takeIf { it.isNotBlank() }?.let(IconProcessor::decodePngDataUrl)
+                    val presented = hermitApp.registry.updatePresentation(
+                        result.appId,
+                        name ?: installedInstance.name,
+                        iconBytes,
+                        replaceIcon = iconBytes != null,
+                    )
+                    if (params.optBoolean("favorite")) hermitApp.registry.setFavorite(result.appId, true) else presented
+                }
+                shortcuts.update(updated)
+                updated.toJson().put("cancelled", false).put("installStrategy", "local").put("installKind", "package")
+            } finally {
+                source.file.delete()
+            }
+        }
         "host.apps.installOnline" -> {
             val url = normalizeUrl(params.optString("url"))
             if (Uri.parse(url).scheme.equals("http", true)
@@ -2248,6 +2333,57 @@ class MainActivity : ComponentActivity(), BridgeHost {
 
     private fun requireApp(app: WebAppInstance?): WebAppInstance =
         app ?: throw HermitException(ErrorCodes.ORIGIN_DENIED, "应用库不能调用页面数据接口")
+
+    /** Describes a resolved package for the confirm step, including a display icon. */
+    private suspend fun packagePreviewJson(file: File, description: PackageDescription): JSONObject = withContext(Dispatchers.IO) {
+        val iconDataUrl = description.icon?.let { icon ->
+            hermitApp.installer.extractPackageFile(file, icon)?.let { extracted ->
+                try {
+                    IconProcessor.centeredPngDataUrl { java.io.FileInputStream(extracted) }
+                } catch (_: Throwable) {
+                    null
+                } finally {
+                    extracted.delete()
+                }
+            }
+        }
+        JSONObject()
+            .put("manifestFound", description.manifestFound)
+            .put("name", description.name ?: "")
+            .put("versionName", description.versionName ?: "")
+            .put("versionCode", description.versionCode ?: 0L)
+            .put("happId", description.happId ?: "")
+            .put("entry", description.entry ?: "")
+            .put("iconDataUrl", iconDataUrl ?: "")
+            .put("bytes", description.bytes)
+    }
+
+    /** Copies a picked file into the cache so it stays valid until the user confirms. */
+    private suspend fun copyToCache(uri: Uri): File = withContext(Dispatchers.IO) {
+        val target = File(cacheDir, "import-preview-${UUID.randomUUID()}.zip")
+        val input = contentResolver.openInputStream(uri)
+            ?: throw HermitException(ErrorCodes.STORAGE, "无法读取所选文件")
+        try {
+            input.use { source ->
+                FileOutputStream(target).use { output ->
+                    val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                    var total = 0L
+                    while (true) {
+                        val read = source.read(buffer)
+                        if (read < 0) break
+                        total += read
+                        if (total > MAX_PREVIEW_ZIP_BYTES) throw HermitException(ErrorCodes.QUOTA, "压缩包超过 64 MiB")
+                        output.write(buffer, 0, read)
+                    }
+                    output.fd.sync()
+                }
+            }
+            target
+        } catch (error: Throwable) {
+            target.delete()
+            throw if (error is HermitException) error else HermitException(ErrorCodes.STORAGE, "无法读取所选文件")
+        }
+    }
 
     private suspend fun pickZip(): Uri? = suspendCancellableCoroutine { continuation ->
         if (pendingZip != null) {
@@ -3216,6 +3352,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
         private const val STORE_ORIGIN = "https://store.hermit.invalid"
         private const val STORE_URL = "$STORE_ORIGIN/index.html"
         private const val MAX_URL_LENGTH = 4096
+        private const val MAX_PREVIEW_ZIP_BYTES = 64L * 1024 * 1024
         private const val RELOAD_IN_PLACE = "reload"
         private const val RELOAD_RECREATE = "recreate"
         private const val MAX_POST_RELOAD_SCRIPT_CHARS = 64 * 1024

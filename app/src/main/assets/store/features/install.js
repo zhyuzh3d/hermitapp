@@ -27,6 +27,35 @@
       button.setAttribute("aria-checked", String(state.addToFavorites));
     });
   }
+  const URL_HINT = "普通网页会实时运行；ZIP 会下载校验后本地安装；Git 仓库优先读取 hermit-install.json，缺失时再选择仓库中实际存在的发布目录。";
+  function formatSize(bytes) {
+    let value = Number(bytes) || 0, unit = 0;
+    const units = ["B", "KB", "MB"];
+    while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
+    return value ? (unit === 0 ? String(value) : value.toFixed(value < 10 ? 1 : 0)) + " " + units[unit] : "";
+  }
+  function packageSummary(preview) {
+    if (!preview.manifestFound) return "压缩包内没有 hermit.json，将作为普通本地页面安装。";
+    const parts = ["已解析安装包"];
+    if (preview.name) parts.push(preview.name);
+    if (preview.happId) parts.push(preview.happId);
+    if (preview.versionName) parts.push("版本 " + preview.versionName);
+    const size = formatSize(preview.bytes);
+    if (size) parts.push(size);
+    return parts.join(" · ");
+  }
+  function showPackageFields(preview) {
+    const draft = state.addDraft;
+    draft.kind = "package";
+    draft.token = preview.token || draft.token;
+    $("#urlField").classList.add("hidden");
+    $("#versionField").classList.add("hidden");
+    $("#addSourceLabel").textContent = "已解析安装包";
+    $("#manifestStatus").textContent = packageSummary(preview);
+    if (preview.name) $("#name").value = preview.name;
+    if (preview.iconDataUrl && !draft.customIcon) showAddIcon(preview.iconDataUrl);
+    $("#confirmAddLabel").textContent = "确认安装";
+  }
   function openAdd(kind, value = {}) {
     state.addDraft = { kind, token:value.token || null, customIcon:null, defaultIcon:value.iconUrl || null };
     renderFavoriteChoice();
@@ -36,7 +65,8 @@
     $("#name").value = value.name || (value.url ? new URL(value.url).hostname : "");
     $("#addVersion").value = value.version || "1.0.0";
     $("#addSourceLabel").textContent = value.scanned ? "二维码链接" : "在线网址";
-    $("#manifestStatus").textContent = "普通网页会实时运行；ZIP 会下载校验后本地安装；Git 仓库优先读取 hermit-install.json，缺失时再选择仓库中实际存在的发布目录。";
+    $("#manifestStatus").textContent = URL_HINT;
+    $("#confirmAddLabel").textContent = "解析并确认";
     resetAddIcon();
     if (value.iconPreview) showAddIcon(value.iconPreview);
     open("#addPanel");
@@ -45,7 +75,11 @@
     }
   }
   bind("#addZip", async () => {
-    await installed(await host.call("apps.importZip", { favorite: state.addToFavorites }), "压缩包已校验并安装。" );
+    const preview = await host.call("apps.inspectZip", {});
+    if (preview.cancelled) { say("已取消添加。"); return; }
+    openAdd("package", { token: preview.token });
+    showPackageFields(preview);
+    say("压缩包已解压并解析，确认后开始安装。");
   });
   $$('[data-add-favorite]').forEach(button => {
     button.onclick = () => {
@@ -86,14 +120,22 @@
     const name = $("#name").value.trim();
     if (!name) { $("#name").focus(); throw new Error("应用名称不能为空。"); }
     const common = { name, version:$("#addVersion").value.trim(), favorite:state.addToFavorites, iconPreviewDataUrl:draft.customIcon || "" };
-    let onlineUrl = null;
-    if (draft.kind === "online") {
-      onlineUrl = validUrl("#url");
-      if (new URL(onlineUrl).protocol === "http:") {
-        const accepted = await confirmAction("允许未加密的 HTTP 页面？", onlineUrl + "\n\n网页内容和凭据可能被同一网络中的其他人读取或篡改。仅在你信任当前网络和服务时继续。", "仍然添加");
-        if (!accepted) return;
-        common.insecureConfirmed = true;
-      }
+    if (draft.kind === "package") {
+      await installed(await host.call("apps.confirmInspect", Object.assign(common, { token:draft.token })), "安装包已校验并安装。");
+      return;
+    }
+    const onlineUrl = validUrl("#url");
+    if (new URL(onlineUrl).protocol === "http:") {
+      const accepted = await confirmAction("允许未加密的 HTTP 页面？", onlineUrl + "\n\n网页内容和凭据可能被同一网络中的其他人读取或篡改。仅在你信任当前网络和服务时继续。", "仍然添加");
+      if (!accepted) return;
+      common.insecureConfirmed = true;
+    }
+    const preview = await host.call("apps.inspectUrl", { url:onlineUrl, insecureConfirmed:!!common.insecureConfirmed });
+    if (preview.cancelled) { say("已取消添加。"); return; }
+    if (preview.kind === "package") {
+      showPackageFields(preview);
+      say("已解析到 happ 信息，确认后开始安装。");
+      return;
     }
     const value = await host.call("apps.installOnline", Object.assign(common, { url:onlineUrl }));
     const message = value.installStrategy === "local" ? "来源内容已校验并安装为本地 happ，可创建开发副本。"

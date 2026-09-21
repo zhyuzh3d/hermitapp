@@ -29,6 +29,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.zip.ZipEntry
+import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
@@ -37,6 +38,18 @@ data class InstallResult(
     val appId: String,
     val releaseId: String,
     val treeHash: String,
+)
+
+/** What a package declares about itself, read without installing it. */
+data class PackageDescription(
+    val manifestFound: Boolean,
+    val name: String?,
+    val versionName: String?,
+    val versionCode: Long?,
+    val happId: String?,
+    val entry: String?,
+    val icon: String?,
+    val bytes: Long,
 )
 
 enum class IdentityInstallChoice { UPDATE, NEW_INSTANCE, CANCEL }
@@ -288,6 +301,72 @@ class InstallCoordinator(
                 zipFile.delete()
             }
         }
+    }
+
+    /**
+     * Reads the happ identity out of a package without installing it, so the
+     * library can confirm what is about to be added. The manifest is validated
+     * with the same rules as a real install, so a broken package fails here
+     * instead of after the user confirms.
+     */
+    fun describePackage(file: File): PackageDescription {
+        val entries = LinkedHashSet<String>()
+        var manifestText: String? = null
+        ZipFile(file).use { archive ->
+            for (entry in archive.entries()) {
+                if (entry.isDirectory) continue
+                entries.add(entry.name)
+                if (entry.name == MANIFEST_FILE && entry.size in 1..MANIFEST_BYTES) {
+                    manifestText = runCatching { archive.getInputStream(entry).readBytes().toString(Charsets.UTF_8) }.getOrNull()
+                }
+            }
+        }
+        val manifest = manifestText?.let { PackageManifestReader.readText(it) }
+        return PackageDescription(
+            manifestFound = manifest != null,
+            name = manifest?.name?.takeIf { it.isNotBlank() },
+            versionName = manifest?.versionName,
+            versionCode = manifest?.versionCode,
+            happId = manifest?.happId?.takeIf { it.isNotBlank() },
+            entry = manifest?.entry,
+            icon = manifest?.icon?.takeIf { it.isNotBlank() && it in entries },
+            bytes = file.length(),
+        )
+    }
+
+    /** Extracts one file out of a package into the cache so it can be shown as an icon. */
+    fun extractPackageFile(file: File, relative: String): File? {
+        val parts = relative.replace('\\', '/').split('/').filter { it.isNotBlank() && it != "." }
+        if (parts.isEmpty() || parts.any { it == ".." }) return null
+        val target = File(context.cacheDir, "preview-${UUID.randomUUID()}")
+        return try {
+            ZipFile(file).use { archive ->
+                val entry = archive.getEntry(parts.joinToString("/")) ?: return null
+                if (entry.size > MAX_ICON_BYTES) return null
+                archive.getInputStream(entry).use { input -> FileOutputStream(target).use { output -> input.copyTo(output) } }
+            }
+            target
+        } catch (_: Throwable) {
+            target.delete()
+            null
+        }
+    }
+
+    /** Installs a package that was already materialized, e.g. previewed before confirming. */
+    suspend fun installPackageFile(
+        file: File,
+        suggestedName: String?,
+        provenance: String,
+        declaredSha256: String? = null,
+        liveUrl: String? = null,
+        downloadUrl: String? = null,
+        fallbackName: String? = null,
+        identityChoice: suspend (WebAppInstance, String?) -> IdentityInstallChoice = { _, _ -> IdentityInstallChoice.NEW_INSTANCE },
+    ): InstallResult = FileInputStream(file).use { stream ->
+        installZip(
+            stream, suggestedName, provenance = provenance, declaredSha256 = declaredSha256, fallbackName = fallbackName,
+            source = HappSource.ONLINE, liveUrl = liveUrl, downloadUrl = downloadUrl, identityChoice = identityChoice,
+        )
     }
 
     suspend fun installUri(uri: Uri, suggestedName: String?,
@@ -548,6 +627,8 @@ class InstallCoordinator(
     private fun ByteArray.hex() = joinToString("") { "%02x".format(it) }
 
     companion object {
+        private const val MANIFEST_FILE = "hermit.json"
+        private const val MANIFEST_BYTES = 64L * 1024
         private const val MAX_ZIP_BYTES = 64L * 1024 * 1024
         private const val MAX_EXPANDED_BYTES = 256L * 1024 * 1024
         private const val MAX_SINGLE_FILE = 64L * 1024 * 1024

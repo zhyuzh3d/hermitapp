@@ -42,7 +42,12 @@ object PackageManifestReader {
         val file = File(root, "hermit.json")
         if (!file.exists()) return null
         if (file.length() > MAX_MANIFEST_BYTES) fail(ErrorCodes.QUOTA, "hermit.json 过大")
-        val json = runCatching { JSONObject(file.readText(Charsets.UTF_8)) }
+        return readText(file.readText(Charsets.UTF_8))
+    }
+
+    /** Parses a manifest that is already in memory, e.g. read straight out of a package. */
+    fun readText(text: String): PackageManifest {
+        val json = runCatching { JSONObject(text) }
             .getOrElse { fail(ErrorCodes.INVALID_ARGUMENT, "hermit.json 不是有效 JSON") }
         return when (val schema = json.optInt("schema", -1)) {
             1 -> readV1(json)

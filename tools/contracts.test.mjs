@@ -306,13 +306,40 @@ test("online entry separates live pages from direct packages and install descrip
   assert.match(installer, /directoryChoice\(resolved, choices\)/);
   assert.match(installer, /GITHUB_GATEWAY = "https:\/\/hermit\.airen\.life\/_repo\/github"/);
   assert.match(installer, /githubRepositoryFiles\(resolved, revision\)/);
-  assert.match(bridge, /host\\\.apps\\\.\(\?:installOnline\|importZip/);
+  assert.match(bridge, /host\\\.apps\\\.\(\?:installOnline\|inspectUrl\|inspectZip\|confirmInspect\|importZip/);
   assert.match(repository, /GITHUB\("github"/);
   assert.match(repository, /GITLAB\("gitlab"/);
   assert.match(repository, /GITEE\("gitee"/);
   for (const path of ["dist", "build", "release", "web", "public"]) assert.match(repository, new RegExp(`"${path}"`));
   assert.match(installer, /OnlineInstallResult\(app\.appId, null, "live", "live"\)/);
   assert.match(installer, /"online-descriptor"/);
+});
+
+test("add flow describes a package before installing and only installs on confirmation", () => {
+  const activity = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
+  const coordinator = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/install/InstallCoordinator.kt", "utf8");
+  const installer = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/install/RemoteSourceInstaller.kt", "utf8");
+  const capabilities = fs.readFileSync("api/capabilities.json", "utf8");
+  const bridge = fs.readFileSync("app/src/main/assets/bridge/hermit-v1.js", "utf8");
+  const shell = fs.readFileSync("app/src/main/assets/store/features/install.js", "utf8");
+  const host = fs.readFileSync("app/src/main/assets/store/platform/host.js", "utf8");
+  for (const method of ['"host.apps.inspectUrl"', '"host.apps.inspectZip"', '"host.apps.confirmInspect"']) {
+    assert.ok(activity.includes(method), `Native dispatch missing: ${method}`);
+  }
+  assert.match(capabilities, /"inspectUrl", "inspectZip", "confirmInspect"/);
+  for (const method of ['"apps.inspectUrl"', '"apps.inspectZip"', '"apps.confirmInspect"']) {
+    assert.ok(host.includes(method), `HermitUI host whitelist missing: ${method}`);
+  }
+  assert.match(coordinator, /fun describePackage\(file: File\): PackageDescription/);
+  assert.match(coordinator, /fun installPackageFile\(/);
+  assert.match(installer, /suspend fun previewOnline\(url: String\): SourcePreview/);
+  assert.match(installer, /data class SourcePreview/);
+  // The add sheet resolves first and needs a second tap before anything is installed.
+  assert.match(shell, /host\.call\("apps\.inspectZip", \{\}\)/);
+  assert.match(shell, /host\.call\("apps\.inspectUrl", \{ url:onlineUrl, insecureConfirmed:!!common\.insecureConfirmed \}\)/);
+  assert.match(shell, /host\.call\("apps\.confirmInspect", Object\.assign\(common, \{ token:draft\.token \}\)/);
+  assert.match(shell, /function showPackageFields\(preview\)/);
+  assert.equal(shell.includes('host.call("apps.importZip"'), false, "ZIP must not install without confirmation");
 });
 
 test("official shell keeps live fallback support and explicit local refresh", () => {

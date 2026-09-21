@@ -217,9 +217,14 @@ details[open] > summary { margin-bottom:12px; }
 .backup-apps-heading { display:flex; align-items:baseline; justify-content:space-between; gap:10px; border-top:1px solid var(--line); padding-top:18px; }
 .backup-apps-heading h3 { font-size:14px; }
 .backup-app-list { display:grid; gap:8px; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:12px 0 max(20px,env(safe-area-inset-bottom)); }
-.backup-app-row { display:flex; align-items:center; column-gap:16px; width:100%; min-width:0; padding:10px 12px; border:1px solid var(--line); border-radius:12px; background:var(--bg); text-align:left; }
-.backup-app-row > i { flex:none; margin-left:auto; color:var(--muted); }
-.backup-app-icon { display:grid; place-items:center; width:42px; height:42px; flex:0 0 42px; overflow:hidden; border-radius:12px; background:var(--blue-bg); color:var(--blue); background-position:center; background-size:cover; }
+/* Grid, not flex: the Android 11 Chrome/83 WebView applies the flex gap shorthand
+   only inconsistently and never the column-gap longhand. Grid gap has been
+   supported since Chrome 66, so the icon / label / action tracks stay evenly
+   spaced there. justify-content is reset because the shared button rule centers
+   content, which would otherwise squeeze the tracks together. */
+.backup-app-row { display:grid; grid-template-columns:42px minmax(0,1fr) auto; align-items:center; justify-content:flex-start; gap:12px; width:100%; min-width:0; padding:10px 12px; border:1px solid var(--line); border-radius:12px; background:var(--bg); text-align:left; }
+.backup-app-row > i { justify-self:end; color:var(--muted); }
+.backup-app-icon { display:grid; place-items:center; width:42px; height:42px; overflow:hidden; border-radius:12px; background:var(--blue-bg); color:var(--blue); background-position:center; background-size:cover; }
 .backup-app-icon.custom { background-color:var(--soft); color:transparent; }
 .backup-app-copy { display:grid; flex:1 1 auto; gap:3px; min-width:0; }
 .backup-app-copy strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }

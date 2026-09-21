@@ -51,6 +51,23 @@ class RemoteSourceInstaller(
     private data class RepositoryFile(val path: String, val size: Long)
 
     /**
+     * What a URL resolves to before anything is installed. `kind` is "package"
+     * when a local happ can be materialized, "repository" for a Git source and
+     * "live" for a plain page; only "package" carries a downloaded file.
+     */
+    data class SourcePreview(
+        val kind: String,
+        val file: File? = null,
+        val declaredSha256: String? = null,
+        val downloadUrl: String? = null,
+        val pageUrl: String? = null,
+        val suggestedName: String? = null,
+        val liveUrl: String? = null,
+        val provenance: String = "https-package",
+        val description: PackageDescription? = null,
+    )
+
+    /**
      * A URL makes this an online-source happ. If the origin publishes
      * /hermit-install.json, its package is materialized locally by default;
      * otherwise the URL is saved for live runtime.
@@ -96,6 +113,57 @@ class RemoteSourceInstaller(
 
         installManifestPackage(manifest, name, normalized, "online-manifest", "manifest", identityChoice)
     }
+
+    /**
+     * Resolves a URL far enough to show the user what will be installed. The
+     * downloaded package is kept in the cache and reused by the confirming
+     * install, so a package is never downloaded twice.
+     */
+    suspend fun previewOnline(url: String): SourcePreview = withContext(Dispatchers.IO) {
+        val normalized = validateNetworkUrl(url)
+        val parsed = normalized.toHttpUrl()
+        RepositorySourceRules.parse(normalized)?.let { repository ->
+            return@withContext SourcePreview("repository", pageUrl = normalized, suggestedName = repository.repository)
+        }
+        if (parsed.encodedPath.endsWith(".zip", ignoreCase = true)) {
+            return@withContext packagePreview(download(normalized), downloadUrl = normalized)
+        }
+        if (parsed.encodedPath.substringAfterLast('/').equals(MANIFEST_FILE_NAME, ignoreCase = true)) {
+            val manifest = readInstallManifest(parsed, required = true)!!
+            return@withContext packagePreview(
+                downloadSameOrigin(manifest.packageUrl, manifest.manifestUrl),
+                downloadUrl = manifest.packageUrl,
+                declaredSha256 = manifest.sha256,
+                provenance = "online-descriptor",
+            )
+        }
+        discoverInstallManifest(normalized)?.let { manifest ->
+            return@withContext packagePreview(
+                downloadSameOrigin(manifest.packageUrl, manifest.manifestUrl),
+                downloadUrl = manifest.packageUrl,
+                declaredSha256 = manifest.sha256,
+                liveUrl = normalized,
+                provenance = "online-manifest",
+            )
+        }
+        SourcePreview("live", pageUrl = normalized, suggestedName = parsed.host)
+    }
+
+    private fun packagePreview(
+        file: File,
+        downloadUrl: String?,
+        declaredSha256: String? = null,
+        liveUrl: String? = null,
+        provenance: String = "https-package",
+    ): SourcePreview = SourcePreview(
+        kind = "package",
+        file = file,
+        declaredSha256 = declaredSha256,
+        downloadUrl = downloadUrl,
+        liveUrl = liveUrl,
+        provenance = provenance,
+        description = installer.describePackage(file),
+    )
 
     private suspend fun installRepository(
         source: RepositorySource,
@@ -832,6 +900,7 @@ class RemoteSourceInstaller(
         private const val MAX_GITHUB_JSON_BYTES = 4 * 1024 * 1024
         private const val MAX_REPOSITORY_ENTRIES = 20_000
         private const val MAX_REPOSITORY_FILES = 5_000
+        private const val MANIFEST_FILE_NAME = "hermit-install.json"
         private const val MAX_MANIFEST_BYTES = 64 * 1024
         private const val MAX_URL_LENGTH = 4096
         private const val GITHUB_GATEWAY = "https://hermit.airen.life/_repo/github"
