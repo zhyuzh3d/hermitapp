@@ -264,7 +264,7 @@ test("development password is read only outside a deliberate modal save", () => 
   assert.match(html, /id="agentPassword"[^>]*readonly/);
   assert.match(html, /id="editAgentPassword"/);
   assert.match(html, /id="agentPasswordPanel"/);
-  assert.match(html, /id="agentPasswordDraft"[^>]*pattern="\[0-9A-Za-z\]\{6\}"/);
+  assert.match(html, /id="agentPasswordDraft"[^>]*pattern="\[0-9\]\{6\}"/);
   assert.match(html, /id="randomAgentPassword"/);
   assert.match(development, /crypto\.getRandomValues\(random\)/);
   assert.match(development, /host\.call\("agent\.resetPassword", \{ password \}\)/);
@@ -373,7 +373,8 @@ test("happ source and runtime mode remain independent across Native and HermitUI
   assert.match(model, /enum class HappRuntimeMode \{ LOCAL, LIVE \}/);
   assert.match(registry, /source_kind TEXT NOT NULL/);
   assert.match(registry, /runtime_mode TEXT NOT NULL/);
-  assert.match(registry, /private const val VERSION = 12/);
+  assert.match(registry, /private const val VERSION = 13/);
+  assert.match(registry, /CREATE TABLE IF NOT EXISTS settings/);
   assert.match(registry, /current\.activeReleaseId/);
   assert.match(remote, /encodedPath\("\/hermit-install\.json"\)/);
   assert.match(remote, /downloadSameOrigin\(packageUrl, updateUrl\)/);

@@ -181,6 +181,12 @@ class RecordsStore(private val context: Context) {
         File(context.filesDir, "instances/$appId/data/$generation").deleteRecursively()
     }
 
+    /** Monotonic change counter of one data generation; 0 when nothing was ever written. */
+    fun revision(appId: String, generation: String): Long = open(appId, generation).use { db ->
+        db.rawQuery("SELECT revision_seq FROM meta WHERE id = 1", null)
+            .use { if (it.moveToFirst()) it.getLong(0) else 0L }
+    }
+
     private fun open(appId: String, generation: String): SQLiteDatabase {
         require(appId.matches(Regex("[0-9a-fA-F-]{36}")))
         require(generation.matches(Regex("[0-9a-fA-F-]{36}")))

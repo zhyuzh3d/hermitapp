@@ -14,8 +14,14 @@
   let sequence = 0;
   const MAX_PENDING = 16;
 
+  // Package installation and anything that waits on a system picker, the camera
+  // or the QR scanner stay open until the user or the device finishes, or until a
+  // whole backup is written. The default minute would abandon them while the user
+  // is still choosing a folder, so they share the long timeout instead.
+  const LONG_METHODS = /^(?:host\.apps\.(?:installOnline|importZip|installPackageUrl|installGitHub|updateFromSource|reinstall|pickIcon|pickDirectory|importDirectory|shareSave|exportDev|scanQr)|host\.backup\.(?:export|exportAll|exportSettings|restore|restoreData|autoBackup\.pickDirectory|autoBackup\.save)|files\.(?:import|pickImage|pickInline|export)|camera\.capture)$/;
+
   function requestTimeout(method, params) {
-    if (/^host\.apps\.(?:installOnline|importZip|installPackageUrl|installGitHub|updateFromSource|reinstall)$/.test(method)) return 600000;
+    if (LONG_METHODS.test(method)) return 600000;
     if (!/^network\.(?:request|openStream|readStream|openSocket|readSocket)$/.test(method)) return 60000;
     const requested = Number(params && params.timeoutMs);
     if (!Number.isFinite(requested)) return /^network\.read(?:Stream|Socket)$/.test(method) ? 195000 : 60000;

@@ -102,6 +102,7 @@ class AppRegistry(private val context: Context) : SQLiteOpenHelper(context, "her
               created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
             )
         """.trimIndent())
+        createSettings(db)
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
@@ -127,6 +128,7 @@ class AppRegistry(private val context: Context) : SQLiteOpenHelper(context, "her
         db.execSQL("CREATE TABLE IF NOT EXISTS operations (operation_id TEXT PRIMARY KEY, app_id TEXT, kind TEXT NOT NULL, state TEXT NOT NULL, idempotency_key TEXT, input_hash TEXT, expected_release_id TEXT, result_release_id TEXT, error_code TEXT, error_message TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE IF NOT EXISTS diagnostic_events (id INTEGER PRIMARY KEY AUTOINCREMENT, app_id TEXT, session_id TEXT, method TEXT NOT NULL, decision TEXT NOT NULL, result_code TEXT, duration_ms INTEGER, created_at INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE IF NOT EXISTS profile_cleanup (profile_name TEXT PRIMARY KEY, app_id TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
+        createSettings(db)
         val columns = db.rawQuery("PRAGMA table_info(instances)", null).use { c -> buildSet { while (c.moveToNext()) add(c.getString(1)) } }
         val additions = mapOf("launch_channel" to "TEXT NOT NULL DEFAULT 'STABLE'", "source_adapter" to "TEXT NOT NULL DEFAULT 'unknown'", "source_spec" to "TEXT NOT NULL DEFAULT '{}'", "developer_enabled" to "INTEGER NOT NULL DEFAULT 0", "favorite" to "INTEGER NOT NULL DEFAULT 0", "icon_url" to "TEXT", "default_icon_url" to "TEXT", "happ_id" to "TEXT", "publisher_key_id" to "TEXT", "download_url" to "TEXT", "download_version_code" to "INTEGER", "download_version_name" to "TEXT", "update_url" to "TEXT", "notification_enabled" to "INTEGER NOT NULL DEFAULT 0", "allow_cross_origin_network" to "INTEGER NOT NULL DEFAULT 0", "state" to "TEXT NOT NULL DEFAULT 'ready'")
         additions.filterKeys { it !in columns }.forEach { (name, definition) -> db.execSQL("ALTER TABLE instances ADD COLUMN $name $definition") }
@@ -774,6 +776,28 @@ class AppRegistry(private val context: Context) : SQLiteOpenHelper(context, "her
         """.trimIndent())
     }
 
+    private fun createSettings(db: SQLiteDatabase) {
+        db.execSQL("""
+            CREATE TABLE IF NOT EXISTS settings (
+              setting_key TEXT PRIMARY KEY,
+              setting_value TEXT NOT NULL,
+              updated_at INTEGER NOT NULL
+            )
+        """.trimIndent())
+    }
+
+    fun setting(key: String): String? = readableDatabase.query("settings", arrayOf("setting_value"),
+        "setting_key = ?", arrayOf(key), null, null, null).use { cursor ->
+        if (cursor.moveToFirst()) cursor.getString(0) else null
+    }
+
+    fun setSetting(key: String, value: String) {
+        val values = ContentValues().apply {
+            put("setting_key", key); put("setting_value", value); put("updated_at", System.currentTimeMillis())
+        }
+        writableDatabase.insertWithOnConflict("settings", null, values, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+
     private fun createDevWorkspaces(db: SQLiteDatabase) {
         db.execSQL("""
             CREATE TABLE IF NOT EXISTS dev_workspaces (
@@ -799,5 +823,8 @@ class AppRegistry(private val context: Context) : SQLiteOpenHelper(context, "her
         return "${uri.scheme!!.lowercase()}://${uri.host!!.lowercase()}$port"
     }
 
-    companion object { private const val VERSION = 12 }
+    companion object {
+        private const val VERSION = 13
+        const val SETTING_THEME = "theme"
+    }
 }

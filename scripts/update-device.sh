@@ -3,6 +3,9 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 SDK_DIR=${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}
+# apksigner is a JVM tool, so the JDK must be exported here as well; build-release.sh
+# only covers the build it runs itself.
+export JAVA_HOME=${JAVA_HOME:-/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home}
 ADB=$SDK_DIR/platform-tools/adb
 AAPT=$SDK_DIR/build-tools/37.0.0/aapt
 APKSIGNER=$SDK_DIR/build-tools/37.0.0/apksigner

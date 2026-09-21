@@ -98,13 +98,13 @@
   });
   bind("#saveAgentPassword", async () => {
     const password = $("#agentPasswordDraft").value.trim();
-    if (!/^[0-9A-Za-z]{6}$/.test(password)) throw new Error("密码必须是 6 位数字或大小写字母。");
+    if (!/^[0-9]{6}$/.test(password)) throw new Error("密码必须是 6 位数字。");
     const value = await host.call("agent.resetPassword", { password });
     renderAgent(value);
     close("#agentPasswordPanel");
     say("新密码已生效，旧密码已失效。");
   });
-  $("#agentPasswordDraft").oninput = event => { event.currentTarget.value = event.currentTarget.value.replace(/[^0-9A-Za-z]/g, "").slice(0, 6); };
+  $("#agentPasswordDraft").oninput = event => { event.currentTarget.value = event.currentTarget.value.replace(/\D/g, "").slice(0, 6); };
   bind("#copyAgentAddress", () => {
     const address = $("#agentUrl").dataset.address;
     if (!address) throw new Error("开发服务尚未启动。");

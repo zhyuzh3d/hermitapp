@@ -20,6 +20,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.storage.StorageManager
+import android.provider.DocumentsContract
 import android.provider.Settings
 import android.view.Gravity
 import android.view.PixelCopy
@@ -61,6 +62,8 @@ import io.github.zhyuzh3d.hermit.bridge.BridgeController
 import io.github.zhyuzh3d.hermit.bridge.BridgeHost
 import io.github.zhyuzh3d.hermit.bridge.LegacyBridgeController
 import io.github.zhyuzh3d.hermit.bridge.PageBridge
+import io.github.zhyuzh3d.hermit.backup.AutoBackupCoordinator
+import io.github.zhyuzh3d.hermit.backup.AutoBackupStore
 import io.github.zhyuzh3d.hermit.backup.BackupCoordinator
 import io.github.zhyuzh3d.hermit.capability.TtsController
 import io.github.zhyuzh3d.hermit.capability.AudioController
@@ -89,6 +92,7 @@ import io.github.zhyuzh3d.hermit.model.HappSource
 import io.github.zhyuzh3d.hermit.model.LaunchChannel
 import io.github.zhyuzh3d.hermit.model.HermitException
 import io.github.zhyuzh3d.hermit.model.WebAppInstance
+import io.github.zhyuzh3d.hermit.registry.AppRegistry
 import io.github.zhyuzh3d.hermit.runtime.LocalContentGateway
 import io.github.zhyuzh3d.hermit.runtime.OfficialShellManager
 import io.github.zhyuzh3d.hermit.runtime.ObjectAssetGateway
@@ -122,8 +126,8 @@ import okhttp3.Request
 
 class MainActivity : ComponentActivity(), BridgeHost {
     private val hermitApp get() = application as HermitApplication
-    private val records by lazy { RecordsStore(this) }
-    private val files by lazy { FileStore(this) }
+    private val records get() = hermitApp.records
+    private val files get() = hermitApp.files
     private val shortcuts by lazy { ShortcutHost(this) }
     private val tts by lazy { TtsController(this) }
     private val audio by lazy { AudioController(this) }
@@ -136,7 +140,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
     private val infrared by lazy { InfraredController(this) }
     private val device by lazy { DeviceController(this) }
     private val nativeHttp by lazy { NativeHttpClient(files) }
-    private val backup by lazy { BackupCoordinator(this, hermitApp.registry, hermitApp.installer, records, files, hermitApp.notifications.repository) }
+    private val backup get() = hermitApp.backup
     private lateinit var root: android.widget.FrameLayout
     private var webView: WebView? = null
     private var serviceWorkerClient: ServiceWorkerClientCompat? = null
@@ -164,6 +168,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
     private var storeRunningMode = OfficialShellManager.Mode.LOCAL.value
     private var pendingZip: CancellableContinuation<Uri?>? = null
     private var pendingTree: CancellableContinuation<Uri?>? = null
+    private var pendingAutoBackupTree: Uri? = null
     private var pendingFile: CancellableContinuation<Uri?>? = null
     private var pendingImage: CancellableContinuation<Uri?>? = null
     private var pendingFileExport: CancellableContinuation<Uri?>? = null
@@ -1590,12 +1595,59 @@ class MainActivity : ComponentActivity(), BridgeHost {
         "host.backup.exportAll" -> {
             val uri = createBackupDocument("Hermit-full-${backupTimestamp()}.hermit-backup.zip")
                 ?: return JSONObject().put("cancelled", true)
-            backup.exportAll(uri, params.optString("theme", "system")).put("cancelled", false)
+            backup.exportAll(uri).put("cancelled", false)
         }
         "host.backup.exportSettings" -> {
             val uri = createBackupDocument("Hermit-settings-${backupTimestamp()}.hermit-backup.zip")
                 ?: return JSONObject().put("cancelled", true)
-            backup.exportSettings(uri, params.optString("theme", "system")).put("cancelled", false)
+            backup.exportSettings(uri).put("cancelled", false)
+        }
+        "host.backup.autoBackup.get" -> hermitApp.autoBackup.status()
+        "host.backup.autoBackup.pickDirectory" -> {
+            val uri = pickBackupDirectory() ?: return JSONObject().put("cancelled", true)
+            JSONObject().put("cancelled", false).put("directoryName", treeDisplayName(uri) ?: "所选目录")
+        }
+        "host.backup.autoBackup.save" -> {
+            val auto = hermitApp.autoBackup
+            val existing = auto.store.snapshot()
+            val applyPicked = params.optBoolean("applyPickedDirectory", false)
+            val picked = if (applyPicked) {
+                pendingAutoBackupTree
+                    ?: throw HermitException(ErrorCodes.SESSION_EXPIRED, "目录选择已失效，请重新选择")
+            } else null
+            val treeUri = picked?.toString() ?: existing.treeUri
+            val enabled = params.optBoolean("enabled", existing.enabled)
+            if (enabled && treeUri.isNullOrBlank()) throw HermitException(ErrorCodes.INVALID_ARGUMENT, "请先选择备份目录")
+            val directoryName = if (picked != null) treeDisplayName(picked) ?: "所选目录" else existing.directoryName
+            val keepCount = params.optInt("keepCount", existing.keepCount)
+            val hour = params.optInt("hour", existing.hour)
+            val minute = params.optInt("minute", existing.minute)
+            val exactAlarm = if (enabled) ensureExactAlarmAccess() else false
+            auto.store.save(enabled, treeUri, directoryName, keepCount, hour, minute)
+            pendingAutoBackupTree = null
+            auto.scheduler.rebuild()
+            auto.status().put("saved", true)
+                .put("exactAlarmAvailable", if (enabled) exactAlarm else auto.scheduler.exactAlarmAvailable())
+        }
+        "host.backup.autoBackup.runNow" -> when (val outcome = hermitApp.autoBackup.runNow()) {
+            is AutoBackupCoordinator.Outcome.Completed -> JSONObject().put("outcome", "completed")
+                .put("fileName", outcome.fileName).put("bytes", outcome.bytes).put("removed", outcome.removed)
+            is AutoBackupCoordinator.Outcome.Skipped -> JSONObject().put("outcome", "skipped").put("message", outcome.reason)
+            is AutoBackupCoordinator.Outcome.Failed -> JSONObject().put("outcome", "failed").put("message", outcome.message)
+        }
+        "host.settings.get" -> JSONObject().put("theme", hermitApp.registry.setting(AppRegistry.SETTING_THEME)
+            ?.takeIf { it in THEMES } ?: "system")
+        "host.settings.set" -> {
+            val key = params.optString("key")
+            val value = params.optString("value")
+            when (key) {
+                AppRegistry.SETTING_THEME -> {
+                    if (value !in THEMES) throw HermitException(ErrorCodes.INVALID_ARGUMENT, "主题必须是 system、light 或 dark")
+                    hermitApp.registry.setSetting(AppRegistry.SETTING_THEME, value)
+                }
+                else -> throw HermitException(ErrorCodes.INVALID_ARGUMENT, "不支持的设置项：$key")
+            }
+            JSONObject().put("saved", true)
         }
         "host.backup.restore" -> {
             val uri = pickBackup() ?: return JSONObject().put("cancelled", true)
@@ -2369,8 +2421,42 @@ class MainActivity : ComponentActivity(), BridgeHost {
         iconPicker.launch("image/*")
     }
 
-    private suspend fun inspectDirectory(uri: Uri): JSONObject = withContext(Dispatchers.IO) {
-        val tree = androidx.documentfile.provider.DocumentFile.fromTreeUri(this@MainActivity, uri)
+    /**
+     * Picks the automatic backup directory and keeps the grant across restarts.
+     * A write probe fails here rather than at the scheduled time.
+     */
+    private suspend fun pickBackupDirectory(): Uri? {
+        val uri = pickTree() ?: return null
+        return withContext(Dispatchers.IO) {
+            val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            runCatching { contentResolver.takePersistableUriPermission(uri, flags) }
+            if (!contentResolver.persistedUriPermissions.any { it.uri == uri && it.isWritePermission }) {
+                throw HermitException(ErrorCodes.STORAGE, "所选位置不支持长期写入授权，请改选其他目录")
+            }
+            probeDirectoryWritable(uri)
+            pendingAutoBackupTree = uri
+            uri
+        }
+    }
+
+    private fun probeDirectoryWritable(treeUri: Uri) {
+        val documentId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull()
+            ?: throw HermitException(ErrorCodes.STORAGE, "无法读取所选目录")
+        val parent = DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId)
+        val probe = DocumentsContract.createDocument(contentResolver, parent, "application/octet-stream", "hermit-write-probe.tmp")
+            ?: throw HermitException(ErrorCodes.STORAGE, "所选目录不可写入，请改选其他目录")
+        runCatching { DocumentsContract.deleteDocument(contentResolver, probe) }
+    }
+
+    private fun treeDisplayName(treeUri: Uri): String? = runCatching {
+        val documentId = DocumentsContract.getTreeDocumentId(treeUri)
+        contentResolver.query(
+            DocumentsContract.buildDocumentUriUsingTree(treeUri, documentId),
+            arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null,
+        )?.use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+    }.getOrNull()
+
+    private suspend fun inspectDirectory(uri: Uri): JSONObject = withContext(Dispatchers.IO) {        val tree = androidx.documentfile.provider.DocumentFile.fromTreeUri(this@MainActivity, uri)
             ?: throw HermitException(ErrorCodes.STORAGE, "无法读取所选目录")
         val manifestFile = tree.findFile("hermit.json")?.takeIf { it.isFile }
         val manifest = manifestFile?.let { file ->
@@ -3046,6 +3132,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
         device.shutdown()
         pendingZip?.cancel()
         pendingTree?.cancel()
+        pendingAutoBackupTree = null
         pendingFile?.cancel()
         pendingImage?.cancel()
         pendingFileExport?.cancel()
@@ -3111,6 +3198,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
     companion object {
         const val EXTRA_APP_ID = "io.github.zhyuzh3d.hermit.APP_ID"
         const val EXTRA_HAPP_ID = "io.github.zhyuzh3d.hermit.HAPP_ID"
+        private val THEMES = setOf("system", "light", "dark")
         const val EXTRA_PUBLISHER_KEY_ID = "io.github.zhyuzh3d.hermit.PUBLISHER_KEY_ID"
         const val EXTRA_NOTIFICATION_ID = "io.github.zhyuzh3d.hermit.NOTIFICATION_ID"
         const val EXTRA_NOTIFICATION_DATA = "io.github.zhyuzh3d.hermit.NOTIFICATION_DATA"

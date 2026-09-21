@@ -17,6 +17,8 @@
   async function start() {
     if (starting || !host.ready()) return;
     starting = true; connected = true;
+    // The stored theme is applied before the first real screen is rendered.
+    await H.features.settings.loadStoredTheme();
     $("#browserNotice").classList.add("hidden");
     $("#hostActions").classList.remove("hidden");
     $("#loading").classList.remove("hidden");

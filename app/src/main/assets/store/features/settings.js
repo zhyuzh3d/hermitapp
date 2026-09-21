@@ -26,20 +26,28 @@
   addEventListener("hermitlanguagechange", renderLanguageChoice);
   let theme = "system";
   const systemDark = matchMedia("(prefers-color-scheme: dark)");
-  try { theme = localStorage.getItem("hermit.theme") || "system"; } catch (_) {}
   function resolvedTheme() { return theme === "system" ? (systemDark.matches ? "dark" : "light") : theme; }
   function reportTheme() {
     host.reportTheme(resolvedTheme()).catch(() => {});
   }
-  function applyTheme(value) {
+  function applyTheme(value, persist = true) {
     theme = ["system", "light", "dark"].includes(value) ? value : "system";
     if (theme === "system") delete document.documentElement.dataset.theme;
     else document.documentElement.dataset.theme = theme;
     selected("#themeChoices", "themeChoice", theme);
-    try { localStorage.setItem("hermit.theme", theme); } catch (_) {}
+    if (persist) host.call("settings.set", { key:"theme", value:theme }).catch(() => {});
     reportTheme();
   }
-  applyTheme(theme);
+  // The theme lives in the Hermit database so an unattended backup can store it.
+  async function loadStoredTheme() {
+    try {
+      const value = await host.call("settings.get", {});
+      applyTheme(value.theme || "system", false);
+    } catch (_) {
+      applyTheme("system", false);
+    }
+  }
+  applyTheme(theme, false);
   addEventListener("hermitready", reportTheme);
   const systemThemeChanged = () => { if (theme === "system") reportTheme(); };
   if (systemDark.addEventListener) systemDark.addEventListener("change", systemThemeChanged);
@@ -72,8 +80,134 @@
   }
   bind("#restoreBackupSettings", async () => { const value = await host.call("backup.restore", {}); if (!value.cancelled) showRestoreResult(value); });
   bind("#openBackupActions", async () => { await loadBackupApps(); open("#backupActionsPanel"); });
-  bind("#backupAll", async () => { await host.call("backup.exportAll", { theme }); say("全部备份已导出。"); close("#backupActionsPanel"); });
-  bind("#backupSettings", async () => { await host.call("backup.exportSettings", { theme }); say("Hermit 设置备份已导出。"); close("#backupActionsPanel"); });
+  bind("#backupAll", async () => { await host.call("backup.exportAll", {}); say("全部备份已导出。"); close("#backupActionsPanel"); });
+  bind("#backupSettings", async () => { await host.call("backup.exportSettings", {}); say("Hermit 设置备份已导出。"); close("#backupActionsPanel"); });
+
+  let autoBackupPicked = false;
+  // The retention picker is a bottom sheet in the app's own style, so the value
+  // lives in this module instead of a native <select>.
+  const KEEP_COUNT_MIN = 1;
+  const KEEP_COUNT_MAX = 10;
+  let autoBackupKeepCount = 3;
+  const keepCountText = value => value + " 份";
+  function renderKeepCount() {
+    const label = $("#autoBackupKeepCountValue");
+    if (label) label.textContent = keepCountText(autoBackupKeepCount);
+    selected("#autoBackupKeepCountChoices", "keepCount", String(autoBackupKeepCount));
+  }
+  function buildKeepCountChoices() {
+    const root = $("#autoBackupKeepCountChoices");
+    if (!root) return;
+    root.replaceChildren();
+    for (let value = KEEP_COUNT_MIN; value <= KEEP_COUNT_MAX; value += 1) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.keepCount = String(value);
+      button.setAttribute("aria-pressed", "false");
+      const label = document.createElement("span"); label.textContent = keepCountText(value);
+      const check = document.createElement("i");
+      check.className = "fa-solid fa-check"; check.setAttribute("aria-hidden", "true");
+      button.append(label, check);
+      button.onclick = () => { autoBackupKeepCount = value; renderKeepCount(); close("#autoBackupKeepCountPanel"); };
+      root.append(button);
+    }
+  }
+  buildKeepCountChoices();
+  renderKeepCount();
+  $("#autoBackupKeepCountPick").onclick = () => open("#autoBackupKeepCountPanel");
+  function two(value) { return String(value).padStart(2, "0"); }
+  function formatBytes(value) {
+    const bytes = Number(value) || 0;
+    if (bytes < 1024) return bytes + " B";
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + " KB";
+    return (bytes / (1024 * 1024)).toFixed(1) + " MB";
+  }
+  function autoBackupTime(value) { return two(value.hour) + ":" + two(value.minute); }
+  function autoBackupSummary(value) {
+    if (!value.enabled) return value.hasDirectory ? "未启用 · 目录：" + (value.directoryName || "已选择") : "未启用";
+    return "每天 " + autoBackupTime(value) + " · 保留 " + value.keepCount + " 份" + (value.directoryName ? " · " + value.directoryName : "");
+  }
+  function autoBackupStatusText(value) {
+    if (value.needsPermission) return "备份目录授权已失效，请重新选择目录后保存。";
+    if (!value.enabled) return "启用后会每天在设定时间对 Hermit 与全部 happ 做一次完整备份；未选择目录时不会执行。";
+    if (!value.exactAlarmAvailable) return "系统未允许精确闹钟，备份时间可能推迟，请在系统设置中允许 Hermit 使用闹钟。";
+    const parts = [];
+    if (value.lastStatus === "success") parts.push("上次成功：" + (value.lastRunAt ? new Date(value.lastRunAt).toLocaleString() : "已完成") + (value.lastBytes ? "（" + formatBytes(value.lastBytes) + "）" : ""));
+    else if (value.lastStatus === "skipped") parts.push("上次跳过：" + (value.lastMessage || "数据没有变化"));
+    else if (value.lastStatus === "failed") parts.push("上次失败：" + (value.lastMessage || "未知原因"));
+    else parts.push("尚未执行过自动备份。");
+    parts.push("下次运行：" + new Date(value.nextRunAt).toLocaleString());
+    if (value.batteryPercent !== null && value.batteryPercent <= value.minBatteryPercent) parts.push("当前电量 " + value.batteryPercent + "%，低于 " + value.minBatteryPercent + "% 时不会执行。");
+    return parts.join(" ");
+  }
+  // A busy button replaces its own children while work is in flight, so this
+  // label lives outside the picker button and is only ever set through here.
+  function setAutoBackupDirectory(name) {
+    const label = $("#autoBackupDirectory");
+    if (label) label.textContent = name || "尚未选择";
+  }
+  function renderAutoBackup(value) {
+    const summary = $("#autoBackupSummary");
+    if (summary) summary.textContent = autoBackupSummary(value);
+    const toggle = $("#autoBackupSwitch");
+    if (toggle) { toggle.setAttribute("aria-checked", value.enabled ? "true" : "false"); toggle.classList.toggle("on", !!value.enabled); }
+    setAutoBackupDirectory(value.directoryName);
+    if (Number.isFinite(value.keepCount)) autoBackupKeepCount = value.keepCount;
+    renderKeepCount();
+    const time = $("#autoBackupTime");
+    if (time && document.activeElement !== time) time.value = autoBackupTime(value);
+    const status = $("#autoBackupStatus");
+    if (status) { status.textContent = autoBackupStatusText(value); status.classList.toggle("error", value.needsPermission || value.lastStatus === "failed"); }
+    autoBackupPicked = false;
+  }
+  async function refreshAutoBackup() {
+    const value = await host.call("backup.autoBackup.get", {});
+    renderAutoBackup(value);
+    return value;
+  }
+  bind("#openAutoBackup", async () => {
+    await refreshAutoBackup();
+    open("#autoBackupPanel");
+  });
+  $("#autoBackupSwitch").onclick = () => {
+    const button = $("#autoBackupSwitch");
+    const on = button.getAttribute("aria-checked") !== "true";
+    button.classList.toggle("on", on);
+    button.setAttribute("aria-checked", String(on));
+  };
+  bind("#autoBackupPickDirectory", async () => {
+    const value = await host.call("backup.autoBackup.pickDirectory", {});
+    if (value.cancelled) return;
+    autoBackupPicked = true;
+    setAutoBackupDirectory(value.directoryName || "所选目录");
+  });
+  bind("#autoBackupSave", async () => {
+    const parts = ($("#autoBackupTime").value || "").split(":");
+    const hour = Number(parts[0]), minute = Number(parts[1]);
+    if (!Number.isInteger(hour) || !Number.isInteger(minute) || hour < 0 || hour > 23 || minute < 0 || minute > 59) {
+      say("请设定每天的备份时间。", true);
+      return;
+    }
+    const value = await host.call("backup.autoBackup.save", {
+      enabled: $("#autoBackupSwitch").getAttribute("aria-checked") === "true",
+      keepCount: autoBackupKeepCount,
+      hour,
+      minute,
+      applyPickedDirectory: autoBackupPicked,
+    });
+    renderAutoBackup(value);
+    close("#autoBackupPanel");
+    if (value.enabled) {
+      say("自动备份已设置为每天 " + two(hour) + ":" + two(minute) + "。");
+      if (!value.exactAlarmAvailable) say("系统未允许精确闹钟，备份时间可能推迟。", true);
+    } else say("自动备份已关闭。");
+  });
+  bind("#autoBackupRunNow", async () => {
+    const value = await host.call("backup.autoBackup.runNow", {});
+    if (value.outcome === "completed") say("已备份到所选目录" + (value.removed ? "，并清理 " + value.removed + " 份旧备份。" : "。"));
+    else say(value.message || "本次未执行备份。", true);
+    await refreshAutoBackup();
+  });
   async function loadBackupApps() {
     const root = $("#backupApps"); if (!root) return;
     root.replaceChildren();
@@ -218,9 +352,10 @@
 
   bind("#supportRepository", () => host.call("about.openRepository", {}));
   async function load() {
-    const results = await Promise.allSettled([loadAbout(), loadVoiceSettings(true), loadShellStatus()]);
+    const results = await Promise.allSettled([loadAbout(), loadVoiceSettings(true), loadShellStatus(), refreshAutoBackup()]);
     if (results[1].status === "rejected") setStatus("#speechCapabilityStatus", (results[1].reason && results[1].reason.message) || "语音能力检测失败", "error");
     if (results[2].status === "rejected") $("#shellVersionSwitch").textContent = "界面模式暂不可用";
+    if (results[3].status === "rejected") $("#autoBackupSummary").textContent = "自动备份状态读取失败";
   }
-  H.features.settings = { loadAbout, loadVoiceSettings, load, openLicenses, openDiagnostics, showSettingsTab };
+  H.features.settings = { loadAbout, loadVoiceSettings, load, openLicenses, openDiagnostics, showSettingsTab, loadStoredTheme, refreshAutoBackup };
 })();

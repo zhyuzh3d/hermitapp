@@ -4,6 +4,10 @@ import android.app.Application
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ProcessLifecycleOwner
+import io.github.zhyuzh3d.hermit.backup.AutoBackupCoordinator
+import io.github.zhyuzh3d.hermit.backup.BackupCoordinator
+import io.github.zhyuzh3d.hermit.data.FileStore
+import io.github.zhyuzh3d.hermit.data.RecordsStore
 import io.github.zhyuzh3d.hermit.deploy.DevelopmentServer
 import io.github.zhyuzh3d.hermit.deploy.AgentDevelopmentServer
 import io.github.zhyuzh3d.hermit.deploy.DevWorkspaceManager
@@ -17,6 +21,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 
 class HermitApplication : Application(), DefaultLifecycleObserver {
     val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -38,6 +43,12 @@ class HermitApplication : Application(), DefaultLifecycleObserver {
         private set
     lateinit var happShare: HappShareManager
         private set
+    val records by lazy { RecordsStore(this) }
+    val files by lazy { FileStore(this) }
+    lateinit var backup: BackupCoordinator
+        private set
+    lateinit var autoBackup: AutoBackupCoordinator
+        private set
 
     override fun onCreate() {
         super<Application>.onCreate()
@@ -50,6 +61,8 @@ class HermitApplication : Application(), DefaultLifecycleObserver {
         happShare = HappShareManager(this, registry, installer, devWorkspaces, applicationScope)
         officialShell = OfficialShellManager(this)
         notifications = NotificationCenter(this, registry)
+        backup = BackupCoordinator(this, registry, installer, records, files, notifications.repository)
+        autoBackup = AutoBackupCoordinator(this, registry, backup, records, files, notifications.repository)
         val installState = getSharedPreferences("hermit-install-state", MODE_PRIVATE)
         val installedAt = packageManager.getPackageInfo(packageName, 0).lastUpdateTime
         val replaced = installState.getLong("lastUpdateTime", -1L).let { it != -1L && it != installedAt }
@@ -63,6 +76,10 @@ class HermitApplication : Application(), DefaultLifecycleObserver {
         devWorkspaces.recoverStorage()
         agentServer.restoreIfEnabled()
         notifications.start()
+        autoBackup.scheduler.rebuild()
+        // The device may have been off when the daily time passed; recover that
+        // run once per day, at most one attempt per catch-up window.
+        applicationScope.launch { autoBackup.runForTrigger(catchUp = true) }
         ProcessLifecycleOwner.get().lifecycle.addObserver(this)
     }
 

@@ -1,7 +1,9 @@
 package io.github.zhyuzh3d.hermit.backup
 
+import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
+import android.provider.DocumentsContract
 import androidx.core.content.FileProvider
 import io.github.zhyuzh3d.hermit.BuildConfig
 import io.github.zhyuzh3d.hermit.capability.VoicePreferences
@@ -28,6 +30,7 @@ import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.security.MessageDigest
+import java.time.LocalDate
 import java.util.UUID
 import java.util.zip.ZipEntry
 import java.util.zip.ZipFile
@@ -131,12 +134,14 @@ class BackupCoordinator(
         JSONObject().put("exported", true).put("appId", appId).put("bytes", total)
     }
 
-    suspend fun exportAll(destination: Uri, theme: String = "system"): JSONObject = withContext(Dispatchers.IO) {
+    suspend fun exportAll(destination: Uri): JSONObject = withContext(Dispatchers.IO) {
         val tempDir = File(context.cacheDir, "shared/backup-${UUID.randomUUID()}").apply { mkdirs() }
         val nested = mutableListOf<Pair<String, File>>()
         try {
-            // Archived instances intentionally have no runnable release; the
-            // portable full backup contains only instances that can be restored.
+            // A full backup covers exactly the instances the user can see and
+            // use. Archived instances are retired tombstones: archiving deletes
+            // their releases and code, so they have nothing restorable to store
+            // and including them would only abort the restore of the whole file.
             registry.listInstances().forEachIndexed { index, app ->
                 val file = File(tempDir, "happ-$index.zip")
                 val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
@@ -158,7 +163,7 @@ class BackupCoordinator(
                     zip.closeEntry()
                     entries.put(name, JSONObject().put("size", size).put("sha256", digest.digest().hex()))
                 }
-                val settingsBytes = hermitSettingsJson(theme).toString().toByteArray()
+                val settingsBytes = hermitSettingsJson().toString().toByteArray()
                 val settingsDigest = MessageDigest.getInstance("SHA-256").digest(settingsBytes).hex()
                 zip.putNextEntry(ZipEntry("settings.json").apply { time = 0L })
                 zip.write(settingsBytes)
@@ -180,12 +185,11 @@ class BackupCoordinator(
         } finally { tempDir.deleteRecursively() }
     }
 
-    suspend fun exportSettings(destination: Uri, theme: String = "system"): JSONObject = withContext(Dispatchers.IO) {
+    suspend fun exportSettings(destination: Uri): JSONObject = withContext(Dispatchers.IO) {
         val output = context.contentResolver.openOutputStream(destination, "w")
             ?: throw HermitException(ErrorCodes.STORAGE, "无法创建备份文件")
         output.use { raw -> ZipOutputStream(raw.buffered()).use { zip ->
-                val settings = JSONObject().put("theme", theme.takeIf { it in setOf("system", "light", "dark") } ?: "system")
-                .put("voice", JSONObject().put("tts", VoicePreferences(context).ttsJson()).put("speech", VoicePreferences(context).speechJson()))
+                val settings = hermitSettingsJson()
             val bytes = settings.toString().toByteArray()
             val digest = MessageDigest.getInstance("SHA-256").digest(bytes).hex()
             zip.putNextEntry(ZipEntry("settings.json").apply { time = 0L }); zip.write(bytes); zip.closeEntry()
@@ -196,9 +200,12 @@ class BackupCoordinator(
         JSONObject().put("exported", true).put("backupType", "settings")
     }
 
-    private fun hermitSettingsJson(theme: String): JSONObject = JSONObject()
-        .put("theme", theme.takeIf { it in setOf("system", "light", "dark") } ?: "system")
+    private fun hermitSettingsJson(): JSONObject = JSONObject()
+        .put("theme", storedTheme())
         .put("voice", JSONObject().put("tts", VoicePreferences(context).ttsJson()).put("speech", VoicePreferences(context).speechJson()))
+
+    private fun storedTheme(): String = registry.setting(AppRegistry.SETTING_THEME)
+        ?.takeIf { it in setOf("system", "light", "dark") } ?: "system"
 
     suspend fun restoreAny(source: Uri): JSONObject = withContext(Dispatchers.IO) {
         val temporary = File(context.cacheDir, "shared/restore-${UUID.randomUUID()}.zip").apply { parentFile?.mkdirs() }
@@ -405,6 +412,162 @@ class BackupCoordinator(
         } finally { temporary.delete() }
     }
 
+    /**
+     * Writes one full backup into a user-chosen SAF directory under that day's
+     * single archive name. Running the same day again replaces that file rather
+     * than adding another one, and whole days beyond [keepCount] are dropped,
+     * so a stored day is never evicted by a repeat run of today. The new
+     * archive is written under a temporary name and only takes over the daily
+     * name once it is complete, so a failed run never costs a stored backup.
+     * Only files this feature created in that directory are ever deleted.
+     */
+    suspend fun exportAllToDirectory(treeUri: Uri, keepCount: Int): JSONObject = withContext(Dispatchers.IO) {
+        val resolver = context.contentResolver
+        val treeDocumentId = runCatching { DocumentsContract.getTreeDocumentId(treeUri) }.getOrNull()
+            ?: throw HermitException(ErrorCodes.STORAGE, "备份目录授权已失效，请重新选择目录")
+        val parent = DocumentsContract.buildDocumentUriUsingTree(treeUri, treeDocumentId)
+        deleteAbandonedPartials(resolver, treeUri, treeDocumentId)
+        val finalName = AutoBackupPlan.fileName(AutoBackupPlan.dayKey(LocalDate.now()))
+        val temporary = DocumentsContract.createDocument(resolver, parent, "application/zip", "$finalName${AutoBackupPlan.PART}")
+            ?: throw HermitException(ErrorCodes.STORAGE, "无法在所选目录创建备份文件")
+        var committed = try {
+            exportAll(temporary)
+            verifyArchive(resolver, temporary)
+            runCatching { DocumentsContract.renameDocument(resolver, temporary, finalName) }.getOrNull()
+                ?: commitWithoutRename(resolver, parent, temporary, finalName)
+        } catch (error: Throwable) {
+            runCatching { DocumentsContract.deleteDocument(resolver, temporary) }
+            throw if (error is HermitException) error else HermitException(ErrorCodes.STORAGE, error.message ?: "自动备份失败")
+        }
+        var committedName = displayName(resolver, committed) ?: finalName
+        val removed = sweepDirectory(resolver, treeUri, treeDocumentId, keepCount, committedName)
+        // A provider that cannot replace an existing document may have suffixed
+        // the new file. Its older same-day sibling is gone now, so claim the
+        // clean daily name instead of leaving "… (1)" behind.
+        if (committedName != finalName) {
+            runCatching { DocumentsContract.renameDocument(resolver, committed, finalName) }.getOrNull()?.let {
+                committed = it
+                committedName = displayName(resolver, it) ?: finalName
+            }
+        }
+        JSONObject().put("exported", true).put("backupType", "full").put("fileName", committedName)
+            .put("bytes", documentSize(resolver, committed)).put("removed", removed)
+    }
+
+    private fun documentSize(resolver: ContentResolver, uri: Uri): Long =
+        resolver.query(uri, arrayOf(DocumentsContract.Document.COLUMN_SIZE), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getLong(0) else 0L
+        } ?: 0L
+
+    private fun displayName(resolver: ContentResolver, uri: Uri): String? =
+        resolver.query(uri, arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME), null, null, null)?.use { cursor ->
+            if (cursor.moveToFirst() && !cursor.isNull(0)) cursor.getString(0) else null
+        }
+
+    /** Fallback for document providers that cannot rename: write the final name directly. */
+    private suspend fun commitWithoutRename(resolver: ContentResolver, parent: Uri, temporary: Uri, finalName: String): Uri {
+        runCatching { DocumentsContract.deleteDocument(resolver, temporary) }
+        val direct = DocumentsContract.createDocument(resolver, parent, "application/zip", finalName)
+            ?: throw HermitException(ErrorCodes.STORAGE, "无法在所选目录创建备份文件")
+        try {
+            exportAll(direct)
+            verifyArchive(resolver, direct)
+        } catch (error: Throwable) {
+            runCatching { DocumentsContract.deleteDocument(resolver, direct) }
+            throw error
+        }
+        return direct
+    }
+
+    private fun deleteAbandonedPartials(resolver: ContentResolver, treeUri: Uri, treeDocumentId: String) {
+        listDirectory(resolver, treeUri, treeDocumentId)
+            .filter { AutoBackupPlan.isTemporary(it.second) }
+            .forEach { runCatching { DocumentsContract.deleteDocument(resolver, it.first) } }
+    }
+
+    /**
+     * Drops what a finished day no longer needs: leftover archives of the same
+     * day that the committed file has replaced, and whole days older than the
+     * retained window. Entries this feature did not write are left alone.
+     */
+    private fun sweepDirectory(
+        resolver: ContentResolver,
+        treeUri: Uri,
+        treeDocumentId: String,
+        keepCount: Int,
+        committedName: String,
+    ): Int {
+        val entries = listDirectory(resolver, treeUri, treeDocumentId)
+        val removal = AutoBackupPlan.selectForRemoval(entries.map { it.second }, keepCount, committedName).toSet()
+        if (removal.isEmpty()) return 0
+        var removed = 0
+        entries.filter { it.second in removal }.forEach { (uri, _) ->
+            if (runCatching { DocumentsContract.deleteDocument(resolver, uri) }.getOrDefault(false)) removed++
+        }
+        return removed
+    }
+
+    private fun listDirectory(resolver: ContentResolver, treeUri: Uri, treeDocumentId: String): List<Pair<Uri, String>> {
+        val children = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, treeDocumentId)
+        val result = mutableListOf<Pair<Uri, String>>()
+        resolver.query(
+            children,
+            arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID, DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+            null, null, null,
+        )?.use { cursor ->
+            while (cursor.moveToNext()) {
+                val id = cursor.getString(0) ?: continue
+                val name = cursor.getString(1) ?: continue
+                result += DocumentsContract.buildDocumentUriUsingTree(treeUri, id) to name
+            }
+        }
+        return result
+    }
+
+    /**
+     * Confirms the committed archive is a structurally complete ZIP by checking
+     * its central directory record. Content hashes are verified again on restore.
+     */
+    private fun verifyArchive(resolver: ContentResolver, uri: Uri) {
+        val tail = readTail(resolver, uri, TAIL_BYTES) ?: throw HermitException(ErrorCodes.STORAGE, "无法读取已写入的备份文件")
+        if (tail.size < EOCD_MIN) throw HermitException(ErrorCodes.STORAGE, "备份文件为空或不完整")
+        var index = tail.size - EOCD_MIN
+        while (index >= 0) {
+            if (tail[index] == 0x50.toByte() && tail[index + 1] == 0x4b.toByte() &&
+                tail[index + 2] == 0x05.toByte() && tail[index + 3] == 0x06.toByte()
+            ) {
+                val comment = (tail[index + 20].toInt() and 0xff) or ((tail[index + 21].toInt() and 0xff) shl 8)
+                if (index + EOCD_MIN + comment == tail.size) return
+                break
+            }
+            index--
+        }
+        throw HermitException(ErrorCodes.STORAGE, "备份文件结构不完整")
+    }
+
+    private fun readTail(resolver: ContentResolver, uri: Uri, limit: Int): ByteArray? {
+        val ring = ByteArray(limit)
+        var cursor = 0
+        var filled = 0
+        resolver.openInputStream(uri)?.use { input ->
+            val chunk = ByteArray(DEFAULT_BUFFER_SIZE)
+            while (true) {
+                val read = input.read(chunk)
+                if (read < 0) break
+                var offset = 0
+                while (offset < read) {
+                    val take = minOf(limit - cursor, read - offset)
+                    System.arraycopy(chunk, offset, ring, cursor, take)
+                    cursor = (cursor + take) % limit
+                    offset += take
+                    filled = minOf(limit, filled + take)
+                }
+            }
+        } ?: return null
+        val start = if (filled == limit) cursor else 0
+        return ByteArray(filled) { ring[(start + it) % limit] }
+    }
+
     private fun validateArchive(zip: ZipFile, declared: JSONObject) {
         val seen = HashSet<String>()
         var count = 0
@@ -492,5 +655,7 @@ class BackupCoordinator(
         private const val MAX_MANIFEST_BYTES = 256L * 1024
         private const val MAX_BACKUP_BYTES = 1024L * 1024 * 1024
         private const val MAX_BACKUP_FILES = 50_000
+        private const val EOCD_MIN = 22
+        private const val TAIL_BYTES = 66_000
     }
 }

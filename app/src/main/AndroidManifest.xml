@@ -94,7 +94,20 @@
             android:name=".share.HappShareService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+        <service
+            android:name=".backup.AutoBackupService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
         <receiver android:name=".notification.NotificationAlarmReceiver" android:exported="false" />
+        <receiver android:name=".backup.AutoBackupReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="io.github.zhyuzh3d.hermit.AUTO_BACKUP_ALARM" />
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.TIME_SET" />
+                <action android:name="android.intent.action.TIMEZONE_CHANGED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
         <receiver android:name=".notification.NotificationRescheduleReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
