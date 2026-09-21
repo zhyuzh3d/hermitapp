@@ -342,6 +342,44 @@ test("add flow describes a package before installing and only installs on confir
   assert.equal(shell.includes('host.call("apps.importZip"'), false, "ZIP must not install without confirmation");
 });
 
+test("the happ settings sheet acts immediately and keeps development read only", () => {
+  const activity = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
+  const registry = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/registry/AppRegistry.kt", "utf8");
+  const installer = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/install/RemoteSourceInstaller.kt", "utf8");
+  const capabilities = fs.readFileSync("api/capabilities.json", "utf8");
+  const bridge = fs.readFileSync("app/src/main/assets/bridge/hermit-v1.js", "utf8");
+  const manage = fs.readFileSync("app/src/main/assets/store/features/manage.js", "utf8");
+  const sheet = fs.readFileSync("app/src/main/assets/store/index.html", "utf8");
+  const host = fs.readFileSync("app/src/main/assets/store/platform/host.js", "utf8");
+  // Promoting the development workspace is the only development transition HermitUI may drive.
+  assert.ok(activity.includes('"host.apps.promoteDev"'), "Native dispatch missing: host.apps.promoteDev");
+  assert.match(capabilities, /"enterDev", "leaveDev", "promoteDev", "resetDev", "exportDev"/);
+  assert.match(bridge, /\|promoteDev\|/);
+  for (const method of ['"apps.promoteDev"', '"apps.leaveDev"']) assert.ok(host.includes(method), `HermitUI host whitelist missing: ${method}`);
+  for (const method of ['"apps.enterDev"', '"apps.resetDev"', '"apps.exportDev"']) {
+    assert.equal(host.includes(method), false, `HermitUI must not offer ${method}`);
+  }
+  assert.match(activity, /devWorkspaces\.installed\(appId, revision, installed\.releaseId, keepDev = false\)/);
+  // Every control applies on its own; only the name keeps an explicit save button.
+  assert.equal(sheet.includes('id="saveApp"'), false, "the batch save bar must be gone");
+  assert.ok(sheet.includes('id="saveAppName"'));assert.ok(sheet.includes('id="switchToStable"'));
+  assert.ok(sheet.includes('id="liveUrl"'));assert.equal(sheet.includes('id="editUrl"'), false, "liveUrl must be read only");
+  assert.equal(sheet.includes('id="runDevApp"'), false);assert.equal(sheet.includes('id="resetDevApp"'), false);
+  assert.equal(fs.existsSync("app/src/main/assets/store/features/app-settings.js"), false, "the batch save module must be gone");
+  for (const method of ["apps.setNotificationEnabled", "apps.setCrossOriginNetwork", "apps.setRuntimeMode", "apps.updatePresentation"]) {
+    assert.ok(manage.includes(`applyChange("${method}"`), `immediate apply missing: ${method}`);
+  }
+  assert.match(manage, /apps\.promoteDev/);
+  assert.match(manage, /apps\.shareStart", \{ appId: app\.appId, network: false \}/);
+  // A package imported from a local file keeps a copy so it can be reinstalled later.
+  assert.match(registry, /fun recordLocalSource\(appId: String, sourcePath: String\?, retainedPath: String\?\)/);
+  assert.match(registry, /"source_path" to "TEXT", "source_uri" to "TEXT"/);
+  // New columns only reach an existing installation when the schema version moves,
+  // because onUpgrade is skipped while the file already carries the current version.
+  assert.match(registry, /private const val VERSION = 14/);
+  assert.match(installer, /val retained = app\.sourceUri\?\.let\(::File\)\?\.takeIf \{ it\.isFile \}/);
+});
+
 test("official shell keeps live fallback support and explicit local refresh", () => {
   const activity = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
   const manager = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/runtime/OfficialShellManager.kt", "utf8");
@@ -400,7 +438,7 @@ test("happ source and runtime mode remain independent across Native and HermitUI
   assert.match(model, /enum class HappRuntimeMode \{ LOCAL, LIVE \}/);
   assert.match(registry, /source_kind TEXT NOT NULL/);
   assert.match(registry, /runtime_mode TEXT NOT NULL/);
-  assert.match(registry, /private const val VERSION = 13/);
+  assert.match(registry, /private const val VERSION = 14/);
   assert.match(registry, /CREATE TABLE IF NOT EXISTS settings/);
   assert.match(registry, /current\.activeReleaseId/);
   assert.match(remote, /encodedPath\("\/hermit-install\.json"\)/);

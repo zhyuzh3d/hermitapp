@@ -2,96 +2,235 @@
   "use strict";
   const H = window.HermitShell;
   const { $, $$, state, host } = H;
-  const { say, busy, bind, open, close, confirmAction, selected } = H.ui;
-  const { appSource, appRuntime, hasLocal, hasLive, sourceLabel, runtimeLabel, refresh, resetFilters, pin, renderPinButton } = H.features.library;
-  const { validUrl } = H.features.install;
-  const { showView, cachedViewState } = H.navigation;
+  const { say, busy, bind, open, close, confirmAction } = H.ui;
+  const { hasLocal, hasLive, sourceLabel, runtimeLabel, refresh, resetFilters, pin, renderPinButton } = H.features.library;
   const capabilityLabels = { "camera.capture": "拍照", "microphone.record": "麦克风录音", speech: "语音识别", "location.approximate": "大致位置", "location.precise": "精确位置", "clipboard.read": "读取剪贴板", network: "网络请求", notifications: "发送通知" };
   let releaseState = { appId:null, result:null, visible:10 };
-  function canUpdateFromSource(app) { return !!app.updateUrl; }
-  function nextVersionName(value) {
-    const parts = String(value || "0.0.0").match(/^(\d+)\.(\d+)\.(\d+)$/);
-    return parts ? parts[1] + "." + parts[2] + "." + (Number(parts[3]) + 1) : "1.0.0";
+
+  /** The freshest instance for the open panel: every control acts on this one. */
+  function current() {
+    const app = state.selected;
+    if (!app) return null;
+    return state.apps.find(item => item.appId === app.appId) || app;
   }
-  function renderDevWorkspace(app) {
-    const dev = app.devWorkspace || {}, missing = dev.state === "missing" || !dev.revision;
-    const labels = { clean:"开发副本与正式版本一致。", dirty:"开发副本有未发布修改。", "base-outdated":"正式版本已更新，开发副本仍保留未发布修改。", missing:"尚未创建开发工作副本。" };
-    $("#devWorkspaceStatus").textContent = labels[missing ? "missing" : dev.state] || "开发副本状态暂不可用。";
-    $("#runStableApp").classList.toggle("selected", app.launchChannel !== "dev");
-    $("#runDevApp").classList.toggle("selected", app.launchChannel === "dev");
-    $("#runStableApp").setAttribute("aria-pressed", String(app.launchChannel !== "dev"));
-    $("#runDevApp").setAttribute("aria-pressed", String(app.launchChannel === "dev"));
-    $("#runStableApp").disabled = app.launchChannel !== "dev";
-    $("#runDevApp").disabled = app.launchChannel === "dev";
-    $("#runDevApp").textContent = missing ? "创建并运行开发副本" : "运行开发副本";
-    $("#resetDevApp").disabled = missing;
-    $("#exportDevApp").disabled = missing;
-    const version = app.activeVersion || {};
-    $("#devVersionCode").value = Math.max(1, Number(version.code || 0) + 1);
-    $("#devVersionName").value = nextVersionName(version.name);
+  function requireApp() {
+    const app = current();
+    if (!app) throw new Error("应用设置已失效，请重新打开。");
+    return app;
   }
-  function setDraftSwitch(selector, enabled) {
+  function versionText(value) {
+    if (!value || typeof value !== "object") return "未标注版本";
+    if (typeof value.name === "string" && value.name.trim()) return value.name.trim();
+    if (Number.isFinite(Number(value.code))) return "版本 " + Number(value.code);
+    return "未标注版本";
+  }
+  function firstLetter(name) {
+    const characters = Array.from(String(name || "").trim());
+    return characters.length ? characters[0].toUpperCase() : "H";
+  }
+  function setSwitch(selector, enabled) {
     const control = $(selector); control.classList.toggle("on", enabled); control.setAttribute("aria-checked", String(enabled));
   }
-  function renderIconPreview(selector, dataUrl) {
-    const preview = $(selector);
-    preview.replaceChildren(); preview.style.backgroundImage = "";
+  function renderIconPreview(dataUrl, name) {
+    const preview = $("#editIconPreview");
+    preview.replaceChildren(); preview.style.backgroundImage = ""; preview.classList.remove("custom");
     if (dataUrl) {
       preview.style.backgroundImage = "url(" + JSON.stringify(dataUrl).slice(1,-1) + ")";
       preview.classList.add("custom");
       return;
     }
-    preview.classList.remove("custom");
-    preview.append(Object.assign(document.createElement("i"), { className:"fa-solid fa-image", ariaHidden:"true" }));
+    // Without a custom icon the happ falls back to its own icon, or to a letter tile
+    // generated from the first character of the name.
+    preview.textContent = firstLetter(name);
   }
-  function renderManageDraft() {
-    const app = state.selected, draft = state.manageDraft;
-    if (!app || !draft) return;
-    const hasDraftLive = !!$("#editUrl").value.trim();
-    if (draft.runtimeMode === "live" && !hasDraftLive && hasLocal(app)) draft.runtimeMode = "local";
-    if (draft.runtimeMode === "local" && !hasLocal(app) && hasDraftLive) draft.runtimeMode = "live";
-    $("#manageTitle").textContent = "设置：" + ($("#editName").value.trim() || app.name);
+  function isNameDirty() {
+    const app = current();
+    if (!app) return false;
+    const value = $("#editName").value.trim();
+    return !!value && value !== app.name;
+  }
+  function renderManage(app, options = {}) {
+    if (!app) return;
+    if (options.syncName) $("#editName").value = app.name;
+    $("#manageTitle").textContent = "设置：" + app.name;
+    $("#manageMeta").textContent = sourceLabel(app) + " · " + runtimeLabel(app);
+    $("#saveAppName").disabled = !isNameDirty();
+    renderIconPreview(app.customIconUrl || app.defaultIconUrl || "", app.name);
+    $("#removeCustomAppIcon").classList.toggle("hidden", !app.hasCustomIcon);
+    const pinState = renderPinButton($("#managePin"), app);
+    $("#managePin").classList.toggle("hidden", pinState === "pinned" || pinState === "unsupported");
     $$("#runtimeChoices button").forEach(button => {
       const mode = button.dataset.runtimeMode;
-      const available = mode === "local" ? hasLocal(app) : hasDraftLive;
+      const available = mode === "local" ? hasLocal(app) : hasLive(app);
       button.disabled = !available;
-      button.classList.toggle("selected", draft.runtimeMode === mode);
-      button.setAttribute("aria-pressed", String(draft.runtimeMode === mode));
+      button.classList.toggle("selected", appRuntimeMode(app) === mode);
+      button.setAttribute("aria-pressed", String(appRuntimeMode(app) === mode));
     });
-    $("#saveApp").disabled = !isDirty();
-    const managePinState = renderPinButton($("#managePin"), app);
-    $("#managePin").disabled = isDirty() || managePinState === "unsupported";
-    $("#updateApp").disabled = !canUpdateFromSource(app) || isDirty();
-    $("#reinstallApp").disabled = !app.downloadUrl || isDirty();
-    $("#removeCustomAppIcon").classList.toggle("hidden", !draft.customIcon);
-    renderIconPreview("#editIconPreview", draft.customIcon || app.defaultIconUrl || "");
-    setDraftSwitch("#notificationSwitch", draft.notificationEnabled);
-    setDraftSwitch("#crossOriginSwitch", draft.allowCrossOriginNetwork);
-    $("#runtimeHint").textContent = hasLocal(app) && hasDraftLive
-      ? "本地代码和线上实时页面都可用。选择后请点底部“保存修改”才会生效。"
-      : hasLocal(app) ? "当前只有本地代码；填写 liveUrl 后可选择线上实时运行。"
-      : "当前没有本地代码，需要填写 liveUrl 才能线上实时运行。";
+    $("#liveUrl").textContent = app.liveUrl || "无";
+    const updateUrl = app.updateUrl || "";
+    $("#updateUrlBlock").classList.toggle("hidden", !updateUrl);
+    $("#updateUrl").textContent = updateUrl || "无";
+    $("#updateApp").disabled = !updateUrl;
+    const localPath = app.sourcePath || "";
+    const link = app.downloadUrl || "";
+    $("#downloadUrl").textContent = localPath || link || "无";
+    $("#downloadKind").textContent = localPath ? "从本机文件安装" : link ? "从链接地址安装" : "";
+    $("#qrLinkRow").classList.toggle("hidden", !link || !!localPath);
+    $("#qrLink").textContent = link ? "hermit://add?url=" + encodeURIComponent(link) : "无";
+    $("#reinstallApp").disabled = !(localPath || link);
+    setSwitch("#notificationSwitch", !!app.notificationEnabled);
+    setSwitch("#crossOriginSwitch", !!app.allowCrossOriginNetwork);
+    renderDevWorkspace(app);
   }
-  $("#editName").oninput = renderManageDraft;
-  $("#editUrl").oninput = renderManageDraft;
-  $("#editUpdateUrl").oninput = renderManageDraft;
+  function appRuntimeMode(app) {
+    return app.runtimeMode || (app.liveUrl && !app.activeReleaseId ? "live" : "local");
+  }
+  function renderDevWorkspace(app) {
+    const dev = app.devWorkspace || {}, runningDev = app.launchChannel === "dev";
+    const version = runningDev && dev.devVersion ? versionText(dev.devVersion) : versionText(app.activeVersion);
+    $("#devWorkspaceStatus").textContent = (runningDev ? "开发副本模式运行" : "正式运行") + " · 版本 " + version;
+    $("#switchToStable").classList.toggle("hidden", !runningDev);
+    $("#exportDevApp").disabled = !hasLocal(app);
+  }
+  function renderManageDraft() { renderManage(current()); }
+
+  /** Runs one immediate change and re-renders the panel from the refreshed library. */
+  async function applyChange(method, params, message) {
+    const app = requireApp();
+    const value = await host.call(method, Object.assign({ appId: app.appId }, params));
+    if (value && value.cancelled) { say("已取消操作。"); return; }
+    await refresh();
+    state.selected = state.apps.find(item => item.appId === app.appId) || app;
+    renderManageDraft();
+    if (message) say(message);
+  }
+  /** Switches and other content-preserving controls act without replacing their contents. */
+  async function immediate(work) {
+    const panel = $("#managePanel");
+    if (panel.dataset.working) return;
+    panel.dataset.working = "true"; panel.classList.add("working");
+    try { await work(); }
+    catch (error) {
+      say(error.code === "E_CANCELLED" ? "已取消操作。" : (error.message || "操作失败，请重试。"), error.code !== "E_CANCELLED");
+      // Roll the optimistic switch back to what the database still holds.
+      renderManageDraft();
+    }
+    finally { delete panel.dataset.working; panel.classList.remove("working"); if (H.onOperationSettled) H.onOperationSettled(panel); }
+  }
+
+  $("#editName").oninput = () => { $("#saveAppName").disabled = !isNameDirty(); };
+  bind("#saveAppName", async () => {
+    const app = requireApp();
+    const name = $("#editName").value.trim();
+    if (!name) { $("#editName").focus(); throw new Error("应用名称不能为空。"); }
+    if (name === app.name) return;
+    await applyChange("apps.update", { name }, "应用名称已更新。");
+    $("#editName").value = (current() || app).name;
+    renderManageDraft();
+  });
+  bind("#editAppIcon", async () => {
+    const app = requireApp();
+    const value = await host.call("apps.pickIcon", {});
+    if (value.cancelled) { say("已取消操作。"); return; }
+    const cropped = await H.ui.cropIcon(value.preview);
+    if (!cropped) return;
+    await applyChange("apps.updatePresentation", { name: app.name, iconPreviewDataUrl: cropped }, "应用图标已更新。");
+  });
+  bind("#removeCustomAppIcon", async () => {
+    const app = requireApp();
+    await applyChange("apps.updatePresentation", { name: app.name, iconPreviewDataUrl: "" }, "已移除自定义图标，恢复 happ 默认图标。");
+  });
+  $("#notificationSwitch").onclick = () => immediate(async () => {
+    const app = requireApp();
+    const enabled = !app.notificationEnabled;
+    setSwitch("#notificationSwitch", enabled);
+    await applyChange("apps.setNotificationEnabled", { enabled }, enabled ? "已允许接收通知。" : "已停止接收通知。");
+  });
+  $("#crossOriginSwitch").onclick = () => immediate(async () => {
+    const app = requireApp();
+    const enabled = !app.allowCrossOriginNetwork;
+    if (enabled && !await confirmAction("允许跨 Origin 网络？", "允许后，此 happ 的脚本、接口和页面可以主动连接 liveUrl Origin 之外的地址，运行时会持续显示提示。", "允许")) { renderManageDraft(); return; }
+    setSwitch("#crossOriginSwitch", enabled);
+    await applyChange("apps.setCrossOriginNetwork", { enabled }, enabled ? "已允许跨 Origin 网络。" : "已禁止跨 Origin 网络。");
+  });
+  $$("#runtimeChoices [data-runtime-mode]").forEach(button => {
+    button.onclick = () => busy(button, async () => {
+      const app = requireApp();
+      const mode = button.dataset.runtimeMode;
+      if (mode === appRuntimeMode(app)) return;
+      const message = mode === "live"
+        ? "以后打开此 happ 将直接加载它的线上地址，页面代码可随服务器变化。"
+        : "以后打开此 happ 将优先运行手机内已验证的本地代码。";
+      if (!await confirmAction("切换运行方式？", message, "切换")) return;
+      await applyChange("apps.setRuntimeMode", { runtimeMode: mode }, mode === "live" ? "已切换为线上实时运行。" : "已切换为本地运行。");
+    });
+  });
+  bind("#managePin", () => pin(current()));
+  bind("#updateApp", async () => {
+    const app = requireApp();
+    await host.call("apps.updateFromSource", { appId: app.appId });
+    await refresh(); await openManage(state.apps.find(x => x.appId === app.appId));
+    say("已从更新地址下载并安装代码，数据已保留。");
+  });
+  bind("#reinstallApp", async () => {
+    const app = requireApp();
+    const source = app.sourcePath || app.downloadUrl;
+    if (!await confirmAction("重新安装？", "将从 " + source + " 重新安装，替换当前代码并保留 Hermit 数据。", "重新安装")) return;
+    await host.call("apps.reinstall", { appId: app.appId });
+    await refresh(); await openManage(state.apps.find(x => x.appId === app.appId));
+    say("已从原安装来源重新安装，数据已保留。");
+  });
+
+  async function reopenAfterDevChange(appId, message) {
+    await refresh();
+    const updated = state.apps.find(item => item.appId === appId);
+    if (!updated) throw new Error("应用已不存在。");
+    close("#managePanel");
+    await openManage(updated);
+    say(message);
+  }
+  /** Opens the confirmation that lets the user pick how to leave the dev copy. */
+  function openDevSwitch() {
+    const app = current();
+    if (!app) return;
+    const dev = app.devWorkspace || {};
+    $("#devSwitchDevVersion").textContent = dev.devVersion ? versionText(dev.devVersion) : "未标注版本";
+    $("#devSwitchStableVersion").textContent = versionText(app.activeVersion);
+    $("#devSwitchMessage").textContent = "当前运行的是开发工作副本。请选择如何回到正式版。";
+    open("#devSwitchPanel");
+  }
+  bind("#switchToStable", () => openDevSwitch());
+  bind("#devSwitchUseStable", async () => {
+    const app = requireApp();
+    close("#devSwitchPanel");
+    await host.call("apps.leaveDev", { appId: app.appId });
+    await reopenAfterDevChange(app.appId, "已切换为运行原有正式版，开发副本仍保留。");
+  });
+  bind("#devSwitchPromote", async () => {
+    const app = requireApp();
+    close("#devSwitchPanel");
+    await host.call("apps.promoteDev", { appId: app.appId });
+    await reopenAfterDevChange(app.appId, "当前开发版已安装为正式版并开始运行。");
+  });
+  bind("#exportDevApp", async () => {
+    const app = requireApp();
+    const session = await host.call("apps.shareStart", { appId: app.appId, network: false });
+    try {
+      const result = await host.call("apps.shareSave", { sessionId: session.sessionId });
+      say(result.cancelled ? "已取消导出。" : "当前运行版本已导出为 Zip 安装包。");
+    } finally {
+      await host.call("apps.shareStop", { sessionId: session.sessionId });
+    }
+  });
+
   async function openManage(app) {
     const epoch = ++state.managedEpoch;
     if (!app) throw new Error("应用已不存在，请刷新应用库。");
     state.selected = app;
-    const customIcon = app.customIconUrl || "";
-    state.manageDraft = { runtimeMode: appRuntime(app), notificationEnabled: !!app.notificationEnabled, allowCrossOriginNetwork: !!app.allowCrossOriginNetwork, customIcon };
-    $("#editName").value = app.name; $("#editUrl").value = app.liveUrl || ""; $("#editUpdateUrl").value = app.updateUrl || "";
-    renderIconPreview("#editIconPreview", customIcon || app.defaultIconUrl || "");
-    $("#downloadUrl").textContent = app.downloadUrl || "无";
-    $("#updateApp").disabled = !canUpdateFromSource(app);
-    $("#reinstallApp").disabled = !app.downloadUrl;
+    renderManage(app, { syncName: true });
     $("#developerDetails").classList.toggle("hidden", !hasLocal(app));
     $("#releaseDetails").classList.toggle("hidden", !hasLocal(app));
-    renderManageDraft();
-    if (hasLocal(app)) renderDevWorkspace(app);
     $("#grants").textContent = "正在读取授权…"; $("#releases").textContent = "正在读取版本…";
-    $("#manageMeta").textContent = sourceLabel(app) + " · " + runtimeLabel(app);
     open("#managePanel");
     const [grantResult, releaseResult] = await Promise.allSettled([
       host.call("permissions.list", { appId: app.appId }),
@@ -137,7 +276,7 @@
         const activate = document.createElement("button"); activate.textContent = "切换";
         activate.onclick = () => busy(activate, async () => {
           if (!await confirmAction("切换代码版本", "页面代码会切换到此版本，现有数据保留。请确保旧版代码与当前数据兼容。", "切换版本")) return;
-          await host.call("apps.rollback", { appId: app.appId, releaseId: release.releaseId });
+          await host.call("apps.rollback", { appId: releaseState.appId, releaseId: release.releaseId });
           close("#managePanel"); say("代码版本已切换。"); await refresh();
         });
         row.append(activate);
@@ -150,9 +289,9 @@
   }
   $("#moreReleases").onclick = () => { releaseState.visible += 10; renderReleases(); };
   bind("#pruneReleases", async button => {
-    const app = state.selected;
+    const app = requireApp();
     const versions = releaseState.result;
-    if (!app || !versions || versions.releases.length <= 5) { say("当前版本不超过5个，无需清理。"); return; }
+    if (!versions || versions.releases.length <= 5) { say("当前版本不超过5个，无需清理。"); return; }
     if (!await confirmAction("清理旧代码版本", "只保留最近5个版本；当前正在使用的版本始终保留。此操作无法撤销。", "清理版本", true)) return;
     await host.call("apps.pruneReleases", { appId: app.appId });
     const refreshed = await host.call("apps.releases", { appId: app.appId });
@@ -160,143 +299,37 @@
     renderReleases();
     say("旧代码版本已清理。");
   });
-  bind("#saveApp", async () => {
-    const app = state.selected;
-    const draft = state.manageDraft;
-    if (!app || !draft) throw new Error("应用设置已失效，请重新打开。");
-    if (!$("#editName").value.trim()) { $("#editName").focus(); throw new Error("应用名称不能为空。"); }
-    const liveUrl = $("#editUrl").value.trim();
-    const updateUrl = $("#editUpdateUrl").value.trim();
-    if (liveUrl) validUrl("#editUrl");
-    if (updateUrl) validUrl("#editUpdateUrl");
-    if (draft.runtimeMode === "live" && !liveUrl) throw new Error("线上实时运行需要填写 liveUrl。");
-    if (draft.allowCrossOriginNetwork && !app.allowCrossOriginNetwork && !await confirmAction("允许跨 Origin 网络？", "保存后，此 happ 的脚本、接口和页面可以主动连接 liveUrl Origin 之外的地址，运行时会持续显示提示。", "保存并允许")) return;
-    if (draft.runtimeMode !== appRuntime(app)) {
-      const message = draft.runtimeMode === "live"
-        ? "保存后，Hermit 将直接加载 liveUrl，页面代码可随服务器变化。"
-        : "保存后，Hermit 将优先运行手机内已验证的代码版本。";
-      if (!await confirmAction("保存运行方式？", message, "保存并切换")) return;
-    }
-    try {
-      let insecureConfirmed = false;
-      if (liveUrl && liveUrl !== (app.liveUrl || "") && new URL(liveUrl).protocol === "http:") {
-        insecureConfirmed = await confirmAction("允许未加密的 HTTP 页面？", liveUrl + "\n\n网页内容和凭据可能被同一网络中的其他人读取或篡改。仅在你信任当前网络和服务时继续。", "仍然保存");
-        if (!insecureConfirmed) return;
-      }
-      await H.features.appSettings.save(app, Object.assign({}, draft, { name: $("#editName").value.trim(), liveUrl, updateUrl, insecureConfirmed }));
-    } catch (error) {
-      try { await refresh(); state.selected = state.apps.find(item => item.appId === app.appId) || app; } catch (_) {}
-      renderManageDraft();
-      throw error;
-    }
-    close("#managePanel"); say("应用设置已保存。"); await refresh();
-  });
-  $$("#runtimeChoices [data-runtime-mode]").forEach(button => {
-    button.onclick = event => {
-      if (event.currentTarget.disabled || !state.manageDraft) return;
-      state.manageDraft.runtimeMode = event.currentTarget.dataset.runtimeMode;
-      renderManageDraft();
-    };
-  });
-  async function reopenAfterDevChange(appId, message) {
-    await refresh();
-    const updated = state.apps.find(item => item.appId === appId);
-    if (!updated) throw new Error("应用已不存在。");
-    close("#managePanel");
-    await openManage(updated);
-    say(message);
-  }
-  bind("#runDevApp", async () => {
-    const app = state.selected;
-    await host.call("apps.enterDev", { appId:app.appId });
-    await reopenAfterDevChange(app.appId, "以后打开此 happ 将运行开发副本。");
-  });
-  bind("#runStableApp", async () => {
-    const app = state.selected;
-    await host.call("apps.leaveDev", { appId:app.appId });
-    await reopenAfterDevChange(app.appId, "已切换为运行正式版本，开发副本仍保留。");
-  });
-  bind("#resetDevApp", async () => {
-    const app = state.selected;
-    if (!await confirmAction("从正式版本重建开发副本？", "未发布的开发文件会被正式版本替换，此操作无法撤销。", "重建开发副本", true)) return;
-    await host.call("apps.resetDev", { appId:app.appId });
-    await reopenAfterDevChange(app.appId, "开发副本已从当前正式版本重建。");
-  });
-  bind("#exportDevApp", async () => {
-    const app = state.selected;
-    const versionCode = Number($("#devVersionCode").value);
-    const versionName = $("#devVersionName").value.trim();
-    if (!Number.isSafeInteger(versionCode) || versionCode < 1 || !versionName) throw new Error("请填写有效的新版本号和版本名称。");
-    const value = await host.call("apps.exportDev", { appId:app.appId, versionCode, versionName });
-    say(value.cancelled ? "已取消导出。" : "发布 ZIP 已导出；正式版本尚未改变。");
-  });
-  bind("#managePin", () => pin(state.selected));
-  bind("#editAppIcon", async () => {
-    if (!state.manageDraft) throw new Error("应用设置已失效，请重新打开。");
-    const value = await host.call("apps.pickIcon", {});
-    if (value.cancelled) { say("已取消操作。"); return; }
-    const cropped = await H.ui.cropIcon(value.preview);
-    if (!cropped) return;
-    state.manageDraft.customIcon = cropped;
-    renderIconPreview("#editIconPreview", cropped);
-    renderManageDraft();
-  });
-  bind("#removeCustomAppIcon", () => {
-    const app = state.selected, draft = state.manageDraft;
-    if (!app || !draft) throw new Error("应用设置已失效，请重新打开。");
-    draft.customIcon = "";
-    renderIconPreview("#editIconPreview", app.defaultIconUrl || "");
-    renderManageDraft();
-  });
-  $("#notificationSwitch").onclick = () => { if (state.manageDraft) { state.manageDraft.notificationEnabled = !state.manageDraft.notificationEnabled; renderManageDraft(); } };
-  $("#crossOriginSwitch").onclick = () => { if (state.manageDraft) { state.manageDraft.allowCrossOriginNetwork = !state.manageDraft.allowCrossOriginNetwork; renderManageDraft(); } };
-  bind("#updateApp", async () => {
-    const app = state.selected;
-    await host.call("apps.updateFromSource", { appId: app.appId });
-    await refresh(); await openManage(state.apps.find(x => x.appId === app.appId)); say("已从更新地址下载并安装代码，数据已保留。");
-  });
-  bind("#reinstallApp", async () => {
-    const app = state.selected;
-    if (!await confirmAction("重新下载安装？", "将替换当前代码，Hermit 数据保留。", "重新安装")) return;
-    await host.call("apps.reinstall", { appId:app.appId });
-    await refresh(); await openManage(state.apps.find(x => x.appId === app.appId)); say("已从原地址重新安装，数据已保留。");
-  });
   bind("#restoreBackupSettings", async () => {
     if (!await confirmAction("恢复应用备份", "将创建独立的新应用，不继承登录状态和页面授权。", "选择备份")) return;
     const value = await host.call("backup.restore", {});
     if (!value.cancelled) {
       state.libraryFilter = "all";
-      cachedViewState.views.favorites = { scrollY: 0, libraryFilter: "all" };
+      H.navigation.cachedViewState.views.favorites = { scrollY: 0, libraryFilter: "all" };
       resetFilters();
-      await showView("favorites"); say("已恢复“" + value.name + "”。");
+      await H.navigation.showView("favorites"); say("已恢复“" + value.name + "”。");
     }
   });
   bind("#restoreAppData", async () => {
-    const app = state.selected;
+    const app = requireApp();
     if (!await confirmAction("替换“" + app.name + "”的数据？", "原有 Hermit 记录和附件会被备份内容覆盖，页面授权重置。此操作无法撤销，请先导出当前备份。", "选择备份并替换", true)) return;
     const value = await host.call("backup.restoreData", { appId: app.appId });
     if (!value.cancelled) { close("#managePanel"); await refresh(); say("数据已恢复，页面授权已重置。"); }
   });
   $("#uninstallApp").onclick = () => open("#uninstallPanel");
   bind("#removeApp", async () => {
-    const app = state.selected;
+    const app = requireApp();
     if (!await confirmAction("彻底清除“" + app.name + "”？", "将删除这个应用及其全部 Hermit 本机数据，无法恢复。", "彻底清除", true)) return;
     await host.call("apps.remove", { appId: app.appId }); close("#uninstallPanel"); close("#managePanel"); await refresh(); say("应用已卸载并彻底清除数据。");
   });
   bind("#archiveApp", async () => {
-    const app = state.selected;
+    const app = requireApp();
     await host.call("apps.archive", { appId:app.appId }); close("#uninstallPanel"); close("#managePanel"); await refresh(); say("应用已卸载，数据仍保留在 HermitApp 中。");
   });
   bind("#backupApp", async () => {
-    const app = state.selected;
+    const app = requireApp();
     if (!await confirmAction("导出“" + app.name + "”的备份", "包含代码、Hermit 记录和附件，不包含网站登录状态。备份不加密，请保存到可信位置。", "选择保存位置")) return;
     const value = await host.call("backup.export", { appId: app.appId });
     say(value.cancelled ? "已取消导出。" : "备份已导出。");
   });
-  function isDirty() {
-    const app = state.selected, draft = state.manageDraft;
-    const customIcon = app ? (app.customIconUrl || "") : "";
-    return !!(app && draft && ($("#editName").value.trim() !== app.name || $("#editUrl").value.trim() !== (app.liveUrl || "") || $("#editUpdateUrl").value.trim() !== (app.updateUrl || "") || draft.customIcon !== customIcon || draft.runtimeMode !== appRuntime(app) || draft.notificationEnabled !== !!app.notificationEnabled || draft.allowCrossOriginNetwork !== !!app.allowCrossOriginNetwork));
-  }
-  H.features.manage = { openManage, isDirty, renderManageDraft };
+  H.features.manage = { openManage, isDirty: isNameDirty, renderManage, renderManageDraft, openDevSwitch };
 })();

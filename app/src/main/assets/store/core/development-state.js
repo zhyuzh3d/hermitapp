@@ -13,25 +13,13 @@
   function manageOverlay() {
     const ids = state.modals.map(item => item.element.id);
     if (!ids.includes("managePanel") || !state.selected) return null;
-    const draft = state.manageDraft || {};
     return {
       kind:"manage",
       appId:state.selected.appId,
-      child:ids.includes("uninstallPanel") ? "uninstall" : null,
+      child:ids.includes("uninstallPanel") ? "uninstall" : ids.includes("devSwitchPanel") ? "devSwitch" : null,
       scrollY:Math.max(0, Math.round($("#managePanel .manage-sheet-scroll")?.scrollTop || 0)),
       fields:{
-        name:text($("#editName")?.value, 80),
-        liveUrl:text($("#editUrl")?.value, 4096),
-        updateUrl:text($("#editUpdateUrl")?.value, 4096),
-        versionName:text($("#devVersionName")?.value, 80),
-        versionCode:Math.max(1, Math.trunc(Number($("#devVersionCode")?.value) || 1))
-      },
-      draft:{
-        runtimeMode:["local", "live"].includes(draft.runtimeMode) ? draft.runtimeMode : "local",
-        notificationEnabled:!!draft.notificationEnabled,
-        allowCrossOriginNetwork:!!draft.allowCrossOriginNetwork,
-        // Image bytes are intentionally not serialized into the UI snapshot.
-        // The selected icon is transient until the user presses Save.
+        name:text($("#editName")?.value, 80)
       }
     };
   }
@@ -53,21 +41,13 @@
     const app = state.apps.find(item => item.appId === overlay.appId);
     if (!app) { H.ui.say("原应用已不存在，已返回应用列表。", true); return; }
     await H.features.manage.openManage(app);
-    const fields = overlay.fields || {}, draft = overlay.draft || {};
+    const fields = overlay.fields || {};
     $("#editName").value = text(fields.name, 80) || app.name;
-    $("#editUrl").value = text(fields.liveUrl, 4096);
-    $("#editUpdateUrl").value = text(fields.updateUrl, 4096);
-    $("#devVersionName").value = text(fields.versionName, 80) || $("#devVersionName").value;
-    $("#devVersionCode").value = Math.max(1, Math.trunc(Number(fields.versionCode) || Number($("#devVersionCode").value) || 1));
-    if (state.manageDraft) {
-      state.manageDraft.runtimeMode = ["local", "live"].includes(draft.runtimeMode) ? draft.runtimeMode : state.manageDraft.runtimeMode;
-      state.manageDraft.notificationEnabled = !!draft.notificationEnabled;
-      state.manageDraft.allowCrossOriginNetwork = !!draft.allowCrossOriginNetwork;
-      H.features.manage.renderManageDraft();
-    }
+    H.features.manage.renderManageDraft();
     const scroll = $("#managePanel .manage-sheet-scroll");
     if (scroll) requestAnimationFrame(() => { scroll.scrollTop = Math.max(0, Number(overlay.scrollY) || 0); });
     if (overlay.child === "uninstall") H.ui.open("#uninstallPanel");
+    else if (overlay.child === "devSwitch") H.features.manage.openDevSwitch();
   }
   async function apply(snapshot) {
     if (!snapshot || typeof snapshot !== "object" || snapshot.schema !== 1) return false;

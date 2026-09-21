@@ -331,7 +331,16 @@ class RemoteSourceInstaller(
 
     suspend fun reinstall(appId: String): InstallResult = withContext(Dispatchers.IO) {
         val app = registry.getInstance(appId) ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "页面应用不存在")
-        val url = app.downloadUrl ?: throw HermitException(ErrorCodes.UNSUPPORTED, "没有可用的原始下载地址")
+        // A locally imported package is reinstalled from its retained copy; anything else
+        // follows the address it originally came from.
+        val retained = app.sourceUri?.let(::File)?.takeIf { it.isFile }
+        if (retained != null) {
+            return@withContext retained.inputStream().use { input ->
+                installer.installZip(input, app.name, app.appId, "local-source", expectedReleaseId = app.activeReleaseId)
+            }
+        }
+        val url = app.downloadUrl
+            ?: throw HermitException(ErrorCodes.UNSUPPORTED, "没有可用的原始安装来源")
         installDownloadUrl(app, url)
     }
 

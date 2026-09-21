@@ -18,7 +18,7 @@
   // or the QR scanner stay open until the user or the device finishes, or until a
   // whole backup is written. The default minute would abandon them while the user
   // is still choosing a folder, so they share the long timeout instead.
-  const LONG_METHODS = /^(?:host\.apps\.(?:installOnline|inspectUrl|inspectZip|confirmInspect|importZip|installPackageUrl|installGitHub|updateFromSource|reinstall|pickIcon|pickDirectory|importDirectory|shareSave|exportDev|scanQr)|host\.backup\.(?:export|exportAll|exportSettings|restore|restoreData|autoBackup\.pickDirectory|autoBackup\.save)|files\.(?:import|pickImage|pickInline|export)|camera\.capture)$/;
+  const LONG_METHODS = /^(?:host\.apps\.(?:installOnline|inspectUrl|inspectZip|confirmInspect|importZip|installPackageUrl|installGitHub|updateFromSource|reinstall|pickIcon|pickDirectory|importDirectory|shareStart|shareSave|exportDev|promoteDev|scanQr)|host\.backup\.(?:export|exportAll|exportSettings|restore|restoreData|autoBackup\.pickDirectory|autoBackup\.save)|files\.(?:import|pickImage|pickInline|export)|camera\.capture)$/;
 
   function requestTimeout(method, params) {
     if (LONG_METHODS.test(method)) return 600000;

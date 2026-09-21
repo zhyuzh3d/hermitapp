@@ -21,6 +21,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.storage.StorageManager
 import android.provider.DocumentsContract
+import android.provider.OpenableColumns
 import android.provider.Settings
 import android.view.Gravity
 import android.view.PixelCopy
@@ -174,6 +175,8 @@ class MainActivity : ComponentActivity(), BridgeHost {
         val downloadUrl: String?,
         val liveUrl: String?,
         val suggestedName: String?,
+        /** Readable on-device location the user picked, when this came from a local file. */
+        val localPath: String? = null,
     )
     private val pendingSourceImports = LinkedHashMap<String, PendingSource>()
     private var pendingOpenedNotification: JSONObject? = null
@@ -1338,7 +1341,9 @@ class MainActivity : ComponentActivity(), BridgeHost {
         }
         "host.apps.shareStart" -> {
             val appId = params.getString("appId")
-            val allowNetwork = if (hermitApp.happShare.hasLanAddress()) ensureLanPermission() else false
+            // Exporting a copy does not need a network share, so callers can opt out of the LAN server.
+            val allowNetwork = params.optBoolean("network", true) &&
+                (if (hermitApp.happShare.hasLanAddress()) ensureLanPermission() else false)
             withContext(Dispatchers.IO) { hermitApp.happShare.start(appId, allowNetwork) }
         }
         "host.apps.shareSave" -> {
@@ -1447,15 +1452,17 @@ class MainActivity : ComponentActivity(), BridgeHost {
         }
         "host.apps.inspectZip" -> {
             val uri = pickZip() ?: return JSONObject().put("cancelled", true)
+            val localPath = displayPathOf(uri)
             val file = copyToCache(uri)
             val description = hermitApp.installer.describePackage(file)
             val token = UUID.randomUUID().toString()
             pendingSourceImports.clear()
             pendingSourceImports[token] = PendingSource(
                 file = file, provenance = "import", declaredSha256 = null,
-                downloadUrl = null, liveUrl = null, suggestedName = null,
+                downloadUrl = null, liveUrl = null, suggestedName = null, localPath = localPath,
             )
             packagePreviewJson(file, description).put("cancelled", false).put("kind", "package").put("token", token)
+                .put("sourcePath", localPath)
         }
         "host.apps.confirmInspect" -> {
             val token = params.getString("token")
@@ -1477,7 +1484,13 @@ class MainActivity : ComponentActivity(), BridgeHost {
                         iconBytes,
                         replaceIcon = iconBytes != null,
                     )
-                    if (params.optBoolean("favorite")) hermitApp.registry.setFavorite(result.appId, true) else presented
+                    val favored = if (params.optBoolean("favorite")) hermitApp.registry.setFavorite(result.appId, true) else presented
+                    // Remember a local import so "重新安装" can reuse the exact same file later.
+                    if (source.localPath == null) favored else {
+                        val retained = retainPackageSource(result.appId, source.file)
+                        hermitApp.registry.recordLocalSource(result.appId, source.localPath, retained)
+                        hermitApp.registry.getInstance(result.appId) ?: favored
+                    }
                 }
                 shortcuts.update(updated)
                 updated.toJson().put("cancelled", false).put("installStrategy", "local").put("installKind", "package")
@@ -1604,6 +1617,41 @@ class MainActivity : ComponentActivity(), BridgeHost {
         "host.apps.leaveDev" -> {
             val appId = params.getString("appId")
             withContext(Dispatchers.IO) { hermitApp.devWorkspaces.leave(appId) }
+        }
+        "host.apps.promoteDev" -> {
+            val appId = params.getString("appId")
+            val app = hermitApp.registry.getInstance(appId)
+                ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "页面应用不存在")
+            val workspace = withContext(Dispatchers.IO) { hermitApp.devWorkspaces.status(appId) }
+            val revision = workspace.optLong("revision")
+            if (revision <= 0) throw HermitException(ErrorCodes.DEV_MODE_REQUIRED, "开发工作副本不存在")
+            val stable = app.activeReleaseId?.let(hermitApp.registry::getRelease)
+                ?: throw HermitException(ErrorCodes.CONFLICT, "此 happ 没有可继承的正式版本")
+            val devVersion = workspace.optJSONObject("devVersion")
+            val devName = devVersion?.optString("name").orEmpty()
+            val stableName = stable.versionName.orEmpty()
+            val versionName = devName.takeIf { it.isNotBlank() }
+                ?: Regex("^(\\d+)\\.(\\d+)\\.(\\d+)$").find(stableName)
+                    ?.let { "${it.groupValues[1]}.${it.groupValues[2]}.${it.groupValues[3].toInt() + 1}" }
+                ?: "1.0.0"
+            val versionCode = maxOf(devVersion?.optLong("code") ?: 0L, stable.versionCode ?: 0L) + 1
+            val expectedStable = app.activeReleaseId
+            val built = withContext(Dispatchers.IO) { hermitApp.devWorkspaces.build(appId, revision, versionCode, versionName) }
+            val artifact = hermitApp.devWorkspaces.artifact(built.getString("buildId"))
+                ?: throw HermitException(ErrorCodes.STORAGE, "开发版本打包失败")
+            val installed = withContext(Dispatchers.IO) {
+                artifact.file.inputStream().use { input ->
+                    hermitApp.installer.installZip(
+                        input, null, appId, "dev-promote",
+                        expectedReleaseId = expectedStable, declaredSha256 = artifact.sha256,
+                    )
+                }
+            }
+            withContext(Dispatchers.IO) {
+                hermitApp.devWorkspaces.installed(appId, revision, installed.releaseId, keepDev = false)
+            }
+            JSONObject().put("cancelled", false).put("appId", appId).put("releaseId", installed.releaseId)
+                .put("versionCode", versionCode).put("versionName", versionName)
         }
         "host.apps.resetDev" -> {
             val appId = params.getString("appId")
@@ -2356,6 +2404,33 @@ class MainActivity : ComponentActivity(), BridgeHost {
             .put("entry", description.entry ?: "")
             .put("iconDataUrl", iconDataUrl ?: "")
             .put("bytes", description.bytes)
+    }
+
+    /** Best-effort readable location of a picked document, for display and support. */
+    private fun displayPathOf(uri: Uri): String {
+        if (uri.scheme.equals("file", true)) return uri.path ?: uri.toString()
+        val documentId = runCatching {
+            if (DocumentsContract.isDocumentUri(this, uri)) DocumentsContract.getDocumentId(uri) else null
+        }.getOrNull()
+        if (documentId != null) {
+            val parts = documentId.split(':', limit = 2)
+            if (parts.size == 2 && parts[0].equals("primary", true)) return "/storage/emulated/0/" + parts[1]
+            if (parts.size == 2 && parts[0].equals("raw", true)) return parts[1]
+            if (documentId.startsWith("/")) return documentId
+        }
+        return uri.toString()
+    }
+
+    /** Keeps a private copy of an imported package so it can be reinstalled without the picker. */
+    private suspend fun retainPackageSource(appId: String, source: File): String? = withContext(Dispatchers.IO) {
+        val directory = File(filesDir, "package-sources/$appId").apply { mkdirs() }
+        val target = File(directory, "package.zip")
+        runCatching {
+            if (target.exists() && !target.delete()) throw java.io.IOException("无法替换保留的安装包")
+            if (source.renameTo(target)) return@runCatching target.absolutePath
+            source.inputStream().use { input -> target.outputStream().use { output -> input.copyTo(output) } }
+            target.absolutePath
+        }.getOrNull()
     }
 
     /** Copies a picked file into the cache so it stays valid until the user confirms. */

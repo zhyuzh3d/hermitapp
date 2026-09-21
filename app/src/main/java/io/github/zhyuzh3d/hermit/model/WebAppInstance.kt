@@ -37,6 +37,10 @@ data class WebAppInstance(
     val notificationEnabled: Boolean = false,
     val allowCrossOriginNetwork: Boolean = false,
     val defaultIconUrl: String? = null,
+    /** Human readable location the package was installed from on this device. */
+    val sourcePath: String? = null,
+    /** Absolute path of the retained copy used to reinstall a locally imported package. */
+    val sourceUri: String? = null,
 ) {
     val instanceId: String get() = appId
     val dataGenerationId: String get() = activeDataGeneration
@@ -68,6 +72,8 @@ data class WebAppInstance(
         .put("liveAvailable", liveUrl != null)
         .put("downloadUrl", downloadUrl ?: JSONObject.NULL)
         .put("downloadVersion", versionJson(downloadVersionCode, downloadVersionName))
+        .put("sourcePath", sourcePath ?: JSONObject.NULL)
+        .put("sourceRetained", sourceUri != null)
         .put("updateUrl", updateUrl ?: JSONObject.NULL)
         .put("notificationEnabled", notificationEnabled)
         .put("allowCrossOriginNetwork", allowCrossOriginNetwork)

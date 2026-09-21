@@ -46,6 +46,8 @@ class AppRegistry(private val context: Context) : SQLiteOpenHelper(context, "her
               download_version_code INTEGER,
               download_version_name TEXT,
               update_url TEXT,
+              source_path TEXT,
+              source_uri TEXT,
               notification_enabled INTEGER NOT NULL DEFAULT 0,
               allow_cross_origin_network INTEGER NOT NULL DEFAULT 0,
               state TEXT NOT NULL DEFAULT 'ready',
@@ -119,7 +121,7 @@ class AppRegistry(private val context: Context) : SQLiteOpenHelper(context, "her
     }
 
     private fun createMissingTables(db: SQLiteDatabase) {
-        db.execSQL("CREATE TABLE IF NOT EXISTS instances (app_id TEXT PRIMARY KEY, name TEXT NOT NULL, source_kind TEXT NOT NULL, runtime_mode TEXT NOT NULL, launch_channel TEXT NOT NULL DEFAULT 'STABLE', start_url TEXT NOT NULL, primary_origin TEXT NOT NULL, live_url TEXT, web_profile_name TEXT NOT NULL UNIQUE, trust_revision INTEGER NOT NULL DEFAULT 1, active_release_id TEXT, active_data_generation TEXT NOT NULL, source_adapter TEXT NOT NULL DEFAULT 'unknown', source_spec TEXT NOT NULL DEFAULT '{}', developer_enabled INTEGER NOT NULL DEFAULT 0, favorite INTEGER NOT NULL DEFAULT 0, icon_url TEXT, default_icon_url TEXT, happ_id TEXT, publisher_key_id TEXT, download_url TEXT, download_version_code INTEGER, download_version_name TEXT, update_url TEXT, notification_enabled INTEGER NOT NULL DEFAULT 0, allow_cross_origin_network INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'ready', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS instances (app_id TEXT PRIMARY KEY, name TEXT NOT NULL, source_kind TEXT NOT NULL, runtime_mode TEXT NOT NULL, launch_channel TEXT NOT NULL DEFAULT 'STABLE', start_url TEXT NOT NULL, primary_origin TEXT NOT NULL, live_url TEXT, web_profile_name TEXT NOT NULL UNIQUE, trust_revision INTEGER NOT NULL DEFAULT 1, active_release_id TEXT, active_data_generation TEXT NOT NULL, source_adapter TEXT NOT NULL DEFAULT 'unknown', source_spec TEXT NOT NULL DEFAULT '{}', developer_enabled INTEGER NOT NULL DEFAULT 0, favorite INTEGER NOT NULL DEFAULT 0, icon_url TEXT, default_icon_url TEXT, happ_id TEXT, publisher_key_id TEXT, download_url TEXT, download_version_code INTEGER, download_version_name TEXT, update_url TEXT, source_path TEXT, source_uri TEXT, notification_enabled INTEGER NOT NULL DEFAULT 0, allow_cross_origin_network INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'ready', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
         db.execSQL("CREATE TABLE IF NOT EXISTS releases (release_id TEXT PRIMARY KEY, app_id TEXT NOT NULL, tree_hash TEXT NOT NULL, provenance TEXT NOT NULL, version_code INTEGER, version_name TEXT, source_revision TEXT, entry_path TEXT NOT NULL DEFAULT 'index.html', routing TEXT NOT NULL DEFAULT 'hash', happ_id TEXT, publisher_key_id TEXT, relative_root TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(app_id, tree_hash))")
         db.execSQL("CREATE INDEX IF NOT EXISTS releases_by_app_time ON releases(app_id, created_at DESC)")
         createDevWorkspaces(db)
@@ -130,7 +132,9 @@ class AppRegistry(private val context: Context) : SQLiteOpenHelper(context, "her
         db.execSQL("CREATE TABLE IF NOT EXISTS profile_cleanup (profile_name TEXT PRIMARY KEY, app_id TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
         createSettings(db)
         val columns = db.rawQuery("PRAGMA table_info(instances)", null).use { c -> buildSet { while (c.moveToNext()) add(c.getString(1)) } }
-        val additions = mapOf("launch_channel" to "TEXT NOT NULL DEFAULT 'STABLE'", "source_adapter" to "TEXT NOT NULL DEFAULT 'unknown'", "source_spec" to "TEXT NOT NULL DEFAULT '{}'", "developer_enabled" to "INTEGER NOT NULL DEFAULT 0", "favorite" to "INTEGER NOT NULL DEFAULT 0", "icon_url" to "TEXT", "default_icon_url" to "TEXT", "happ_id" to "TEXT", "publisher_key_id" to "TEXT", "download_url" to "TEXT", "download_version_code" to "INTEGER", "download_version_name" to "TEXT", "update_url" to "TEXT", "notification_enabled" to "INTEGER NOT NULL DEFAULT 0", "allow_cross_origin_network" to "INTEGER NOT NULL DEFAULT 0", "state" to "TEXT NOT NULL DEFAULT 'ready'")
+        // Adding a column here is not enough on its own: SQLite only calls onUpgrade while the
+        // file version is still behind, so every new column must come with a VERSION bump.
+        val additions = mapOf("launch_channel" to "TEXT NOT NULL DEFAULT 'STABLE'", "source_adapter" to "TEXT NOT NULL DEFAULT 'unknown'", "source_spec" to "TEXT NOT NULL DEFAULT '{}'", "developer_enabled" to "INTEGER NOT NULL DEFAULT 0", "favorite" to "INTEGER NOT NULL DEFAULT 0", "icon_url" to "TEXT", "default_icon_url" to "TEXT", "happ_id" to "TEXT", "publisher_key_id" to "TEXT", "download_url" to "TEXT", "download_version_code" to "INTEGER", "download_version_name" to "TEXT", "update_url" to "TEXT", "source_path" to "TEXT", "source_uri" to "TEXT", "notification_enabled" to "INTEGER NOT NULL DEFAULT 0", "allow_cross_origin_network" to "INTEGER NOT NULL DEFAULT 0", "state" to "TEXT NOT NULL DEFAULT 'ready'")
         additions.filterKeys { it !in columns }.forEach { (name, definition) -> db.execSQL("ALTER TABLE instances ADD COLUMN $name $definition") }
     }
 
@@ -509,10 +513,30 @@ class AppRegistry(private val context: Context) : SQLiteOpenHelper(context, "her
         writableDatabase.update("instances", ContentValues().apply {
             if (downloadUrl != null) {
                 put("download_url", downloadUrl)
+                // The instance now follows an online address, so the local import path is stale.
+                putNull("source_path"); putNull("source_uri")
                 if (versionCode == null) putNull("download_version_code") else put("download_version_code", versionCode)
                 if (versionName == null) putNull("download_version_name") else put("download_version_name", versionName)
             }
             if (updateUrl != null) put("update_url", updateUrl)
+            put("updated_at", System.currentTimeMillis())
+        }, "app_id = ?", arrayOf(appId))
+    }
+
+    /** Remembers the on-device location a package was imported from, so it can be reinstalled. */
+    fun recordLocalSource(appId: String, sourcePath: String?, retainedPath: String?) {
+        if (sourcePath == null && retainedPath == null) return
+        writableDatabase.update("instances", ContentValues().apply {
+            if (sourcePath != null) put("source_path", sourcePath)
+            if (retainedPath != null) put("source_uri", retainedPath)
+            put("updated_at", System.currentTimeMillis())
+        }, "app_id = ?", arrayOf(appId))
+    }
+
+    /** Clears a remembered local source when the instance now follows an online address. */
+    fun clearLocalSource(appId: String) {
+        writableDatabase.update("instances", ContentValues().apply {
+            putNull("source_path"); putNull("source_uri")
             put("updated_at", System.currentTimeMillis())
         }, "app_id = ?", arrayOf(appId))
     }
@@ -715,6 +739,8 @@ class AppRegistry(private val context: Context) : SQLiteOpenHelper(context, "her
         put("happ_id", happId); put("publisher_key_id", publisherKeyId)
         put("download_url", downloadUrl); put("download_version_code", downloadVersionCode)
         put("download_version_name", downloadVersionName); put("update_url", updateUrl)
+        if (sourcePath == null) putNull("source_path") else put("source_path", sourcePath)
+        if (sourceUri == null) putNull("source_uri") else put("source_uri", sourceUri)
         put("notification_enabled", if (notificationEnabled) 1 else 0)
         put("allow_cross_origin_network", if (allowCrossOriginNetwork) 1 else 0)
         put("created_at", createdAt); put("updated_at", updatedAt)
@@ -746,6 +772,8 @@ class AppRegistry(private val context: Context) : SQLiteOpenHelper(context, "her
         notificationEnabled = int("notification_enabled") != 0,
         allowCrossOriginNetwork = int("allow_cross_origin_network") != 0,
         defaultIconUrl = stringOrNull("default_icon_url"),
+        sourcePath = stringOrNull("source_path"),
+        sourceUri = stringOrNull("source_uri"),
     )
 
     private fun Cursor.toRelease() = CodeRelease(
@@ -838,7 +866,8 @@ class AppRegistry(private val context: Context) : SQLiteOpenHelper(context, "her
     }
 
     companion object {
-        private const val VERSION = 13
+        // 14 adds instances.source_path / source_uri so a locally imported package can be reinstalled.
+        private const val VERSION = 14
         const val SETTING_THEME = "theme"
     }
 }
