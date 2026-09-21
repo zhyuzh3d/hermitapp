@@ -12,6 +12,9 @@ export HERMIT_KEY_PASSWORD=$HERMIT_STORE_PASSWORD
 export HERMIT_KEY_ALIAS=${HERMIT_KEY_ALIAS:-hermit-v1}
 export JAVA_HOME=${JAVA_HOME:-/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home}
 export ANDROID_HOME=${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}
-VERSION_NAME=${HERMIT_VERSION_NAME:-1.10.24}
-VERSION_CODE=${HERMIT_VERSION_CODE:-58}
+VERSION_NAME=${HERMIT_VERSION_NAME:-$(sed -n 's/.*versionName.*?: "\([^"]*\)"/\1/p' "$ROOT/app/build.gradle.kts" | head -n 1)}
+VERSION_CODE=${HERMIT_VERSION_CODE:-$(sed -n 's/.*versionCode.*?: \([0-9][0-9]*\)/\1/p' "$ROOT/app/build.gradle.kts" | head -n 1)}
+test -n "$VERSION_NAME" || { echo "Cannot determine versionName" >&2; exit 1; }
+test -n "$VERSION_CODE" || { echo "Cannot determine versionCode" >&2; exit 1; }
+cd "$ROOT"
 "$ROOT/gradlew" :app:assembleRelease -PhermitVersionName="$VERSION_NAME" -PhermitVersionCode="$VERSION_CODE"

@@ -43,6 +43,12 @@
           "maxLength": 80,
           "description": "Required for an ordinary happ and must match the visible DEV copy. Omit for HermitUI."
         },
+        "happId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 160,
+          "description": "Stable happ identity; the service resolves it to the unique installed instance when appId is omitted."
+        },
         "localStorageKeys": {
           "type": "array",
           "minItems": 0,
@@ -435,7 +441,7 @@
   },
   {
     "name": "hermit_sync_dev_changes",
-    "description": "Fast save path: commit only caller-known text changes, atomically switch generation, then refresh the visible page.",
+    "description": "Fast save path: commit only caller-known text changes in one atomic batch, then refresh the visible page. Reuse the cached device file manifest and call list_dev_files only on first sync, reconnect or explicit reconcile.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -570,6 +576,10 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 128
+        },
+        "force": {
+          "type": "boolean",
+          "description": "Explicitly ignore the supplied revision and replace the current DEV tree"
         }
       },
       "required": [
@@ -622,6 +632,10 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 67108864
+        },
+        "force": {
+          "type": "boolean",
+          "description": "Explicitly ignore the supplied revision and replace the current DEV tree"
         }
       },
       "required": [
@@ -942,7 +956,7 @@
   },
   {
     "name": "hermit_list_releases",
-    "description": "List retained immutable stable releases.",
+    "description": "List retained immutable stable releases, including version code and name for explicit update-dir preflight.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1008,5 +1022,71 @@
       "idempotentHint": false,
       "openWorldHint": false
     }
+  },
+  {
+    "name": "hermit_open_agent_session",
+    "description": "Open or resume the global device development session. The session is not locked to one happ; every later operation supplies happId or appId.",
+    "inputSchema": {"type":"object","properties":{},"required":[],"additionalProperties":false},
+    "annotations": {"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}
+  },
+  {
+    "name": "hermit_resume_agent_session",
+    "description": "Return the current global device session and installed happ targets after a reconnect.",
+    "inputSchema": {"type":"object","properties":{},"required":[],"additionalProperties":false},
+    "annotations": {"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}
+  },
+  {
+    "name": "hermit_list_installed_happs",
+    "description": "List every ordinary installed happ available to this global agent session, without binding the session to one target.",
+    "inputSchema": {"type":"object","properties":{"includeIcons":{"type":"boolean"}},"required":[],"additionalProperties":false},
+    "annotations": {"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}
+  },
+  {
+    "name": "hermit_get_happ_dev_status",
+    "description": "Return the selected happ development version, revision, tree summary, runtime mode and stable release. Use this before asking the user which side should be authoritative.",
+    "inputSchema": {"type":"object","properties":{"happId":{"type":"string","minLength":1,"maxLength":160},"appId":{"type":"string","minLength":1,"maxLength":80}},"required":[],"additionalProperties":false},
+    "annotations": {"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}
+  },
+  {
+    "name": "hermit_prepare_happ_development",
+    "description": "Resume or explicitly reset one installed happ development workspace, optionally entering DEV and opening it. This is a recommendation, not a mandatory workflow state machine.",
+    "inputSchema": {"type":"object","properties":{"happId":{"type":"string","minLength":1,"maxLength":160},"appId":{"type":"string","minLength":1,"maxLength":80},"strategy":{"type":"string","enum":["resume","reset"]},"startRuntimeMode":{"type":"string","enum":["dev","unchanged"]},"route":{"type":"string","minLength":1,"maxLength":2048},"requestId":{"type":"string","minLength":8,"maxLength":128}},"required":[],"additionalProperties":false},
+    "annotations": {"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":false}
+  },
+  {
+    "name": "hermit_hot_update_happ",
+    "description": "Atomically apply a batch of text changes to a happ DEV tree, then refresh the visible page and reuse its cached development state when possible. Use force only when the user explicitly selected client overwrite.",
+    "inputSchema": {"type":"object","properties":{"happId":{"type":"string","minLength":1,"maxLength":160},"appId":{"type":"string","minLength":1,"maxLength":80},"expectedDevRevision":{"type":"integer","minimum":1},"force":{"type":"boolean"},"requestId":{"type":"string","minLength":8,"maxLength":128},"files":{"type":"array","minItems":1,"maxItems":128,"items":{"type":"object","properties":{"path":{"type":"string","minLength":1,"maxLength":512},"content":{"type":"string","maxLength":524288},"delete":{"type":"boolean"},"from":{"type":"string","minLength":1,"maxLength":512},"to":{"type":"string","minLength":1,"maxLength":512},"move":{"type":"boolean"}},"required":[],"additionalProperties":false}},"refreshMode":{"type":"string","enum":["auto","reload","none"]},"route":{"type":"string","minLength":1,"maxLength":2048},"preserveState":{"type":"boolean"}},"required":["requestId","files"],"additionalProperties":false},
+    "annotations": {"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false}
+  },
+  {
+    "name": "hermit_download_dev_tree",
+    "description": "Create a bounded ZIP download of the selected happ DEV tree. The agent, not the device, decides how to compare or use the downloaded files.",
+    "inputSchema": {"type":"object","properties":{"happId":{"type":"string","minLength":1,"maxLength":160},"appId":{"type":"string","minLength":1,"maxLength":80},"expectedDevRevision":{"type":"integer","minimum":1}},"required":[],"additionalProperties":false},
+    "annotations": {"readOnlyHint":true,"destructiveHint":false,"idempotentHint":true,"openWorldHint":false}
+  },
+  {
+    "name": "hermit_refresh_happ_page",
+    "description": "Refresh the selected foreground happ in its existing WebView, optionally navigating to a same-origin relative path/query/hash and preserving development state.",
+    "inputSchema": {"type":"object","properties":{"happId":{"type":"string","minLength":1,"maxLength":160},"appId":{"type":"string","minLength":1,"maxLength":80},"route":{"type":"string","minLength":1,"maxLength":2048},"strategy":{"type":"string","enum":["reload","recreate"]},"preserveState":{"type":"boolean"},"restoreStateJson":{"type":"string","maxLength":524288}},"required":[],"additionalProperties":false},
+    "annotations": {"readOnlyHint":false,"destructiveHint":false,"idempotentHint":false,"openWorldHint":false}
+  },
+  {
+    "name": "hermit_switch_happ_runtime_mode",
+    "description": "Explicitly switch one happ between DEV and stable runtime modes; this does not change its source, data or grants.",
+    "inputSchema": {"type":"object","properties":{"happId":{"type":"string","minLength":1,"maxLength":160},"appId":{"type":"string","minLength":1,"maxLength":80},"runtimeMode":{"type":"string","enum":["dev","stable"]},"requestId":{"type":"string","minLength":8,"maxLength":128}},"required":["runtimeMode","requestId"],"additionalProperties":false},
+    "annotations": {"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":false}
+  },
+  {
+    "name": "hermit_promote_dev_release",
+    "description": "Build and install the selected DEV revision as a stable release in one controlled operation, then keep the target running in DEV for continued work.",
+    "inputSchema": {"type":"object","properties":{"happId":{"type":"string","minLength":1,"maxLength":160},"appId":{"type":"string","minLength":1,"maxLength":80},"expectedDevRevision":{"type":"integer","minimum":1},"expectedStableReleaseId":{"type":"string","minLength":1,"maxLength":80},"requestId":{"type":"string","minLength":8,"maxLength":128},"versionCode":{"type":"integer","minimum":1},"versionName":{"type":"string","minLength":1,"maxLength":80}},"required":["expectedDevRevision","expectedStableReleaseId","requestId","versionCode","versionName"],"additionalProperties":false},
+    "annotations": {"readOnlyHint":false,"destructiveHint":true,"idempotentHint":false,"openWorldHint":false}
+  },
+  {
+    "name": "hermit_install_happ_release",
+    "description": "Prepare a signed, bounded ZIP upload for final stable installation. Upload the returned URL, then explicitly switch the target to stable when the user confirms.",
+    "inputSchema": {"type":"object","properties":{"happId":{"type":"string","minLength":1,"maxLength":160},"appId":{"type":"string","minLength":1,"maxLength":80},"expectedReleaseId":{"type":"string","minLength":1,"maxLength":80},"requestId":{"type":"string","minLength":8,"maxLength":128},"sha256":{"type":"string","pattern":"^[a-fA-F0-9]{64}$"},"bytes":{"type":"integer","minimum":1,"maximum":67108864}},"required":["expectedReleaseId","requestId","sha256","bytes"],"additionalProperties":false},
+    "annotations": {"readOnlyHint":false,"destructiveHint":true,"idempotentHint":true,"openWorldHint":false}
   }
 ]

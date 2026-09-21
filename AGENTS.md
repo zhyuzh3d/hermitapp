@@ -10,6 +10,11 @@
 - `hermitapp/` 与同级 `hermitweb/` 是两个独立仓库。HermitApp 唯一规范远程是 `git@github.com:zhyuzh3d/hermitapp.git`，HermitWeb 唯一规范远程是 `git@github.com:zhyuzh3d/hermitweb.git`。共同父目录不得初始化 Git，两个仓库不得合并、嵌套、改作 subtree 或 submodule。
 - 跨仓任务必须分别检查、暂存、提交和推送。每次提交或推送 HermitApp 前，执行 `git rev-parse --show-toplevel` 与 `git remote get-url origin`，确认顶层目录以 `/hermitapp` 结尾且远程精确匹配；不匹配立即停止。修改远程、迁移仓库和强制推送必须另有明确授权。
 - 进入 HermitWeb 工作前先读取其 `AGENTS.md`。HermitWeb 的修改、验证和发布遵循其仓库规则，不能借 HermitApp 任务自动获得授权。
+- 修改归属、跨仓顺序与缺陷处理统一遵循上级 `../AGENTS.md`，本文件不复制第二套规则。
+
+## 本仓库归属
+
+- 本仓库只处理上级规则判定为 HermitApp 的部分。HermitUI 和具体 happ 的语义源码不得因为最终运行在 APK 中而移入本仓库；需要内置 HermitUI 时只接收同步工具生成的快照。
 
 ## 统一术语与领域不变量
 
@@ -51,7 +56,12 @@
 ## 验证、设备与发布
 
 - 验证范围严格等于修改范围。网页资源默认做语法和直接合同检查；局部 Kotlin 修改编译受影响变体并运行直接相关测试；文档修改不触发构建。同一批代码未变化时不得重复构建、安装或验收。
-- 除非用户明确要求全面检查，不执行全项目 lint、完整 instrumentation、设备矩阵、截图分析、视觉验收、反复 release 校验或长篇报告。发现范围外风险时只报告，不擅自扩修。
+- 每轮开始只做一次必要预检：确认目标仓库、工作树和直接依赖工具；未涉及 Android 构建时不检查 JDK/SDK/签名，未涉及线上发布时不检查 Mutagen/服务器。已经通过且输入未变化的检查不得重跑。
+- HermitUI 小改的快路径是“在 HermitWeb 修改 → 定向语法/DOM 检查 → 增量同步公开文件 → 原位刷新 Shell”，到此结束。禁止为了让 UI 生效而复制到 `assets/store`、升 APK 版本、跑 Gradle 或覆盖安装。
+- Native 开发先用 `compileDebugKotlin` 或直接相关单测快速反馈；代码稳定后只执行一次正式构建。用户要求更新设备时使用 `scripts/update-device.sh` 完成“必要时构建 → `adb install -r` → 启动 → 核对版本/进程”，不得先后手工重复 `compileReleaseKotlin`、`assembleRelease` 和安装同一产物。
+- 双仓变更按“Native 合同和实现 → HermitWeb 消费端 → 各自定向检查 → 必要的线上 Shell 发布 → 稳定 Shell 快照同步 → 一次 APK 构建安装”推进。若 Shell 不需要公开发布或 APK 不需要内置更新，省略对应阶段。
+- 构建或部署失败只重试失败阶段；源码未变化时复用 Gradle 增量结果和已生成 APK。正式构建前冻结本轮代码与快照，避免安装后再因小改重新构建。版本号只在正式交付节点确定一次，禁止用连续试编译消耗版本号。
+- 除非用户明确要求全面检查，不执行全项目 lint、完整 instrumentation、设备矩阵、截图分析、视觉验收、反复 release 校验或长篇报告。已确认缺陷按上级规则修复；仅有风险或猜测时报告并询问，不擅自扩修。
 - 用户要求真机更新时，生成必要 APK、使用覆盖安装，并确认版本和进程可启动；安装包生成不等于设备交付，`adb install` 成功也不等于功能或视觉验收。
 - 正式包名固定为 `io.github.zhyuzh3d.hermit`。发布签名、口令、token、`local.properties` 和私有路径配置不得进入 Git、日志或文档。发布产物使用 `hermit-v<version>-release.apk`，版本化产物发布后不得覆盖。
 - HermitUI 上线属于 HermitWeb 发布。发布前确认 Mutagen Alpha 精确指向 `hermitweb/public/`、同步模式为本机到服务器的单向副本且状态正常；上线后核对 `/shell/manifest.json` 的版本、包路径和 SHA-256，并确认公开 Shell 资源可访问。APK 内置 Shell 不得高于尚未发布且不可用的线上版本。

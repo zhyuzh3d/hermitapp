@@ -136,7 +136,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
     private val infrared by lazy { InfraredController(this) }
     private val device by lazy { DeviceController(this) }
     private val nativeHttp by lazy { NativeHttpClient(files) }
-    private val backup by lazy { BackupCoordinator(this, hermitApp.registry, hermitApp.installer, records, files) }
+    private val backup by lazy { BackupCoordinator(this, hermitApp.registry, hermitApp.installer, records, files, hermitApp.notifications.repository) }
     private lateinit var root: android.widget.FrameLayout
     private var webView: WebView? = null
     private var serviceWorkerClient: ServiceWorkerClientCompat? = null
@@ -449,7 +449,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
         })
     }
 
-    private fun refreshDevRuntime(args: JSONObject): JSONObject {
+    private suspend fun refreshDevRuntime(args: JSONObject): JSONObject {
         val appId = args.getString("appId")
         val current = session
         val view = webView
@@ -459,10 +459,19 @@ class MainActivity : ComponentActivity(), BridgeHost {
         val revision = args.getLong("revision")
         current.devRevision = revision
         val route = args.optString("route").takeIf { !args.isNull("route") && it.isNotBlank() }
+        var stateSaved = false
+        var restoreStateJson = restoreStateJson(args)
+        if (restoreStateJson == null && args.optBoolean("preserveState", true) && route == null) {
+            restoreStateJson = runCatching {
+                captureAgentPageState(JSONObject().put("appId", appId)).optJSONObject("page")?.toString()
+            }.getOrNull()
+            stateSaved = restoreStateJson != null
+        }
         if (route != null) {
             val target = resolveAppRoute(hermitApp.registry.getInstance(appId)!!, route)
             view.loadUrl(target)
-            return JSONObject().put("state", "opening").put("appId", appId).put("url", target).put("reusedWebView", true)
+            return JSONObject().put("state", "opening").put("appId", appId).put("url", target)
+                .put("reusedWebView", true).put("stateSaved", stateSaved).put("stateRestored", false)
         }
         val paths = args.optJSONArray("changedPaths") ?: JSONArray()
         if ((0 until paths.length()).any { paths.getString(it) == "hermit.json" }) {
@@ -476,10 +485,13 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 null,
             )
             return JSONObject().put("state", "css-hot-swap").put("appId", appId).put("revision", revision)
+                .put("stateSaved", stateSaved).put("stateRestored", false)
         }
+        pendingAgentReload = PendingAgentReload(RuntimeRole.WEB_APP, appId, restoreStateJson, null)
         view.settings.cacheMode = android.webkit.WebSettings.LOAD_NO_CACHE
         view.reload()
         return JSONObject().put("state", "reloading").put("appId", appId).put("revision", revision)
+            .put("stateSaved", stateSaved).put("stateRestoreScheduled", restoreStateJson != null)
     }
 
     private suspend fun captureAgentPageState(args: JSONObject): JSONObject {
@@ -620,7 +632,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
             .put("_imageData", Base64.encodeToString(bytes, Base64.NO_WRAP))
     }
 
-    private fun reloadAppFromAgent(args: JSONObject): JSONObject {
+    private suspend fun reloadAppFromAgent(args: JSONObject): JSONObject {
         val appId = args.getString("appId")
         val current = session
         val view = webView
@@ -632,7 +644,14 @@ class MainActivity : ComponentActivity(), BridgeHost {
         }
         current.devRevision = args.optLong("revision").takeIf { args.has("revision") && !args.isNull("revision") }
         val strategy = reloadStrategy(args)
-        val restoreStateJson = restoreStateJson(args)
+        var restoreStateJson = restoreStateJson(args)
+        var stateSaved = false
+        if (restoreStateJson == null && args.optBoolean("preserveState", true)) {
+            restoreStateJson = runCatching {
+                captureAgentPageState(JSONObject().put("appId", appId)).optJSONObject("page")?.toString()
+            }.getOrNull()
+            stateSaved = restoreStateJson != null
+        }
         val postReloadScript = args.optString("postReloadScript").takeIf { args.has("postReloadScript") && it.isNotBlank() }
         if (postReloadScript != null) {
             if (postReloadScript.length > MAX_POST_RELOAD_SCRIPT_CHARS) {
@@ -648,7 +667,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
         }
         return JSONObject().put("state", if (recreated) "runtime-recreated" else "reloading")
             .put("appId", appId).put("strategy", strategy).put("reusedWebView", !recreated)
-            .put("restoreStateAccepted", restoreStateJson != null)
+            .put("restoreStateAccepted", restoreStateJson != null).put("stateSaved", stateSaved)
             .put("postReloadScriptAccepted", postReloadScript != null)
     }
 
@@ -1478,6 +1497,11 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 }
             ))
         }
+        "host.apps.pruneReleases" -> {
+            val appId = params.getString("appId")
+            withContext(Dispatchers.IO) { hermitApp.installer.pruneReleasesToLimit(appId, 5) }
+            JSONObject().put("cleaned", true)
+        }
         "host.apps.enterDev" -> {
             val appId = params.getString("appId")
             withContext(Dispatchers.IO) { hermitApp.devWorkspaces.enter(appId) }
@@ -1555,7 +1579,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
         "host.backup.export" -> {
             val app = hermitApp.registry.getInstance(params.getString("appId"))
                 ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "页面应用不存在")
-            val uri = createBackupDocument("${safeDocumentName(app.name)}.hermit-backup.zip")
+            val uri = createBackupDocument("${safeDocumentName(app.name)}-${backupTimestamp()}.hermit-backup.zip")
                 ?: return JSONObject().put("cancelled", true)
             val deployStatus = hermitApp.developmentServer.status()
             if (deployStatus.optBoolean("active") && deployStatus.optString("appId") == app.appId) {
@@ -1563,9 +1587,19 @@ class MainActivity : ComponentActivity(), BridgeHost {
             }
             backup.export(app.appId, uri).put("cancelled", false)
         }
+        "host.backup.exportAll" -> {
+            val uri = createBackupDocument("Hermit-full-${backupTimestamp()}.hermit-backup.zip")
+                ?: return JSONObject().put("cancelled", true)
+            backup.exportAll(uri, params.optString("theme", "system")).put("cancelled", false)
+        }
+        "host.backup.exportSettings" -> {
+            val uri = createBackupDocument("Hermit-settings-${backupTimestamp()}.hermit-backup.zip")
+                ?: return JSONObject().put("cancelled", true)
+            backup.exportSettings(uri, params.optString("theme", "system")).put("cancelled", false)
+        }
         "host.backup.restore" -> {
             val uri = pickBackup() ?: return JSONObject().put("cancelled", true)
-            backup.restore(uri).put("cancelled", false)
+            backup.restoreAny(uri).put("cancelled", false)
         }
         "host.backup.restoreData" -> {
             val appId = params.getString("appId")
@@ -2463,6 +2497,8 @@ class MainActivity : ComponentActivity(), BridgeHost {
     }
 
     private fun safeDocumentName(value: String): String = value.replace(Regex("[^A-Za-z0-9._\\-\\u4e00-\\u9fff]+"), "-").take(60).ifBlank { "hermit-app" }
+
+    private fun backupTimestamp(): String = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US).format(java.util.Date())
 
     private fun capabilityDescriptors(runtime: RuntimeSession): JSONObject {
         val names = listOf("runtime", "app", "appearance", "data", "files", "audio", "tts", "speech", "location", "sensors", "camera",

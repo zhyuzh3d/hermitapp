@@ -448,7 +448,7 @@ class PersistenceInstrumentedTest {
         val originalFile = fileStore.import(installed.appId, instance.activeDataGeneration, "attachment".byteInputStream(), "a.txt", "text/plain")
         val share = java.io.File(context.filesDir, "shared/test-${UUID.randomUUID()}.zip").apply { parentFile!!.mkdirs(); createNewFile() }
         val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", share)
-        val coordinator = BackupCoordinator(context, app.registry, app.installer, records, fileStore)
+        val coordinator = BackupCoordinator(context, app.registry, app.installer, records, fileStore, app.notifications.repository)
         coordinator.export(installed.appId, uri)
         val restoredResult = coordinator.restore(uri)
         val restoredId = restoredResult.getString("appId")

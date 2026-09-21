@@ -133,10 +133,12 @@ main { max-width:1000px; margin:auto; padding:12px 24px calc(110px + env(safe-ar
 .icon-crop-toolbar .icon-button { width:44px; height:44px; min-height:44px; border:1px solid var(--line); background:var(--soft); }
 .manifest-status { margin:4px 0 16px; padding:11px 13px; border-radius:12px; background:var(--green-bg); color:var(--green); font-size:11px; line-height:1.6; }
 .share-card,.share-install-card { max-width:460px; }
-.share-app-summary { display:flex; align-items:center; gap:13px; margin:10px 0 16px; }
+.share-app-summary { display:flex; align-items:center; gap:16px; margin:10px 0 16px; }
 .share-app-summary > div { min-width:0; display:grid; gap:4px; }
 .share-app-summary strong { font-size:17px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .share-app-summary small { color:var(--muted); line-height:1.45; }
+.section-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.section-heading h3 { min-width:0; }
 .share-app-icon { width:58px; height:58px; flex:0 0 58px; display:grid; place-items:center; overflow:hidden; border-radius:15px; background:var(--blue); color:white; font-size:26px; font-weight:800; background-position:center; background-size:cover; box-shadow:var(--shadow); }
 .share-app-icon.custom { color:transparent; }
 .share-qr-box { display:grid; place-items:center; margin:4px auto 14px; padding:12px; width:min(300px,100%); box-sizing:border-box; border-radius:22px; background:white; border:1px solid var(--line); }
@@ -204,6 +206,27 @@ details[open] > summary { margin-bottom:12px; }
 .row { display:flex; align-items:center; justify-content:space-between; gap:10px; background:var(--bg); border:1px solid var(--line); border-radius:12px; padding:10px 12px; font-size:12px; }
 .row span,.row code { overflow-wrap:anywhere; min-width:0; }
 .row button { flex:none; font-size:11px; padding:8px 12px; }
+.backup-sheet-card { width:min(620px,100%); height:80vh; height:80dvh; max-height:80vh; max-height:80dvh; display:flex; flex-direction:column; overflow:hidden; }
+#backupActionsPanel { align-items:flex-end; padding:0; }
+.backup-sheet-actions { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; margin-bottom:22px; }
+.backup-sheet-actions button { display:flex; align-items:center; gap:12px; min-width:0; padding:14px; text-align:left; background:var(--bg); }
+.backup-sheet-actions button > i { flex:none; width:24px; text-align:center; font-size:18px; }
+.backup-sheet-actions span { display:grid; gap:3px; min-width:0; }
+.backup-sheet-actions strong { font-size:13px; }
+.backup-sheet-actions small { color:var(--muted); font-size:10px; line-height:1.4; }
+.backup-apps-heading { display:flex; align-items:baseline; justify-content:space-between; gap:10px; border-top:1px solid var(--line); padding-top:18px; }
+.backup-apps-heading h3 { font-size:14px; }
+.backup-app-list { display:grid; gap:8px; min-height:0; overflow-y:auto; overscroll-behavior:contain; padding:12px 0 max(20px,env(safe-area-inset-bottom)); }
+.backup-app-row { display:flex; align-items:center; gap:12px; width:100%; min-width:0; padding:10px 12px; border:1px solid var(--line); border-radius:12px; background:var(--bg); text-align:left; }
+.backup-app-row > i { flex:none; margin-left:auto; color:var(--muted); }
+.backup-app-icon { display:grid; place-items:center; width:42px; height:42px; flex:0 0 42px; overflow:hidden; border-radius:12px; background:var(--blue-bg); color:var(--blue); background-position:center; background-size:cover; }
+.backup-app-icon.custom { background-color:var(--soft); color:transparent; }
+.backup-app-copy { display:grid; gap:3px; min-width:0; }
+.backup-app-copy strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
+.backup-app-copy small { color:var(--muted); font-size:10px; }
+.backup-result { padding:14px 16px; border:1px solid var(--line); border-radius:14px; background:var(--bg); }
+.backup-result strong { display:block; margin-bottom:8px; font-size:14px; }
+.backup-result ul { margin:0; padding-left:20px; color:var(--muted); font-size:12px; line-height:1.8; }
 pre { white-space:pre-wrap; overflow-wrap:anywhere; word-break:break-word; padding:16px; background:var(--soft); color:var(--ink); border:1px solid var(--line); border-radius:14px; font:11px/1.8 ui-monospace,monospace; }
 code { font-family:ui-monospace,monospace; }
 .confirm-modal { z-index:25; }

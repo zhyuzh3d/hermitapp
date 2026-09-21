@@ -18,7 +18,10 @@ import java.net.Socket
 import java.net.URL
 import java.util.UUID
 import java.io.ByteArrayOutputStream
+import java.io.ByteArrayInputStream
+import java.security.MessageDigest
 import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 
 @RunWith(AndroidJUnit4::class)
@@ -66,6 +69,18 @@ class AgentDevelopmentTest {
         } finally { connection.disconnect() }
     }
 
+    private fun requestBytes(path: String, credential: String? = password): Pair<Int, ByteArray> {
+        val connection = URL(base + path).openConnection() as HttpURLConnection
+        try {
+            connection.requestMethod = "GET"; connection.connectTimeout = 5000; connection.readTimeout = 15000
+            connection.setRequestProperty("Accept", "application/zip")
+            if (credential != null) connection.setRequestProperty("Authorization", "Bearer $credential")
+            val code = connection.responseCode
+            val stream = if (code >= 400) connection.errorStream else connection.inputStream
+            return code to (stream?.readBytes() ?: ByteArray(0))
+        } finally { connection.disconnect() }
+    }
+
     private fun rpc(method: String, args: JSONObject = JSONObject(), credential: String = password): JSONObject {
         val payload = JSONObject().put("jsonrpc", "2.0").put("id", 1).put("method", method).put("params", args)
         val response = request("/mcp", "POST", payload.toString().toByteArray(), credential)
@@ -93,9 +108,9 @@ class AgentDevelopmentTest {
         assertEquals(401, unauthenticated.first)
         JSONObject(unauthenticated.second).let {
             assertEquals("authentication_required", it.getString("error"))
-            assertEquals("$base/.well-known/hermit-agent", it.getString("discoveryUrl"))
-            assertEquals("$base/connect", it.getString("instructionsUrl"))
-            assertEquals("Authorization: Bearer <current six-digit password>", it.getString("authentication"))
+            assertEquals("missing_credentials", it.getString("reason"))
+            assertEquals("ask_user_for_current_password", it.getString("nextAction"))
+            assertTrue(it.getString("message").contains("开发配置"))
         }
         assertEquals(200, request("/mcp", "POST", ping).first)
         // Independent HTTP connections need no initialize identity, pairing, session ID or peer registration.
@@ -105,6 +120,10 @@ class AgentDevelopmentTest {
         assertTrue(old != password)
         assertEquals(401, request("/mcp", "POST", ping, old).first)
         assertEquals(200, request("/mcp", "POST", ping).first)
+        server.resetPassword("aB12cD"); password = server.passwordForUi()
+        assertEquals("aB12cD", password)
+        assertEquals(200, request("/mcp", "POST", ping).first)
+        server.resetPassword(); password = server.passwordForUi()
         server.stop("Test restart"); base = server.start("127.0.0.1", 0).getString("address")
         assertTrue(password == server.passwordForUi())
         val recreated = AgentDevelopmentServer(app, app.registry, app.installer, app.devWorkspaces, app.applicationScope)
@@ -116,19 +135,19 @@ class AgentDevelopmentTest {
     @Test fun protocolDiscoveryOriginAndBruteForceLimits() {
         val root = request("/", credential = null)
         assertEquals(200, root.first)
-        assertTrue(root.second.contains("Authorization: Bearer <password>"))
-        assertTrue(root.second.contains("/.well-known/hermit-agent"))
+        assertEquals("hermit-agent-bootstrap", JSONObject(root.second).getString("kind"))
         val discovery = JSONObject(request("/.well-known/hermit-agent", credential = null).second)
         assertFalse(discovery.toString().contains(password)); assertFalse(discovery.has("pairUrl"))
         assertEquals(3, discovery.getInt("schema"))
-        assertEquals(26, discovery.getJSONArray("toolIndex").length())
+        assertTrue(discovery.getJSONArray("toolIndex").length() >= 26)
+        assertTrue(discovery.getJSONArray("intentIndex").length() >= 5)
         assertTrue(discovery.getJSONObject("resourceDigests").has("webappGuide"))
         assertEquals(200, request("/skills/hermit-device/SKILL.md", credential = null).first)
         assertEquals(200, request("/hermit-agent.py", credential = null).first)
         val initialized = rpc("initialize", JSONObject().put("protocolVersion", "2025-11-25").put("clientInfo", JSONObject().put("name", "test").put("version", "1")).put("capabilities", JSONObject()))
         assertEquals("2025-11-25", initialized.getString("protocolVersion"))
         assertTrue(initialized.getString("instructions").contains("password"))
-        assertEquals(26, rpc("tools/list").getJSONArray("tools").length())
+        assertTrue(rpc("tools/list").getJSONArray("tools").length() >= 26)
         assertTrue(rpc("resources/read", JSONObject().put("uri", "hermit://tool-index"))
             .getJSONArray("contents").getJSONObject(0).getString("text").contains("hermit_runtime_status"))
         assertTrue(rpc("resources/read", JSONObject().put("uri", "hermit://tool/hermit_runtime_status"))
@@ -160,7 +179,54 @@ class AgentDevelopmentTest {
             assertEquals("authentication_required", JSONObject(missing.second).getString("error"))
         }
         repeat(5) { assertEquals(401, request("/mcp", "POST", notice, "invalid").first) }
-        assertEquals(429, request("/mcp", "POST", notice, "invalid").first)
+        val locked = request("/mcp", "POST", notice, "invalid")
+        assertEquals(429, locked.first)
+        assertEquals("wait", JSONObject(locked.second).getString("nextAction"))
+    }
+
+    @Test fun bootstrapDescribesAndServesHermitPlugin() {
+        val bootstrapResponse = request("/", headers = mapOf("Accept" to "application/json"))
+        assertEquals(200, bootstrapResponse.first)
+        val bootstrap = JSONObject(bootstrapResponse.second)
+        assertEquals("hermit-agent-bootstrap", bootstrap.getString("kind"))
+        assertEquals("codex-plugin-archive-v1", bootstrap.getString("packageFormat"))
+        assertTrue(bootstrap.getBoolean("nativeCodexPlugin"))
+        assertTrue(bootstrap.getJSONObject("plugin").getString("codexVersion").startsWith(bootstrap.getJSONObject("plugin").getString("version") + "+codex."))
+        assertEquals("install_or_update", bootstrap.getJSONObject("install").getString("action"))
+        assertEquals("codex-plugin-archive-v1", bootstrap.getJSONObject("install").getString("packageFormat"))
+        assertEquals("~/plugins/hermit-device", bootstrap.getJSONObject("install").getString("target"))
+        assertEquals("atomic_replace_if_hash_differs", bootstrap.getJSONObject("install").getString("strategy"))
+        assertEquals("no_op", bootstrap.getJSONObject("install").getString("existingSameVersion"))
+        assertEquals("register_mcp_then_authenticate", bootstrap.getJSONObject("install").getString("afterInstall"))
+        assertEquals("helper-managed", bootstrap.getJSONObject("install").getJSONObject("mcpRegistration").getString("credentialMode"))
+        assertFalse(bootstrap.getJSONObject("install").getJSONObject("mcpRegistration").getBoolean("passwordInConfig"))
+        assertEquals("/", bootstrap.getJSONObject("clientContract").getJSONObject("firstRequest").getString("path"))
+        assertEquals(3, bootstrap.getJSONObject("clientContract").getJSONArray("successStates").length())
+        assertEquals("ask_user_for_current_address", bootstrap.getJSONObject("recovery").getJSONObject("addressUnavailable").getString("nextAction"))
+        assertEquals("ask_user_for_current_password", bootstrap.getJSONObject("recovery").getJSONObject("passwordInvalid").getString("nextAction"))
+        assertFalse(bootstrap.toString().contains(password))
+
+        val discovery = JSONObject(request("/.well-known/hermit-agent", credential = null).second)
+        assertEquals(bootstrap.getString("kind"), discovery.getString("kind"))
+        val packagePath = URL(bootstrap.getJSONObject("install").getString("packageUrl")).path
+        val packageResponse = requestBytes(packagePath, credential = null)
+        assertEquals(200, packageResponse.first)
+        val packageBytes = packageResponse.second
+        val digest = MessageDigest.getInstance("SHA-256").digest(packageBytes).joinToString("") { "%02x".format(it) }
+        assertEquals(bootstrap.getJSONObject("install").getString("packageSha256"), digest)
+        val entries = mutableListOf<String>()
+        var codexManifest: JSONObject? = null
+        ZipInputStream(ByteArrayInputStream(packageBytes)).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                entries += entry.name
+                if (entry.name == ".codex-plugin/plugin.json") codexManifest = JSONObject(String(zip.readBytes()))
+            }
+        }
+        assertTrue(entries.contains(".codex-plugin/plugin.json"))
+        assertTrue(entries.contains(".mcp.json"))
+        assertTrue(entries.contains("skills/hermit-device/SKILL.md"))
+        assertEquals(bootstrap.getJSONObject("plugin").getString("codexVersion"), codexManifest!!.getString("version"))
     }
 
     @Test fun screenshotReturnsMcpImageAndRecentOperationsStayBounded() {
@@ -195,9 +261,9 @@ class AgentDevelopmentTest {
         assertTrue(file.getString("content").contains("native page"))
         tool("hermit_read_dev_file", JSONObject().put("appId", id).put("path", "../secret"), true)
         assertTrue(tool("hermit_list_dev_files", JSONObject().put("appId", id)).getJSONArray("files").length() > 0)
-        assertEquals("opening", tool("hermit_open_app", JSONObject().put("appId", id)).getString("state"))
+        assertTrue(tool("hermit_open_app", JSONObject().put("appId", id)).getString("state") in setOf("opening", "reloading"))
         assertEquals(id, tool("hermit_runtime_status").getString("appId"))
-        assertEquals("opening", tool("hermit_reload_app", JSONObject().put("appId", id)).getString("state"))
+        assertEquals("reloading", tool("hermit_reload_app", JSONObject().put("appId", id)).getString("state"))
         assertEquals("E_INVALID_ARGUMENT", tool("hermit_reload_app", JSONObject().put("appId", secondApp.getString("appId")), true).getString("code"))
         val built = tool("hermit_build_dev_package", JSONObject().put("appId", id)
             .put("expectedDevRevision", applied.getLong("revision")).put("requestId", UUID.randomUUID().toString())
@@ -243,7 +309,7 @@ class AgentDevelopmentTest {
             .put("refreshMode", "none").put("files", JSONArray().put(JSONObject().put("path", "blocked.txt").put("content", "blocked"))), true).getString("code"))
         val resumed = tool("hermit_enter_dev_mode", JSONObject().put("appId", id).put("requestId", UUID.randomUUID().toString()))
         assertEquals(applied.getLong("revision"), resumed.getLong("revision"))
-        assertEquals("opening", resumed.getJSONObject("runtime").getString("state"))
+        assertTrue(resumed.getJSONObject("runtime").getString("state") in setOf("opening", "reloading"))
         val runtime = tool("hermit_runtime_status")
         assertEquals(id, runtime.getString("appId"))
         assertEquals("dev", runtime.getString("launchChannel"))
@@ -267,6 +333,30 @@ class AgentDevelopmentTest {
             app.devWorkspaces.requireDevelopableApp("__hermit_store__")
         }
         assertEquals("E_PROTECTED_TARGET", error.code)
+    }
+
+    @Test fun globalSessionTargetsAnyHappAndHighLevelHotUpdateWorkflow() {
+        val first = create(); val second = create(); val secondId = second.getString("appId")
+        val session = tool("hermit_open_agent_session")
+        assertEquals("global", session.getString("scope"))
+        assertTrue(session.getJSONArray("apps").length() >= 2)
+        val prepared = tool("hermit_prepare_happ_development", JSONObject()
+            .put("appId", secondId).put("strategy", "resume").put("startRuntimeMode", "dev")
+            .put("requestId", UUID.randomUUID().toString()))
+        val updated = tool("hermit_hot_update_happ", JSONObject()
+            .put("appId", secondId).put("expectedDevRevision", prepared.getLong("revision"))
+            .put("requestId", UUID.randomUUID().toString()).put("refreshMode", "none")
+            .put("files", JSONArray().put(JSONObject().put("path", "index.html")
+                .put("content", "<!doctype html><title>high-level</title>"))))
+        assertTrue(updated.getLong("revision") > prepared.getLong("revision"))
+        val status = tool("hermit_get_happ_dev_status", JSONObject().put("appId", secondId))
+        assertEquals(updated.getLong("revision"), status.getLong("revision"))
+        val download = tool("hermit_download_dev_tree", JSONObject().put("appId", secondId))
+        assertTrue(download.getString("downloadUrl").contains("/v2/builds/"))
+        tool("hermit_switch_happ_runtime_mode", JSONObject().put("appId", secondId)
+            .put("runtimeMode", "stable").put("requestId", UUID.randomUUID().toString()))
+        assertEquals("stable", app.registry.getInstance(secondId)!!.launchChannel.name.lowercase())
+        assertNotEquals(first.getString("appId"), secondId)
     }
 
     @Test fun passwordRotationDuringUploadPreventsActivation() {

@@ -56,10 +56,12 @@ class DevWorkspaceManager(
         val current = registry.getDevWorkspace(appId)
         if (current == null) return@synchronized JSONObject()
             .put("appId", appId).put("state", "missing").put("launchChannel", app.launchChannel.name.lowercase())
+            .put("devVersion", JSONObject.NULL)
         val workspace = if (!current.dirty && current.baseReleaseId != app.activeReleaseId && app.activeReleaseId != null) {
             rebuild(appId, current, app.activeReleaseId, keepRevision = true)
         } else current
         workspace.toJson(app.activeReleaseId)
+            .put("devVersion", versionOf(appId, snapshot(appId).entries))
             .put("state", when {
                 workspace.baseReleaseId != app.activeReleaseId -> "base-outdated"
                 workspace.dirty -> "dirty"
@@ -79,7 +81,26 @@ class DevWorkspaceManager(
             else -> existing
         }
         registry.setLaunchChannel(appId, LaunchChannel.DEV)
-        workspace.toJson(releaseId).put("state", if (workspace.dirty) "dirty" else "clean").put("launchChannel", "dev")
+        workspace.toJson(releaseId).put("devVersion", versionOf(appId, snapshot(appId).entries))
+            .put("state", if (workspace.dirty) "dirty" else "clean").put("launchChannel", "dev")
+    }
+
+    /** Prepare or recover a workspace without changing the app launch channel. */
+    fun prepare(appId: String): JSONObject = synchronized(lock(appId)) {
+        val app = requireDevelopableApp(appId)
+        val releaseId = app.activeReleaseId
+            ?: throw HermitException(ErrorCodes.CONFLICT, "此 happ 没有可复制的本地正式版本")
+        val existing = registry.getDevWorkspace(appId)
+        val workspace = when {
+            existing == null -> createFromRelease(appId, releaseId)
+            !existing.dirty && existing.baseReleaseId != releaseId -> rebuild(appId, existing, releaseId, keepRevision = true)
+            else -> existing
+        }
+        workspace.toJson(releaseId).put("devVersion", versionOf(appId, snapshot(appId).entries)).put("state", when {
+            workspace.baseReleaseId != releaseId -> "base-outdated"
+            workspace.dirty -> "dirty"
+            else -> "clean"
+        }).put("launchChannel", app.launchChannel.name.lowercase())
     }
 
     fun leave(appId: String): JSONObject = synchronized(lock(appId)) {
@@ -95,12 +116,14 @@ class DevWorkspaceManager(
         val current = registry.getDevWorkspace(appId)
         val workspace = if (current == null) createFromRelease(appId, releaseId) else rebuild(appId, current, releaseId, keepRevision = true)
         registry.setLaunchChannel(appId, LaunchChannel.DEV)
-        workspace.toJson(releaseId).put("state", "clean").put("launchChannel", "dev")
+        workspace.toJson(releaseId).put("devVersion", versionOf(appId, snapshot(appId).entries))
+            .put("state", "clean").put("launchChannel", "dev")
     }
 
     fun list(appId: String): JSONObject {
         val snapshot = writableSnapshot(appId)
         return snapshot.workspace.toJson(registry.getInstance(appId)?.activeReleaseId)
+            .put("devVersion", versionOf(appId, snapshot.entries))
             .put("files", JSONArray(snapshot.entries.values.sortedBy { it.path }.map {
                 JSONObject().put("path", it.path).put("bytes", it.bytes).put("sha256", it.sha256)
             }))
@@ -306,13 +329,14 @@ class DevWorkspaceManager(
         return builds[buildId]?.takeIf { it.file.isFile }
     }
 
-    fun installed(appId: String, expectedRevision: Long, newReleaseId: String): JSONObject = synchronized(lock(appId)) {
+    fun installed(appId: String, expectedRevision: Long, newReleaseId: String, keepDev: Boolean = false): JSONObject = synchronized(lock(appId)) {
         val before = writableSnapshot(appId, expectedRevision)
         val active = registry.getInstance(appId)?.activeReleaseId
         if (active != newReleaseId) fail(ErrorCodes.CONFLICT, "正式版本在安装后发生变化")
         val workspace = rebuild(appId, before.workspace, newReleaseId, keepRevision = true)
-        registry.setLaunchChannel(appId, LaunchChannel.STABLE)
-        workspace.toJson(newReleaseId).put("state", "clean").put("launchChannel", "stable")
+        registry.setLaunchChannel(appId, if (keepDev) LaunchChannel.DEV else LaunchChannel.STABLE)
+        workspace.toJson(newReleaseId).put("devVersion", versionOf(appId, snapshot(appId).entries)).put("state", "clean")
+            .put("launchChannel", if (keepDev) "dev" else "stable")
     }
 
     fun delete(appId: String) = synchronized(lock(appId)) {
@@ -360,6 +384,13 @@ class DevWorkspaceManager(
             }
         }
         return Snapshot(workspace, entries).also { snapshots[appId] = it }
+    }
+
+    private fun versionOf(appId: String, entries: Map<String, Entry>): Any {
+        val manifest = entries["hermit.json"] ?: return JSONObject.NULL
+        val json = runCatching { JSONObject(blob(appId, manifest.sha256).readText(Charsets.UTF_8)) }.getOrNull()
+        val version = json?.optJSONObject("version") ?: return JSONObject.NULL
+        return JSONObject().put("code", version.optLong("code", 0L)).put("name", version.optString("name"))
     }
 
     private fun createFromRelease(appId: String, releaseId: String): DevWorkspace {

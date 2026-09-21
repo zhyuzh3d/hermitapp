@@ -35,7 +35,7 @@ try {
   const [a, b] = await Promise.all([one.listTools(), two.listTools()]);
   assert.equal(a.tools.length, 26); assert.equal(b.tools.length, 26);
   const guide = await one.callTool({ name: "hermit_get_guide", arguments: {} });
-  assert(guide.structuredContent.text.includes("six-digit"));
+  assert(guide.structuredContent.text.includes("six-character"));
   const resource = await two.readResource({ uri: "hermit://page-api" });
   assert(resource.contents[0].text.includes("Hermit"));
   const created = (await one.callTool({ name: "hermit_create_dev_app", arguments: { name: "SDK interoperability", happId: "com.example.sdkinterop", requestId: crypto.randomUUID() } })).structuredContent;

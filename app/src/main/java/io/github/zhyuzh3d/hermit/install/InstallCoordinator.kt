@@ -373,6 +373,24 @@ class InstallCoordinator(
         return deleted
     }
 
+    /** Keep the newest releases, plus the active release if it is outside the window. */
+    fun pruneReleasesToLimit(appId: String, limit: Int = 5) {
+        require(limit > 0)
+        val instance = registry.getInstance(appId) ?: throw IllegalArgumentException("App not found")
+        val releases = registry.listReleases(appId)
+        val keep = buildSet {
+            releases.take(limit).forEach { add(it.releaseId) }
+            instance.activeReleaseId?.let(::add)
+            releases.filter { (releaseLeases[it.releaseId]?.get() ?: 0) > 0 }.forEach { add(it.releaseId) }
+        }
+        val removable = releases.filter { it.releaseId !in keep }
+        val removed = removable.filter { release ->
+            val dir = File(appsRoot, "$appId/releases/${release.releaseId}")
+            !dir.exists() || dir.deleteRecursively()
+        }.map { it.releaseId }
+        registry.deleteReleaseRows(appId, removed)
+    }
+
     fun deleteAppCode(appId: String): Boolean {
         require(appId.matches(Regex("[0-9a-fA-F-]{36}")))
         val appRoot = File(appsRoot, appId).canonicalFile

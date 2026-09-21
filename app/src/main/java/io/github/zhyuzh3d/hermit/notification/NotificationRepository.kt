@@ -87,6 +87,9 @@ class NotificationRepository(context: Context) : SQLiteOpenHelper(context, "herm
         "instance_id = ?", arrayOf(instanceId), null, null, "next_trigger_at ASC")
         .use { c -> buildList { while (c.moveToNext()) add(c.schedule()) } }
 
+    fun allSchedules(): List<ScheduledNotification> = readableDatabase.query("schedules", null, null, null, null, null, "next_trigger_at ASC")
+        .use { c -> buildList { while (c.moveToNext()) add(c.schedule()) } }
+
     fun complete(item: ScheduledNotification, now: Long) {
         val next = NotificationTime.nextAfter(item.anchorLocal, item.recurrence, now)
         if (next == null) writableDatabase.delete("schedules", "instance_id = ? AND notification_id = ?", arrayOf(item.instanceId, item.spec.id))

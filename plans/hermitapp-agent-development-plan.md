@@ -1,6 +1,6 @@
 # Hermit 智能体开发模式实施计划
 
-版本 1.2.0，2026-09-11。目标：用户把手机显示的局域网地址和当前六位密码交给智能体，即可发现当前能力、直接认证、开发原生页面并实时发布和运行。WebApp 继续纯 HTML/JS/CSS、无需框架或前端构建；SDK/协议适配属于宿主开发工具。
+版本 1.2.0，2026-09-11。本文是已交付的智能体开发基础协议基线，不再作为后续开发执行计划。极速热更新、常驻连接、`update-dir` 和稳定更新的唯一实施依据是 [统一开发计划](hermitapp-unified-dev-workspace-plan.md)。用户把手机显示的局域网地址和当前六位密码交给智能体，即可发现当前能力、直接认证、开发原生页面并实时发布和运行。WebApp 继续纯 HTML/JS/CSS、无需框架或前端构建；SDK/协议适配属于宿主开发工具。
 
 ## 产品与边界
 
@@ -16,7 +16,7 @@
 
 ## 统一接口
 
-采用 MCP Streamable HTTP 的 JSON 响应形式，固定 `/mcp`，支持 2025-11-25、2025-06-18、2025-03-26 协商，stateless HTTP，无服务器主动 SSE；GET/DELETE `/mcp` 返回 405，通知返回 202。实现 initialize、ping、tools/list/call、resources/list/read、prompts/list/get。声明实际能力，不宣称支持 OAuth、订阅或 listChanged 推送。
+采用 MCP Streamable HTTP 的 JSON 请求/响应形式，固定 `/mcp`，支持 2025-11-25、2025-06-18、2025-03-26 协商；基础协议不依赖服务器主动 SSE、OAuth、订阅或 listChanged 推送。开发助手可以复用 HTTP keep-alive 连接，连接复用属于传输性能优化，不改变请求/响应合同。GET/DELETE `/mcp` 返回 405，通知返回 202。实现 initialize、ping、tools/list/call、resources/list/read、prompts/list/get。
 
 `/.well-known/hermit-agent` 描述 endpoint、密码认证方式、serverVersion、guidanceVersion、schemaDigest、当前工具目录；`/skills/hermit-device/SKILL.md` 为手机当前动态指南；MCP initialization.instructions 提供简短入口，guide 工具与 resources/read 随时获取最新版。新 APK 重启连接关闭，但密码保留；重新连接后重新发现能力。MCP 配置与 Skill 安装由客户端完成，不能宣称任何客户端只收到 URL 就会自动注册；提供 Python 标准库连接助手、Codex 配置命令、通用 HTTP/stdio MCP 配置和普通 HTTP 调用说明。
 

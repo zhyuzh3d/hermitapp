@@ -10,6 +10,7 @@ import threading
 import unittest
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location("hermit_agent", Path(__file__).resolve().parents[1] / "app/src/main/assets/agent/hermit-agent.py")
@@ -18,29 +19,107 @@ spec.loader.exec_module(helper)
 
 
 class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
     seen = []
+    ports = []
     def log_message(self, *args):
         pass
     def do_GET(self):
         self.send_response(302)
         self.send_header("Location", "http://127.0.0.1:1/leak")
+        self.send_header("Content-Length", "0")
         self.end_headers()
     def do_POST(self):
         data = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         self.seen.append((dict(self.headers), data))
+        self.ports.append(self.client_address[1])
         response = {"jsonrpc": "2.0", "id": data.get("id"), "result": {"tools": []}}
+        encoded = json.dumps(response).encode()
         self.send_response(200 if "id" in data else 202)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(encoded) if "id" in data else 0))
         self.end_headers()
         if "id" in data:
-            self.wfile.write(json.dumps(response).encode())
+            self.wfile.write(encoded)
 
 
 class AgentHelperTest(unittest.TestCase):
+    def test_bootstrap_plugin_install_and_digest_validation(self):
+        package_buffer = io.BytesIO()
+        with zipfile.ZipFile(package_buffer, "w") as archive:
+            archive.writestr("manifest.json", json.dumps({"kind": "hermit-agent-plugin", "id": "hermit-device", "version": "9.0.0", "codexVersion": "9.0.0+codex.test", "packageFormat": "codex-plugin-archive-v1"}))
+            archive.writestr(".codex-plugin/plugin.json", json.dumps({"name": "hermit-device", "version": "9.0.0+codex.test", "mcpServers": "./.mcp.json"}))
+            archive.writestr(".mcp.json", json.dumps({"mcpServers": {"hermit-device": {"type": "stdio"}}}))
+            archive.writestr("SKILL.md", "bootstrap skill")
+            archive.writestr("hermit-agent.py", "print('helper')")
+        package = package_buffer.getvalue()
+        digest = hashlib.sha256(package).hexdigest()
+
+        class BootstrapHandler(BaseHTTPRequestHandler):
+            root_requests = 0
+            def log_message(self, *_):
+                pass
+            def do_GET(self):
+                if self.path == "/":
+                    type(self).root_requests += 1
+                    body = json.dumps({
+                        "kind": "hermit-agent-bootstrap",
+                        "serverVersion": "9.0.0",
+                        "plugin": {"id": "hermit-device", "version": "9.0.0"},
+                        "install": {"action": "install_or_update", "packageUrl": "http://127.0.0.1:%d/plugin/hermit-device" % self.server.server_port, "packageSha256": digest},
+                    }).encode()
+                    self.send_response(200); self.send_header("Content-Type", "application/json"); self.send_header("Content-Length", str(len(body))); self.end_headers(); self.wfile.write(body)
+                elif self.path == "/plugin/hermit-device":
+                    self.send_response(200); self.send_header("Content-Type", "application/zip"); self.send_header("Content-Length", str(len(package))); self.end_headers(); self.wfile.write(package)
+                else:
+                    self.send_response(404); self.end_headers()
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), BootstrapHandler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+        try:
+            with tempfile.TemporaryDirectory() as temp:
+                client = helper.Device("http://127.0.0.1:" + str(server.server_port), config_root=temp)
+                target = Path(temp) / "plugin"
+                result = helper.install_plugin(client, target)
+                self.assertEqual("installed", result["action"])
+                self.assertEqual("bootstrap skill", (target / "SKILL.md").read_text())
+                self.assertEqual("hermit-device", json.loads((target / "manifest.json").read_text())["id"])
+                result = helper.install_plugin(client, target)
+                self.assertEqual("unchanged", result["action"])
+                roots = BootstrapHandler.root_requests
+                result = helper.install_plugin(client, target, force=True,
+                                               package_url="http://127.0.0.1:%d/plugin/hermit-device" % server.server_port,
+                                               package_sha256=digest, plugin_version="9.0.0")
+                self.assertEqual("updated", result["action"])
+                self.assertEqual(roots, BootstrapHandler.root_requests)
+        finally:
+            server.shutdown(); server.server_close(); thread.join()
+
     def test_rejects_public_urls_embedded_secrets_and_paths(self):
         for value in ["http://8.8.8.8:8766", "http://0.0.0.0:8766", "http://user:password@192.168.1.2:8766", "https://192.168.1.2:8766", "http://192.168.1.2:8766/mcp", "http://192.168.1.2:8766?password=123456"]:
             with self.assertRaises(ValueError): helper.address(value)
         self.assertEqual("http://192.168.1.2:8766", helper.address("http://192.168.1.2:8766/"))
+
+    def test_absolute_package_url_must_be_same_origin(self):
+        client = helper.Device("http://127.0.0.1:8766", "123456")
+        self.assertEqual("/plugin/hermit-device?x=1", client.request_target("http://127.0.0.1:8766/plugin/hermit-device?x=1"))
+        with self.assertRaises(ValueError):
+            client.request_target("http://127.0.0.2:8766/plugin/hermit-device")
+        with self.assertRaises(ValueError):
+            client.request_target("https://127.0.0.1:8766/plugin/hermit-device")
+
+    def test_default_codex_target_updates_only_hermit_marketplace_entry(self):
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            with patch("pathlib.Path.home", return_value=home):
+                marketplace = helper.ensure_codex_marketplace(home / "plugins" / "hermit-device")
+                self.assertEqual(home / ".agents/plugins/marketplace.json", marketplace)
+                payload = json.loads(marketplace.read_text())
+                self.assertEqual("personal", payload["name"])
+                self.assertEqual("hermit-device", payload["plugins"][0]["name"])
+                self.assertEqual("./plugins/hermit-device", payload["plugins"][0]["source"]["path"])
+                helper.ensure_codex_marketplace(home / "plugins" / "hermit-device")
+                self.assertEqual(1, len(json.loads(marketplace.read_text())["plugins"]))
 
     def test_credentials_are_private_and_rotation_replaces_one_value(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -81,21 +160,6 @@ class AgentHelperTest(unittest.TestCase):
             self.assertEqual(["app/app.js", "hermit.json", "index.html"],
                              [name for name, _ in helper.development_files(root)])
 
-    def test_dynamic_skill_has_no_fixed_device_or_password_and_preserves_unowned(self):
-        with tempfile.TemporaryDirectory() as temp:
-            result = helper.install_skill(temp)
-            file = Path(result["installed"])
-            self.assertIn("Before every task", file.read_text())
-            self.assertIn("/.well-known/hermit-agent", file.read_text())
-            self.assertIn("hermit_enter_dev_mode", file.read_text())
-            self.assertIn("~/hermit/happ-dev.json", file.read_text())
-            self.assertIn("happ-<happId-with-dots-replaced-by-hyphens>", file.read_text())
-            self.assertIn("never scan the disk or silently create a second copy", file.read_text())
-            helper.install_skill(temp)
-            file.write_text("user-owned skill")
-            with self.assertRaises(RuntimeError): helper.install_skill(temp)
-            self.assertEqual("user-owned skill", file.read_text())
-
     def test_http_auth_stdio_and_redirect_refusal(self):
         with tempfile.TemporaryDirectory() as temp:
             server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
@@ -103,6 +167,9 @@ class AgentHelperTest(unittest.TestCase):
             try:
                 client = helper.Device("http://127.0.0.1:" + str(server.server_port), "123456", temp)
                 self.assertEqual({"tools": []}, client.rpc("tools/list"))
+                first_port = Handler.ports[-1]
+                self.assertEqual({"tools": []}, client.rpc("ping"))
+                self.assertEqual(first_port, Handler.ports[-1])
                 headers, body = Handler.seen[-1]
                 self.assertTrue(headers["Authorization"] == "Bearer " + client.password)
                 self.assertNotIn("Mcp-Session-Id", headers)
@@ -114,6 +181,7 @@ class AgentHelperTest(unittest.TestCase):
                 self.assertEqual(4, reply["id"])
                 self.assertFalse(client.password in output.getvalue())
             finally:
+                client.close()
                 server.shutdown(); server.server_close(); thread.join()
 
     def test_watcher_refuses_newer_remote_release(self):
@@ -179,7 +247,7 @@ class AgentHelperTest(unittest.TestCase):
             device = Device()
             result = helper.dev_sync(device, "app-id", temp)
             self.assertEqual("unchanged", result["refreshState"])
-            self.assertEqual(["hermit_runtime_status", "hermit_enter_dev_mode", "hermit_list_dev_files"],
+            self.assertEqual(["hermit_runtime_status", "hermit_enter_dev_mode", "hermit_get_happ_dev_status", "hermit_list_dev_files"],
                              [name for name, _ in device.calls])
             self.assertEqual("app-id", device.calls[1][1]["appId"])
             self.assertIn("requestId", device.calls[1][1])
@@ -203,6 +271,60 @@ class AgentHelperTest(unittest.TestCase):
             with patch.object(Path, "read_bytes", side_effect=AssertionError("unchanged file was reread")):
                 result = helper.dev_sync(Device(), "app-id", root, ensure_target=False, hash_cache=cache)
             self.assertEqual("unchanged", result["refreshState"])
+
+    def test_dev_sync_reuses_remote_workspace_snapshot_after_first_sync(self):
+        class Device:
+            def __init__(self): self.list_calls = 0; self.revision = 3
+            def tool(self, name, arguments=None):
+                if name == "hermit_list_dev_files":
+                    self.list_calls += 1
+                    return {"revision": self.revision, "treeHash": "old", "files": [
+                        {"path": "hermit.json", "sha256": hashlib.sha256(b'{}').hexdigest()},
+                        {"path": "index.html", "sha256": hashlib.sha256(b"old").hexdigest()},
+                    ]}
+                if name == "hermit_sync_dev_changes":
+                    self.revision += 1
+                    return {"revision": self.revision, "treeHash": "new", "changedPaths": ["index.html"]}
+                raise AssertionError(name)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            (root / "hermit.json").write_text("{}")
+            (root / "index.html").write_text("old")
+            device, hashes, workspace = Device(), {}, {}
+            helper.dev_sync(device, "app-id", root, ensure_target=False, hash_cache=hashes, workspace_cache=workspace)
+            (root / "index.html").write_text("new")
+            result = helper.dev_sync(device, "app-id", root, ensure_target=False, hash_cache=hashes, workspace_cache=workspace)
+            self.assertEqual(4, result["revision"])
+            self.assertEqual(1, device.list_calls)
+
+    def test_update_dir_promotes_original_instance_and_only_bumps_explicitly(self):
+        class Device:
+            def __init__(self): self.calls = []; self.get_count = 0
+            def tool(self, name, arguments=None):
+                arguments = arguments or {}; self.calls.append((name, arguments))
+                if name == "hermit_list_apps": return {"apps": [{"appId": "app-id", "happId": "io.example.happ"}]}
+                if name == "hermit_runtime_status": return {"appId": "app-id", "launchChannel": "dev"}
+                if name == "hermit_list_dev_files": return {"revision": 4, "treeHash": "same", "files": [
+                    {"path": "hermit.json", "sha256": hashlib.sha256(b'{\"happId\": \"io.example.happ\", \"version\": {\"code\": 2, \"name\": \"1.0.0\"}, \"entry\": \"index.html\"}').hexdigest()},
+                    {"path": "index.html", "sha256": hashlib.sha256(b"<h1>ok</h1>").hexdigest()},
+                ]}
+                if name == "hermit_get_app":
+                    self.get_count += 1
+                    return {"appId": "app-id", "activeReleaseId": "new" if self.get_count > 1 else "old",
+                            "launchChannel": "stable" if self.get_count > 1 else "dev", "dataGenerationId": "data", "trustRevision": 7}
+                if name == "hermit_list_releases": return {"releases": [{"releaseId": "old", "versionCode": 1}]}
+                if name == "hermit_build_dev_package": return {"buildId": "build"}
+                if name == "hermit_install_dev_package": return {"releaseId": "new"}
+                raise AssertionError(name)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            source = {"happId": "io.example.happ", "version": {"code": 2, "name": "1.0.0"}, "entry": "index.html"}
+            (root / "hermit.json").write_text(json.dumps(source))
+            (root / "index.html").write_text("<h1>ok</h1>")
+            result = helper.update_dir(Device(), root)
+            self.assertEqual("installed", result["status"])
+            self.assertTrue(result["dataPreserved"])
+            self.assertEqual(source, json.loads((root / "hermit.json").read_text()))
 
     def test_dev_sync_uses_one_atomic_archive_for_many_binary_changes(self):
         class Device:
@@ -229,7 +351,7 @@ class AgentHelperTest(unittest.TestCase):
             device = Device()
             result = helper.dev_sync(device, "app-id", root)
             self.assertEqual(5, result["revision"])
-            self.assertEqual(["hermit_runtime_status", "hermit_list_dev_files", "hermit_replace_dev_tree"],
+            self.assertEqual(["hermit_runtime_status", "hermit_get_happ_dev_status", "hermit_list_dev_files", "hermit_replace_dev_tree"],
                              [name for name, _ in device.calls])
             self.assertEqual(4, device.calls[-1][1]["expectedDevRevision"])
 
@@ -258,6 +380,32 @@ class AgentHelperTest(unittest.TestCase):
             self.assertEqual("unchanged", result["sync"]["refreshState"])
             self.assertEqual("rendered", result["render"]["state"])
             self.assertNotIn("hermit_get_guide", [name for name, _ in device.calls])
+
+    def test_new_prepare_path_uses_status_and_atomic_hot_update_without_manifest(self):
+        class Device:
+            def __init__(self): self.calls = []
+            def tool(self, name, arguments=None):
+                self.calls.append((name, arguments or {}))
+                if name == "hermit_list_apps":
+                    return {"apps": [{"appId": "app-id", "happId": "io.example.happ"}]}
+                if name == "hermit_prepare_happ_development":
+                    return {"appId": "app-id", "revision": 4, "treeHash": "old", "devVersion": {"code": 1, "name": "1.0.0"}}
+                if name == "hermit_get_happ_dev_status":
+                    return {"appId": "app-id", "revision": 4, "treeHash": "old", "devVersion": {"code": 1, "name": "1.0.0"}}
+                if name == "hermit_hot_update_happ":
+                    return {"appId": "app-id", "revision": 5, "treeHash": "new", "changedPaths": ["index.html"], "refreshState": "scheduled"}
+                raise AssertionError(name)
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            root.joinpath("hermit.json").write_text(json.dumps({"happId": "io.example.happ", "version": {"code": 1, "name": "1.0.0"}}))
+            root.joinpath("index.html").write_text("<h1>new</h1>")
+            device = Device()
+            result = helper.prepare_dev(device, root, sync_policy="continue", workspace_cache={})
+            self.assertEqual(5, result["sync"]["revision"])
+            names = [name for name, _ in device.calls]
+            self.assertIn("hermit_get_happ_dev_status", names)
+            self.assertIn("hermit_hot_update_happ", names)
+            self.assertNotIn("hermit_list_dev_files", names)
 
 
 if __name__ == "__main__": unittest.main()

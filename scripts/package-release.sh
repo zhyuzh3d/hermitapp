@@ -2,7 +2,7 @@
 set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-VERSION=${1:-1.10.24}
+VERSION=${1:-$(sed -n 's/.*versionName.*?: "\([^"]*\)"/\1/p' "$ROOT/app/build.gradle.kts" | head -n 1)}
 OUT=$ROOT/artifacts/v$VERSION
 SDK_DIR=${ANDROID_HOME:-/opt/homebrew/share/android-commandlinetools}
 export JAVA_HOME=${JAVA_HOME:-/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home}
@@ -10,16 +10,15 @@ export PATH="$JAVA_HOME/bin:$PATH"
 AAPT=$SDK_DIR/build-tools/37.0.0/aapt
 APKSIGNER=$SDK_DIR/build-tools/37.0.0/apksigner
 RELEASE_SOURCE=$ROOT/app/build/outputs/apk/release/app-release.apk
-DEBUG_SOURCE=$ROOT/app/build/outputs/apk/debug/app-debug.apk
 
 test -x "$AAPT"
 test -x "$APKSIGNER"
 test -f "$RELEASE_SOURCE"
-test -f "$DEBUG_SOURCE"
 test -z "$(git -C "$ROOT" status --porcelain --untracked-files=normal)" || {
   echo "Refusing to package a release from a dirty source tree" >&2
   exit 1
 }
+test ! -e "$OUT" || { echo "Refusing to overwrite versioned release directory: $OUT" >&2; exit 1; }
 
 BADGING=$($AAPT dump badging "$RELEASE_SOURCE")
 printf '%s\n' "$BADGING" | grep -q "package: name='io.github.zhyuzh3d.hermit'"
@@ -31,7 +30,6 @@ test -n "$CERT_SHA256"
 
 mkdir -p "$OUT"
 cp "$RELEASE_SOURCE" "$OUT/hermit-v$VERSION-release.apk"
-cp "$DEBUG_SOURCE" "$OUT/hermit-v$VERSION-debug.apk"
 cp "$ROOT/app/src/main/assets/third-party-notices.txt" "$OUT/dependency-licenses.txt"
 cp "$ROOT/app/src/main/assets/shared/fontawesome/LICENSE.txt" "$OUT/fontawesome-license.txt"
 cp "$ROOT/docs/validation/validation-report.md" "$OUT/validation-report.md"
@@ -39,14 +37,12 @@ cp "$ROOT/docs/validation/known-limitations.md" "$OUT/known-limitations.md"
 
 SOURCE_COMMIT=$(git -C "$ROOT" rev-parse HEAD)
 RELEASE_APK=$OUT/hermit-v$VERSION-release.apk
-DEBUG_APK=$OUT/hermit-v$VERSION-debug.apk
 RELEASE_SHA=$(shasum -a 256 "$RELEASE_APK" | awk '{print $1}')
-DEBUG_SHA=$(shasum -a 256 "$DEBUG_APK" | awk '{print $1}')
 RELEASE_SIZE=$(stat -f '%z' "$RELEASE_APK")
-DEBUG_SIZE=$(stat -f '%z' "$DEBUG_APK")
 BUILT_AT=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+JAVA_VERSION=$("$JAVA_HOME/bin/java" -version 2>&1 | sed -n '1s/.*version "\([^"]*\)".*/\1/p')
 
-export ROOT OUT VERSION VERSION_CODE CERT_SHA256 SOURCE_COMMIT RELEASE_SHA DEBUG_SHA RELEASE_SIZE DEBUG_SIZE BUILT_AT
+export ROOT OUT VERSION VERSION_CODE CERT_SHA256 SOURCE_COMMIT RELEASE_SHA RELEASE_SIZE BUILT_AT JAVA_VERSION
 node <<'NODE'
 const fs = require('fs');
 const path = require('path');
@@ -61,11 +57,10 @@ const manifest = {
   versionName: e.VERSION,
   versionCode: Number(e.VERSION_CODE),
   sdk: { min: 29, target: 37, compile: 37 },
-  toolchain: { jdk: '17.0.14', gradle: '9.3.1', agp: '9.1.1', buildTools: '37.0.0' },
+  toolchain: { jdk: e.JAVA_VERSION, gradle: '9.3.1', agp: '9.1.1', buildTools: '37.0.0' },
   signingCertificateSha256: e.CERT_SHA256,
   artifacts: [
     { file: `hermit-v${e.VERSION}-release.apk`, sha256: e.RELEASE_SHA, bytes: Number(e.RELEASE_SIZE) },
-    { file: `hermit-v${e.VERSION}-debug.apk`, sha256: e.DEBUG_SHA, bytes: Number(e.DEBUG_SIZE) },
   ],
 };
 fs.writeFileSync(path.join(e.OUT, 'release-manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
@@ -107,7 +102,7 @@ NODE
 
 (
   cd "$OUT"
-  shasum -a 256 "hermit-v$VERSION-release.apk" "hermit-v$VERSION-debug.apk" release-manifest.json sbom.json dependency-licenses.txt fontawesome-license.txt validation-report.md known-limitations.md > SHA256SUMS
+  shasum -a 256 "hermit-v$VERSION-release.apk" release-manifest.json sbom.json dependency-licenses.txt fontawesome-license.txt validation-report.md known-limitations.md > SHA256SUMS
 )
 
 echo "Packaged $OUT"

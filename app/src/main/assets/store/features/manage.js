@@ -7,6 +7,7 @@
   const { validUrl } = H.features.install;
   const { showView, cachedViewState } = H.navigation;
   const capabilityLabels = { "camera.capture": "拍照", "microphone.record": "麦克风录音", speech: "语音识别", "location.approximate": "大致位置", "location.precise": "精确位置", "clipboard.read": "读取剪贴板", network: "网络请求", notifications: "发送通知" };
+  let releaseState = { appId:null, result:null, visible:10 };
   function canUpdateFromSource(app) { return !!app.updateUrl; }
   function nextVersionName(value) {
     const parts = String(value || "0.0.0").match(/^(\d+)\.(\d+)\.(\d+)$/);
@@ -119,7 +120,15 @@
     if (releaseResult.status === "rejected") { releaseRoot.textContent = "版本信息读取失败，请重新打开管理面板。"; return; }
     const versions = releaseResult.value;
     if (!versions) return;
-    for (const release of versions.releases) {
+    releaseState = { appId: app.appId, result: versions, visible:10 };
+    renderReleases();
+  }
+  function renderReleases() {
+    const releaseRoot = $("#releases");
+    const versions = releaseState.result;
+    if (!versions) return;
+    releaseRoot.replaceChildren();
+    for (const release of versions.releases.slice(0, releaseState.visible)) {
       const row = document.createElement("div"); row.className = "row";
       const label = document.createElement("span");
       label.textContent = (release.versionName || release.releaseId.slice(0,8)) + (release.releaseId === versions.activeReleaseId ? " · 当前使用" : "");
@@ -135,7 +144,22 @@
       }
       releaseRoot.append(row);
     }
+    const more = $("#moreReleases");
+    more.classList.toggle("hidden", versions.releases.length <= releaseState.visible);
+    more.textContent = "显示更多版本（" + Math.min(10, versions.releases.length - releaseState.visible) + "）";
   }
+  $("#moreReleases").onclick = () => { releaseState.visible += 10; renderReleases(); };
+  bind("#pruneReleases", async button => {
+    const app = state.selected;
+    const versions = releaseState.result;
+    if (!app || !versions || versions.releases.length <= 5) { say("当前版本不超过5个，无需清理。"); return; }
+    if (!await confirmAction("清理旧代码版本", "只保留最近5个版本；当前正在使用的版本始终保留。此操作无法撤销。", "清理版本", true)) return;
+    await host.call("apps.pruneReleases", { appId: app.appId });
+    const refreshed = await host.call("apps.releases", { appId: app.appId });
+    releaseState = { appId: app.appId, result: refreshed, visible:10 };
+    renderReleases();
+    say("旧代码版本已清理。");
+  });
   bind("#saveApp", async () => {
     const app = state.selected;
     const draft = state.manageDraft;

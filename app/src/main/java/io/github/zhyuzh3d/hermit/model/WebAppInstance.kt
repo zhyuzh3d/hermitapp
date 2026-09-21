@@ -53,6 +53,7 @@ data class WebAppInstance(
     fun toJson(): JSONObject = JSONObject()
         .put("appId", appId)
         .put("instanceId", instanceId)
+        .put("dataGenerationId", dataGenerationId)
         .put("happId", happId ?: JSONObject.NULL)
         .put("name", name)
         .put("source", source.name.lowercase())

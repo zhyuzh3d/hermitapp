@@ -69,6 +69,23 @@ class VoicePreferences(context: Context) {
         .put("language", config.language ?: JSONObject.NULL)
         .put("preferOffline", config.preferOffline)
 
+    fun applyJson(ttsJson: JSONObject?, speechJson: JSONObject?) {
+        ttsJson?.let {
+            saveTts(Tts(
+                it.optString("engineSelection").takeIf { value -> value.isNotBlank() && value != "system" },
+                it.optString("voiceSelection").takeIf { value -> value.isNotBlank() && value != "automatic" },
+                it.optString("language").takeIf { value -> value.isNotBlank() && value != "null" },
+                it.optDouble("rate", 1.0).toFloat(), it.optDouble("pitch", 1.0).toFloat()))
+        }
+        speechJson?.let {
+            saveSpeech(Speech(
+                it.optString("serviceSelection").takeIf { value -> value.isNotBlank() && value != "system" },
+                it.optString("activitySelection").takeIf { value -> value.isNotBlank() && value != "system" },
+                it.optString("language").takeIf { value -> value.isNotBlank() && value != "null" },
+                it.optBoolean("preferOffline", false)))
+        }
+    }
+
     private fun android.content.SharedPreferences.Editor.putNullableString(key: String, value: String?) = apply {
         if (value.isNullOrBlank()) remove(key) else putString(key, value)
     }

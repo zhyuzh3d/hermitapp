@@ -2,6 +2,9 @@ package io.github.zhyuzh3d.hermit.backup
 
 import android.content.Context
 import android.net.Uri
+import androidx.core.content.FileProvider
+import io.github.zhyuzh3d.hermit.BuildConfig
+import io.github.zhyuzh3d.hermit.capability.VoicePreferences
 import io.github.zhyuzh3d.hermit.data.FileStore
 import io.github.zhyuzh3d.hermit.data.HostImageStore
 import io.github.zhyuzh3d.hermit.data.RecordsStore
@@ -12,6 +15,9 @@ import io.github.zhyuzh3d.hermit.model.HappSource
 import io.github.zhyuzh3d.hermit.model.HermitException
 import io.github.zhyuzh3d.hermit.model.WebAppInstance
 import io.github.zhyuzh3d.hermit.registry.AppRegistry
+import io.github.zhyuzh3d.hermit.notification.NotificationRepository
+import io.github.zhyuzh3d.hermit.notification.NotificationSpec
+import io.github.zhyuzh3d.hermit.notification.Recurrence
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
@@ -33,11 +39,12 @@ class BackupCoordinator(
     private val installer: InstallCoordinator,
     private val records: RecordsStore,
     private val files: FileStore,
+    private val notifications: NotificationRepository,
 ) {
     private val images = HostImageStore(context)
 
     suspend fun export(appId: String, destination: Uri): JSONObject = withContext(Dispatchers.IO) {
-        val app = registry.getInstance(appId) ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "页面应用不存在")
+        val app = registry.getAnyInstance(appId) ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "页面应用不存在")
         val releaseId = app.activeReleaseId
         releaseId?.let(installer::acquireRelease)
         val entries = JSONObject()
@@ -100,7 +107,7 @@ class BackupCoordinator(
                         }
                     }
                     val manifest = JSONObject().put("schema", 3).put("createdAt", System.currentTimeMillis())
-                        .put("app", JSONObject().put("name", app.name).put("source", app.source.name.lowercase())
+                        .put("app", JSONObject().put("appId", app.appId).put("name", app.name).put("source", app.source.name.lowercase())
                             .put("runtimeMode", app.runtimeMode.name.lowercase())
                             .put("liveUrl", app.liveUrl ?: JSONObject.NULL)
                             .put("happId", app.happId ?: JSONObject.NULL)
@@ -122,6 +129,142 @@ class BackupCoordinator(
             throw if (error is HermitException) error else HermitException(ErrorCodes.STORAGE, error.message ?: "备份导出失败")
         } finally { releaseId?.let(installer::releaseRelease) }
         JSONObject().put("exported", true).put("appId", appId).put("bytes", total)
+    }
+
+    suspend fun exportAll(destination: Uri, theme: String = "system"): JSONObject = withContext(Dispatchers.IO) {
+        val tempDir = File(context.cacheDir, "shared/backup-${UUID.randomUUID()}").apply { mkdirs() }
+        val nested = mutableListOf<Pair<String, File>>()
+        try {
+            // Archived instances intentionally have no runnable release; the
+            // portable full backup contains only instances that can be restored.
+            registry.listInstances().forEachIndexed { index, app ->
+                val file = File(tempDir, "happ-$index.zip")
+                val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
+                export(app.appId, uri)
+                nested += "happs/$index/backup.zip" to file
+            }
+            val output = context.contentResolver.openOutputStream(destination, "w")
+                ?: throw HermitException(ErrorCodes.STORAGE, "无法创建备份文件")
+            output.use { raw -> ZipOutputStream(raw.buffered()).use { zip ->
+                val entries = JSONObject()
+                nested.forEach { (name, file) ->
+                    val digest = MessageDigest.getInstance("SHA-256")
+                    var size = 0L
+                    zip.putNextEntry(ZipEntry(name).apply { time = 0L })
+                    FileInputStream(file).use { input ->
+                        val buffer = ByteArray(DEFAULT_BUFFER_SIZE)
+                        while (true) { val read = input.read(buffer); if (read < 0) break; zip.write(buffer, 0, read); digest.update(buffer, 0, read); size += read }
+                    }
+                    zip.closeEntry()
+                    entries.put(name, JSONObject().put("size", size).put("sha256", digest.digest().hex()))
+                }
+                val settingsBytes = hermitSettingsJson(theme).toString().toByteArray()
+                val settingsDigest = MessageDigest.getInstance("SHA-256").digest(settingsBytes).hex()
+                zip.putNextEntry(ZipEntry("settings.json").apply { time = 0L })
+                zip.write(settingsBytes)
+                zip.closeEntry()
+                entries.put("settings.json", JSONObject().put("size", settingsBytes.size).put("sha256", settingsDigest))
+                val notificationBytes = JSONArray(notifications.allSchedules().map { item ->
+                    item.toJson().put("instanceId", item.instanceId).put("firstTriggerAt", item.firstTriggerAt).put("anchorLocal", item.anchorLocal.toString())
+                }).toString().toByteArray()
+                val notificationDigest = MessageDigest.getInstance("SHA-256").digest(notificationBytes).hex()
+                zip.putNextEntry(ZipEntry("notifications.json").apply { time = 0L }); zip.write(notificationBytes); zip.closeEntry()
+                entries.put("notifications.json", JSONObject().put("size", notificationBytes.size).put("sha256", notificationDigest))
+                val manifest = JSONObject().put("schema", 1).put("backupType", "full")
+                    .put("createdAt", System.currentTimeMillis()).put("hermitVersionCode", BuildConfig.VERSION_CODE)
+                    .put("hermitVersionName", BuildConfig.VERSION_NAME).put("happCount", nested.size).put("entries", entries)
+                    .put("excludes", JSONArray(listOf("cookies", "webStorage", "permissions", "developerTokens")))
+                zip.putNextEntry(ZipEntry("hermit-backup.json").apply { time = 0L }); zip.write(manifest.toString().toByteArray()); zip.closeEntry()
+            }}
+            JSONObject().put("exported", true).put("backupType", "full").put("happCount", nested.size)
+        } finally { tempDir.deleteRecursively() }
+    }
+
+    suspend fun exportSettings(destination: Uri, theme: String = "system"): JSONObject = withContext(Dispatchers.IO) {
+        val output = context.contentResolver.openOutputStream(destination, "w")
+            ?: throw HermitException(ErrorCodes.STORAGE, "无法创建备份文件")
+        output.use { raw -> ZipOutputStream(raw.buffered()).use { zip ->
+                val settings = JSONObject().put("theme", theme.takeIf { it in setOf("system", "light", "dark") } ?: "system")
+                .put("voice", JSONObject().put("tts", VoicePreferences(context).ttsJson()).put("speech", VoicePreferences(context).speechJson()))
+            val bytes = settings.toString().toByteArray()
+            val digest = MessageDigest.getInstance("SHA-256").digest(bytes).hex()
+            zip.putNextEntry(ZipEntry("settings.json").apply { time = 0L }); zip.write(bytes); zip.closeEntry()
+            val manifest = JSONObject().put("schema", 1).put("backupType", "settings").put("createdAt", System.currentTimeMillis())
+                .put("entries", JSONObject().put("settings.json", JSONObject().put("size", bytes.size).put("sha256", digest)))
+            zip.putNextEntry(ZipEntry("hermit-backup.json").apply { time = 0L }); zip.write(manifest.toString().toByteArray()); zip.closeEntry()
+        }}
+        JSONObject().put("exported", true).put("backupType", "settings")
+    }
+
+    private fun hermitSettingsJson(theme: String): JSONObject = JSONObject()
+        .put("theme", theme.takeIf { it in setOf("system", "light", "dark") } ?: "system")
+        .put("voice", JSONObject().put("tts", VoicePreferences(context).ttsJson()).put("speech", VoicePreferences(context).speechJson()))
+
+    suspend fun restoreAny(source: Uri): JSONObject = withContext(Dispatchers.IO) {
+        val temporary = File(context.cacheDir, "shared/restore-${UUID.randomUUID()}.zip").apply { parentFile?.mkdirs() }
+        try {
+            context.contentResolver.openInputStream(source)?.use { input -> FileOutputStream(temporary).use { input.copyBounded(it, MAX_BACKUP_BYTES) } }
+                ?: throw HermitException(ErrorCodes.STORAGE, "无法读取备份文件")
+            ZipFile(temporary).use { zip ->
+                val outer = zip.getEntry("hermit-backup.json")
+                if (outer == null) return@withContext restore(source)
+                val manifest = zip.getInputStream(outer).use { JSONObject(it.reader().readText()) }
+                if (manifest.optInt("schema") != 1) throw HermitException(ErrorCodes.UNSUPPORTED, "备份版本不受支持")
+                when (manifest.getString("backupType")) {
+                    "settings" -> {
+                        validateArchive(zip, manifest.getJSONObject("entries"))
+                        val settings = zip.getInputStream(zip.getEntry("settings.json")).use { JSONObject(it.reader().readText()) }
+                        val voice = settings.optJSONObject("voice") ?: JSONObject()
+                        VoicePreferences(context).applyJson(voice.optJSONObject("tts"), voice.optJSONObject("speech"))
+                        JSONObject().put("restored", true).put("backupType", "settings").put("theme", settings.optString("theme", "system"))
+                    }
+                    "full" -> {
+                        validateArchive(zip, manifest.getJSONObject("entries"))
+                        val restored = JSONArray()
+                        val idMap = mutableMapOf<String, String>()
+                        val entries = manifest.getJSONObject("entries").keys().asSequence().filter { it.startsWith("happs/") }.sorted().toList()
+                        entries.forEach { path ->
+                            val file = File(context.cacheDir, "shared/nested-${UUID.randomUUID()}.zip")
+                            try { zip.getInputStream(zip.getEntry(path)).use { input -> FileOutputStream(file).use { input.copyTo(it) } }
+                                val uri = FileProvider.getUriForFile(context, "${context.packageName}.files", file)
+                                val oldId = ZipFile(file).use { nested ->
+                                    val nestedManifest = nested.getInputStream(nested.getEntry(MANIFEST)).use { JSONObject(it.reader().readText()) }
+                                    nestedManifest.getJSONObject("app").optString("appId")
+                                }
+                                val result = restore(uri)
+                                restored.put(result)
+                                if (oldId.isNotBlank()) idMap[oldId] = result.getString("appId")
+                            } finally { file.delete() }
+                        }
+                        zip.getEntry("notifications.json")?.let { entry ->
+                            val schedules = zip.getInputStream(entry).use { JSONArray(it.reader().readText()) }
+                            for (index in 0 until schedules.length()) {
+                                val item = schedules.getJSONObject(index)
+                                val newId = idMap[item.optString("instanceId")] ?: continue
+                                val recurrence = Recurrence.valueOf(item.getString("recurrence").uppercase())
+                                val spec = NotificationSpec.fromJson(JSONObject().put("id", item.getString("id"))
+                                    .put("title", item.getString("title")).put("body", item.getString("body"))
+                                    .put("data", item.optJSONObject("data") ?: JSONObject()))
+                                notifications.upsert(newId, spec, item.getLong("firstTriggerAt"), recurrence)
+                            }
+                        }
+                        var settingsRestored = false
+                        var restoredTheme = "system"
+                        zip.getEntry("settings.json")?.let { entry ->
+                            val settings = zip.getInputStream(entry).use { JSONObject(it.reader().readText()) }
+                            val voice = settings.optJSONObject("voice") ?: JSONObject()
+                            VoicePreferences(context).applyJson(voice.optJSONObject("tts"), voice.optJSONObject("speech"))
+                            restoredTheme = settings.optString("theme", "system")
+                            settingsRestored = true
+                        }
+                        JSONObject().put("restored", true).put("backupType", "full").put("happCount", restored.length())
+                            .put("apps", restored).put("settingsRestored", settingsRestored).put("theme", restoredTheme)
+                    }
+                    "happ" -> restore(source)
+                    else -> throw HermitException(ErrorCodes.INVALID_ARGUMENT, "备份类型无效")
+                }
+            }
+        } finally { temporary.delete() }
     }
 
     suspend fun restore(source: Uri): JSONObject = withContext(Dispatchers.IO) {

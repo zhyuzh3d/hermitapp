@@ -107,20 +107,29 @@ class AppRegistry(private val context: Context) : SQLiteOpenHelper(context, "her
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
         if (newVersion > VERSION) throw IllegalStateException("Unsupported registry version $newVersion")
         if (oldVersion >= VERSION) return
-        // Current installations are development/test devices. Make the object-
-        // storage schema a clean cutover: remove all legacy tables (including
-        // Base64 icon columns) and create only the current contract.
-        listOf(
-            "dev_workspaces",
-            "grants",
-            "releases",
-            "operations",
-            "diagnostic_events",
-            "profile_cleanup",
-            "system_permission_observations",
-            "instances",
-        ).forEach { db.execSQL("DROP TABLE IF EXISTS $it") }
-        onCreate(db)
+        // Never rebuild the registry during an APK update. Older installations
+        // may contain user data; create missing auxiliary tables and add only
+        // columns that did not exist in that schema.
+        db.beginTransaction()
+        try {
+            createMissingTables(db)
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
+    private fun createMissingTables(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE IF NOT EXISTS instances (app_id TEXT PRIMARY KEY, name TEXT NOT NULL, source_kind TEXT NOT NULL, runtime_mode TEXT NOT NULL, launch_channel TEXT NOT NULL DEFAULT 'STABLE', start_url TEXT NOT NULL, primary_origin TEXT NOT NULL, live_url TEXT, web_profile_name TEXT NOT NULL UNIQUE, trust_revision INTEGER NOT NULL DEFAULT 1, active_release_id TEXT, active_data_generation TEXT NOT NULL, source_adapter TEXT NOT NULL DEFAULT 'unknown', source_spec TEXT NOT NULL DEFAULT '{}', developer_enabled INTEGER NOT NULL DEFAULT 0, favorite INTEGER NOT NULL DEFAULT 0, icon_url TEXT, default_icon_url TEXT, happ_id TEXT, publisher_key_id TEXT, download_url TEXT, download_version_code INTEGER, download_version_name TEXT, update_url TEXT, notification_enabled INTEGER NOT NULL DEFAULT 0, allow_cross_origin_network INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'ready', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS releases (release_id TEXT PRIMARY KEY, app_id TEXT NOT NULL, tree_hash TEXT NOT NULL, provenance TEXT NOT NULL, version_code INTEGER, version_name TEXT, source_revision TEXT, entry_path TEXT NOT NULL DEFAULT 'index.html', routing TEXT NOT NULL DEFAULT 'hash', happ_id TEXT, publisher_key_id TEXT, relative_root TEXT NOT NULL, created_at INTEGER NOT NULL, UNIQUE(app_id, tree_hash))")
+        db.execSQL("CREATE INDEX IF NOT EXISTS releases_by_app_time ON releases(app_id, created_at DESC)")
+        createDevWorkspaces(db)
+        db.execSQL("CREATE TABLE IF NOT EXISTS grants (app_id TEXT NOT NULL, trust_revision INTEGER NOT NULL, capability TEXT NOT NULL, resource_scope TEXT NOT NULL DEFAULT '', decision TEXT NOT NULL, updated_at INTEGER NOT NULL, PRIMARY KEY(app_id, trust_revision, capability, resource_scope))")
+        createSystemPermissionObservations(db)
+        db.execSQL("CREATE TABLE IF NOT EXISTS operations (operation_id TEXT PRIMARY KEY, app_id TEXT, kind TEXT NOT NULL, state TEXT NOT NULL, idempotency_key TEXT, input_hash TEXT, expected_release_id TEXT, result_release_id TEXT, error_code TEXT, error_message TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS diagnostic_events (id INTEGER PRIMARY KEY AUTOINCREMENT, app_id TEXT, session_id TEXT, method TEXT NOT NULL, decision TEXT NOT NULL, result_code TEXT, duration_ms INTEGER, created_at INTEGER NOT NULL)")
+        db.execSQL("CREATE TABLE IF NOT EXISTS profile_cleanup (profile_name TEXT PRIMARY KEY, app_id TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending', created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)")
+        val columns = db.rawQuery("PRAGMA table_info(instances)", null).use { c -> buildSet { while (c.moveToNext()) add(c.getString(1)) } }
+        val additions = mapOf("launch_channel" to "TEXT NOT NULL DEFAULT 'STABLE'", "source_adapter" to "TEXT NOT NULL DEFAULT 'unknown'", "source_spec" to "TEXT NOT NULL DEFAULT '{}'", "developer_enabled" to "INTEGER NOT NULL DEFAULT 0", "favorite" to "INTEGER NOT NULL DEFAULT 0", "icon_url" to "TEXT", "default_icon_url" to "TEXT", "happ_id" to "TEXT", "publisher_key_id" to "TEXT", "download_url" to "TEXT", "download_version_code" to "INTEGER", "download_version_name" to "TEXT", "update_url" to "TEXT", "notification_enabled" to "INTEGER NOT NULL DEFAULT 0", "allow_cross_origin_network" to "INTEGER NOT NULL DEFAULT 0", "state" to "TEXT NOT NULL DEFAULT 'ready'")
+        additions.filterKeys { it !in columns }.forEach { (name, definition) -> db.execSQL("ALTER TABLE instances ADD COLUMN $name $definition") }
     }
 
     fun listInstances(): List<WebAppInstance> =
@@ -174,6 +183,10 @@ class AppRegistry(private val context: Context) : SQLiteOpenHelper(context, "her
 
     fun getInstance(appId: String): WebAppInstance? =
         readableDatabase.query("instances", null, "app_id = ? AND state = ?", arrayOf(appId, "ready"), null, null, null)
+            .use { cursor -> if (cursor.moveToFirst()) cursor.toInstance() else null }
+
+    fun getAnyInstance(appId: String): WebAppInstance? =
+        readableDatabase.query("instances", null, "app_id = ? AND state IN ('ready','archived')", arrayOf(appId), null, null, null)
             .use { cursor -> if (cursor.moveToFirst()) cursor.toInstance() else null }
 
     fun resolveLaunchTarget(appId: String?, happId: String?, publisherKeyId: String?): WebAppInstance? {
@@ -786,5 +799,5 @@ class AppRegistry(private val context: Context) : SQLiteOpenHelper(context, "her
         return "${uri.scheme!!.lowercase()}://${uri.host!!.lowercase()}$port"
     }
 
-    companion object { private const val VERSION = 11 }
+    companion object { private const val VERSION = 12 }
 }

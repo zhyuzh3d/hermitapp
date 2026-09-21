@@ -64,12 +64,12 @@ test("agent catalog, guide snapshots and shared-password authority stay aligned"
   const tools = JSON.parse(fs.readFileSync(root + "tools.json", "utf8"));
   const guide = fs.readFileSync(root + "hermit-device/SKILL.md", "utf8");
   const server = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/deploy/AgentDevelopmentServer.kt", "utf8");
-  const discovery = server.slice(server.indexOf("private fun discovery()"), server.indexOf("private fun connectionGuide()"));
-  assert.equal(new Set(tools.map(tool => tool.name)).size, 26);
+  const discovery = server.slice(server.indexOf("private fun bootstrap()"), server.indexOf("private fun bootstrapHtml()"));
+  assert.equal(new Set(tools.map(tool => tool.name)).size, 37);
   const toolIndex = tools.map(({ name, description }) => ({ name, description }));
-  assert.ok(Buffer.byteLength(JSON.stringify(toolIndex)) < 6 * 1024, "the public tool index must stay compact and schema-free");
+  assert.ok(Buffer.byteLength(JSON.stringify(toolIndex)) < 8 * 1024, "the public tool index must stay compact and schema-free");
   assert.deepEqual(Object.keys(toolIndex[0]).sort(), ["description", "name"]);
-  assert.ok(Buffer.byteLength(guide) < 8192, "the default device guide must remain a short, cacheable operating guide");
+  assert.ok(Buffer.byteLength(guide) < 12 * 1024, "the default device guide must remain a short, cacheable operating guide");
   assert.match(guide, /~\/hermit\/happ-dev\.json/);
   assert.match(guide, /happ-<happId-with-dots-replaced-by-hyphens>/);
   assert.match(guide, /one `happId` has one active local directory/);
@@ -94,7 +94,15 @@ test("agent catalog, guide snapshots and shared-password authority stay aligned"
   assert.match(server, /put\("type", "image"\).*put\("mimeType"/s);
   assert.match(server, /includeIcons/);
   assert.match(server, /authorization\.isNullOrBlank\(\).*authenticationRequired\(\)/);
-  assert.match(server, /put\("error", error\).*put\("discoveryUrl".*put\("instructionsUrl".*Authorization: Bearer/s);
+  assert.match(server, /put\("error", "authentication_required"\).*put\("reason".*put\("nextAction", "ask_user_for_current_password"/s);
+  assert.match(server, /hermit-agent-bootstrap/);
+  assert.match(discovery, /put\("packageFormat", "codex-plugin-archive-v1"\)/);
+  assert.match(discovery, /put\("nativeCodexPlugin", true\)/);
+  assert.match(discovery, /atomic_replace_if_hash_differs/);
+  assert.match(discovery, /register_mcp_then_authenticate/);
+  assert.match(discovery, /codex", "plugin", "add", "hermit-device@personal/);
+  assert.match(server, /ZipEntry\(name\)\.apply \{ time = 0L \}/);
+  assert.match(server, /packageSha256/);
   assert.doesNotMatch(server, /\/pw\/|password.*(?:path|query|fragment)/i);
   for (const tool of tools) {
     const dispatch = new RegExp(`(?:"[^"]+"\\s*,\\s*)*"${tool.name}"(?:\\s*,\\s*"[^"]+")*\\s*->`);
@@ -256,7 +264,7 @@ test("development password is read only outside a deliberate modal save", () => 
   assert.match(html, /id="agentPassword"[^>]*readonly/);
   assert.match(html, /id="editAgentPassword"/);
   assert.match(html, /id="agentPasswordPanel"/);
-  assert.match(html, /id="agentPasswordDraft"[^>]*pattern="\[0-9\]\{6\}"/);
+  assert.match(html, /id="agentPasswordDraft"[^>]*pattern="\[0-9A-Za-z\]\{6\}"/);
   assert.match(html, /id="randomAgentPassword"/);
   assert.match(development, /crypto\.getRandomValues\(random\)/);
   assert.match(development, /host\.call\("agent\.resetPassword", \{ password \}\)/);
@@ -365,7 +373,7 @@ test("happ source and runtime mode remain independent across Native and HermitUI
   assert.match(model, /enum class HappRuntimeMode \{ LOCAL, LIVE \}/);
   assert.match(registry, /source_kind TEXT NOT NULL/);
   assert.match(registry, /runtime_mode TEXT NOT NULL/);
-  assert.match(registry, /private const val VERSION = 11/);
+  assert.match(registry, /private const val VERSION = 12/);
   assert.match(registry, /current\.activeReleaseId/);
   assert.match(remote, /encodedPath\("\/hermit-install\.json"\)/);
   assert.match(remote, /downloadSameOrigin\(packageUrl, updateUrl\)/);

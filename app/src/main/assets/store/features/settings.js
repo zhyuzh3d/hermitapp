@@ -52,6 +52,48 @@
   bind("#diagnosticsButton", openDiagnostics);
   bind("#copyDiagnostics", () => copy($("#diagnosticsOutput").textContent, "诊断报告"));
   bind("#githubButton", () => host.call("about.openRepository", {}));
+  function showRestoreResult(value) {
+    if (value.theme) applyTheme(value.theme);
+    const root = $("#backupRestoreResult");
+    root.replaceChildren();
+    const lines = [];
+    if (value.backupType === "settings") lines.push("Hermit 设置");
+    if (value.backupType === "happ") lines.push(value.name ? "应用：“" + value.name + "”" : "单个 happ");
+    if (value.backupType === "full") {
+      if (value.settingsRestored) lines.push("Hermit 设置");
+      const apps = Array.isArray(value.apps) ? value.apps : [];
+      lines.push("全部 happ（" + (value.happCount ?? apps.length) + " 个）");
+      apps.forEach(app => { if (app && app.name) lines.push("已恢复：“" + app.name + "”"); });
+    }
+    if (!lines.length) lines.push("备份内容");
+    const heading = document.createElement("strong"); heading.textContent = "恢复完成"; root.append(heading);
+    const list = document.createElement("ul"); lines.forEach(line => { const item = document.createElement("li"); item.textContent = line; list.append(item); }); root.append(list);
+    open("#backupRestoreResultPanel");
+  }
+  bind("#restoreBackupSettings", async () => { const value = await host.call("backup.restore", {}); if (!value.cancelled) showRestoreResult(value); });
+  bind("#openBackupActions", async () => { await loadBackupApps(); open("#backupActionsPanel"); });
+  bind("#backupAll", async () => { await host.call("backup.exportAll", { theme }); say("全部备份已导出。"); close("#backupActionsPanel"); });
+  bind("#backupSettings", async () => { await host.call("backup.exportSettings", { theme }); say("Hermit 设置备份已导出。"); close("#backupActionsPanel"); });
+  async function loadBackupApps() {
+    const root = $("#backupApps"); if (!root) return;
+    root.replaceChildren();
+    const value = await host.call("apps.list", {});
+    const apps = value.apps || [];
+    if (!apps.length) { root.textContent = "暂无可备份的 happ。"; return; }
+    apps.forEach(app => {
+      const button = document.createElement("button"); button.className = "backup-app-row"; button.type = "button";
+      const icon = document.createElement("span"); icon.className = "backup-app-icon";
+      if (app.iconUrl) { icon.style.backgroundImage = "url(" + JSON.stringify(app.iconUrl).slice(1, -1) + ")"; icon.classList.add("custom"); }
+      else icon.innerHTML = '<i class="fa-solid fa-cube"></i>';
+      const copy = document.createElement("span"); copy.className = "backup-app-copy";
+      const name = document.createElement("strong"); name.textContent = app.name || "未命名应用";
+      const version = document.createElement("small"); const active = app.activeVersion || {}; version.textContent = active.name || (Number.isFinite(active.code) ? "版本 " + active.code : "版本未标注");
+      copy.append(name, version); const action = document.createElement("i"); action.className = "fa-solid fa-download"; action.setAttribute("aria-hidden", "true");
+      button.append(icon, copy, action); button.setAttribute("aria-label", "备份 " + (app.name || "应用"));
+      button.onclick = () => busy(button, async () => { await host.call("backup.export", { appId: app.appId }); say("已导出“" + app.name + "”备份。"); });
+      root.append(button);
+    });
+  }
 
   let voiceLoaded = false, voiceStatus = null;
   function option(value, label, selectedValue, disabled = false) {
