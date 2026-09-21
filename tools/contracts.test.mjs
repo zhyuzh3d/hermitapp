@@ -90,7 +90,7 @@ test("agent catalog, guide snapshots and shared-password authority stay aligned"
   assert.equal(tools.find(tool => tool.name === "hermit_get_app").inputSchema.properties.includeIcons.type, "boolean");
   assert.match(server, /"hermit_reload_shell"\s*->\s*ui\("reload-shell",\s*args,\s*authorization\)/);
   assert.match(server, /"hermit_capture_screen"\s*->\s*ui\("capture-screen",\s*args,\s*authorization\)/);
-  assert.match(server, /MAX_RECENT_OPERATIONS = 20/);
+  assert.match(server, /Log\.i\(TAG, "dev-operation tool=\$tool app=.*result=/);
   assert.match(server, /put\("type", "image"\).*put\("mimeType"/s);
   assert.match(server, /includeIcons/);
   assert.match(server, /authorization\.isNullOrBlank\(\).*authenticationRequired\(\)/);
@@ -285,6 +285,20 @@ test("development password is read only outside a deliberate modal save", () => 
   assert.match(development, /host\.call\("agent\.resetPassword", \{ password \}\)/);
   assert.match(development, /close\("#agentPasswordPanel"\)/);
   assert.doesNotMatch(development, /#agentPassword"\)\.oninput/);
+});
+
+test("development page names the plugin install address and logs operations instead of showing them", () => {
+  const html = fs.readFileSync("app/src/main/assets/store/index.html", "utf8");
+  const development = fs.readFileSync("app/src/main/assets/store/features/development.js", "utf8");
+  const server = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/deploy/AgentDevelopmentServer.kt", "utf8");
+  assert.ok(html.includes("请把下面的插件地址粘贴给你的智能体开发软件（如WorkBuddy、Codex等），并要求它从这个地址安装插件。安装完毕后，就可以要求它进入特定Happ应用开发模式进行修改和安装更新。"));
+  assert.ok(html.includes('<span class="field-label">Happ开发插件安装地址</span>'));
+  assert.ok(html.includes('<span class="field-label">备用安装地址（USB连接）</span>'));
+  assert.equal(html.includes('id="agentEvents"'), false, "recent activity panel must stay removed");
+  assert.doesNotMatch(development, /agentEvents/);
+  assert.doesNotMatch(server, /MAX_RECENT_OPERATIONS|endpoint\.events/);
+  assert.match(server, /private const val TAG = "HermitAgentDev"/);
+  assert.match(server, /Log\.i\(TAG, "dev-operation tool=\$tool app=/);
 });
 
 test("launcher uses the compressed Hermit brand icon while notifications keep a monochrome glyph", () => {

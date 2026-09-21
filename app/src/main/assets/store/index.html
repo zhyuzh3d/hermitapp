@@ -22,13 +22,13 @@
 </section>
 <section id="developmentView" class="view hidden" aria-label="开发服务">
 <div class="developer-card"><div class="switch-row"><div><strong>智能体开发模式</strong><small id="agentStatus" role="status">正在读取状态…</small></div><button id="agentToggle" class="switch" role="switch" aria-checked="false" aria-label="开启智能体开发模式"><span></span></button></div>
-<p class="hint">请把下面的开发服务地址和开发服务密码告知你的 WorkBuddy、Codex 等智能体软件。连接后，你就可以让智能体对所有已安装的 happ 应用进行开发和定制，打造属于自己的应用体验。</p>
-<div class="agent-address-row"><div><span class="field-label">开发服务地址</span><output id="agentUrl" class="agent-url">未连接 Wi-Fi</output></div><div class="agent-address-actions"><button id="refreshAgentAddress" aria-label="刷新开发服务地址"><i class="fa-solid fa-rotate accent-green" aria-hidden="true"></i>刷新</button><button id="copyAgentAddress" aria-label="复制开发服务地址"><i class="fa-solid fa-copy accent-blue" aria-hidden="true"></i>复制</button></div></div>
-<div class="agent-address-row"><div><span class="field-label">备用开发服务(USB连接)</span><output id="agentUsb" class="agent-url">adb forward tcp:8766 tcp:8766</output></div><button id="copyAgentUsb" aria-label="复制 USB 命令"><i class="fa-solid fa-copy accent-violet" aria-hidden="true"></i>复制</button></div>
+<p class="hint">请把下面的插件地址粘贴给你的智能体开发软件（如WorkBuddy、Codex等），并要求它从这个地址安装插件。安装完毕后，就可以要求它进入特定Happ应用开发模式进行修改和安装更新。</p>
+<div class="agent-address-row"><div><span class="field-label">Happ开发插件安装地址</span><output id="agentUrl" class="agent-url">未连接 Wi-Fi</output></div><div class="agent-address-actions"><button id="refreshAgentAddress" aria-label="刷新插件安装地址"><i class="fa-solid fa-rotate accent-green" aria-hidden="true"></i>刷新</button><button id="copyAgentAddress" aria-label="复制插件安装地址"><i class="fa-solid fa-copy accent-blue" aria-hidden="true"></i>复制</button></div></div>
+<div class="agent-address-row"><div><span class="field-label">备用安装地址（USB连接）</span><output id="agentUsb" class="agent-url">adb forward tcp:8766 tcp:8766</output></div><button id="copyAgentUsb" aria-label="复制 USB 命令"><i class="fa-solid fa-copy accent-violet" aria-hidden="true"></i>复制</button></div>
 <button id="startAgentUsb" class="wide"><i class="fa-solid fa-usb accent-violet" aria-hidden="true"></i>仅 USB 启动</button>
 <div class="agent-secret"><label for="agentPassword">开发服务密码<input id="agentPassword" type="text" inputmode="numeric" readonly aria-readonly="true" autocomplete="off" aria-label="开发服务密码，只读"></label><button id="editAgentPassword"><i class="fa-solid fa-pen accent-orange" aria-hidden="true"></i>编辑</button></div>
 <div class="agent-warning"><i class="fa-solid fa-shield-halved accent-orange" aria-hidden="true"></i><p>开关和密码会持久保存，只有你主动关闭时才停止开发模式。仅用于可信 Wi-Fi、手机热点或 USB；普通移动网络不能作为可靠的直连地址。</p></div>
-<details><summary>最近操作 <span class="optional">不记录密码和文件内容</span></summary><pre id="agentEvents">暂无操作</pre></details></div>
+</div>
 </section>
 <section id="settingsView" class="view hidden" aria-label="设置">
 <div id="settingsTabs" class="segmented settings-tabs" role="tablist" aria-label="设置分类"><button id="settingsTabInterface" role="tab" aria-selected="true" aria-controls="settingsPaneInterface" data-settings-tab="interface" class="selected">界面</button><button id="settingsTabTts" role="tab" aria-selected="false" aria-controls="settingsPaneTts" data-settings-tab="tts">朗读</button><button id="settingsTabSpeech" role="tab" aria-selected="false" aria-controls="settingsPaneSpeech" data-settings-tab="speech">语音</button><button id="settingsTabSystem" role="tab" aria-selected="false" aria-controls="settingsPaneSystem" data-settings-tab="system">系统</button></div>

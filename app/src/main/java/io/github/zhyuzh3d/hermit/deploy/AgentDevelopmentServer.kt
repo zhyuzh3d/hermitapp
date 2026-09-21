@@ -2,6 +2,7 @@ package io.github.zhyuzh3d.hermit.deploy
 
 import android.content.Context
 import android.os.SystemClock
+import android.util.Log
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
 import fi.iki.elonen.NanoHTTPD
@@ -296,8 +297,7 @@ class AgentDevelopmentServer(
             result.put("serverVersion", BuildConfig.VERSION_NAME).put("runId", endpoint.runId)
                 .put("usbAddress", "http://127.0.0.1:${endpoint.listeningPort}")
                 .put("usbCommand", "adb forward tcp:${endpoint.listeningPort} tcp:${endpoint.listeningPort}")
-                .put("events", JSONArray(synchronized(endpoint.events) { endpoint.events.toList() }))
-        } else result.put("events", JSONArray())
+        }
         val revision = preferences.getLong("changeRevision", 0L)
         if (revision > 0) result.put("endpointChange", JSONObject().put("revision", revision)
             .put("previousAddress", preferences.getString("changePreviousAddress", null))
@@ -412,7 +412,6 @@ class AgentDevelopmentServer(
         private fun pluginSha256() = AgentWorkspace.sha(pluginPackage())
         fun updateAdvertisedHost(value: String) { advertisedHost = value }
         private val receipts = LinkedHashMap<String, Pair<String, JSONObject>>()
-        val events = ArrayDeque<JSONObject>()
         private val writes = ConcurrentHashMap<String, Semaphore>()
         private val failures = ConcurrentHashMap<String, Pair<Int, Long>>()
         @Volatile var lastAccess = SystemClock.elapsedRealtime()
@@ -1174,9 +1173,9 @@ class AgentDevelopmentServer(
             finally { gate.release() }
         }
 
-        private fun record(tool: String, appId: String?, result: String) = synchronized(events) {
-            if (events.size >= MAX_RECENT_OPERATIONS) events.removeFirst()
-            events.addLast(JSONObject().put("tool", tool).put("appId", appId ?: JSONObject.NULL).put("result", result).put("time", System.currentTimeMillis()))
+        /** Key development operations are logged only; the UI never shows them. */
+        private fun record(tool: String, appId: String?, result: String) {
+            Log.i(TAG, "dev-operation tool=$tool app=${appId ?: "-"} result=$result")
         }
     }
 
@@ -1199,7 +1198,7 @@ class AgentDevelopmentServer(
         private const val NETWORK_MONITOR_MS = 15_000L
         private const val MAX_RPC = 4L * 1024 * 1024
         private const val MAX_ZIP = 64L * 1024 * 1024
-        private const val MAX_RECENT_OPERATIONS = 20
+        private const val TAG = "HermitAgentDev"
         private const val RENDER_TTL_MS = 2L * 60 * 1000
         private fun constantEquals(a: String, b: String) = MessageDigest.isEqual(a.toByteArray(), b.toByteArray())
         private fun noCursor(params: JSONObject) { if (params.has("cursor")) throw RpcError(-32602, "No pagination cursor is available") }

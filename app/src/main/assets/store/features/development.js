@@ -56,7 +56,6 @@
     $("#agentUrl").dataset.address = address;
     $("#agentUsb").textContent = value.usbCommand || "adb forward tcp:8766 tcp:8766";
     $("#agentPassword").value = value.password || "";
-    $("#agentEvents").textContent = (value.events || []).slice(-20).reverse().map(event => new Date(event.time).toLocaleTimeString() + "  " + event.tool + "  " + event.result).join("\n") || "暂无操作";
     maybeShowEndpointChange(value);
   }
 
@@ -108,11 +107,11 @@
   bind("#copyAgentAddress", () => {
     const address = $("#agentUrl").dataset.address;
     if (!address) throw new Error("开发服务尚未启动。");
-    return copy(address, "开发服务地址");
+    return copy(address, "插件安装地址");
   });
   bind("#refreshAgentAddress", async () => {
     renderAgent(await host.call("agent.refresh"));
-    say(agentState && agentState.address ? "开发服务地址已刷新。" : "开发模式保持开启，正在等待 Wi-Fi 或手机热点。");
+    say(agentState && agentState.address ? "插件安装地址已刷新。" : "开发模式保持开启，正在等待 Wi-Fi 或手机热点。");
   });
   bind("#copyAgentUsb", () => copy($("#agentUsb").textContent, "USB 命令"));
   bind("#ackAgentEndpoint", () => { acknowledgeEndpointChange(); close("#agentEndpointPanel"); });
