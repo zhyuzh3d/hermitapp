@@ -503,6 +503,20 @@ class AppRegistry(private val context: Context) : SQLiteOpenHelper(context, "her
         }, "app_id = ?", arrayOf(appId))
     }
 
+    /** Refreshes where this instance came from. Null values keep what is already stored. */
+    fun recordPackageSource(appId: String, downloadUrl: String?, versionCode: Long?, versionName: String?, updateUrl: String?) {
+        if (downloadUrl == null && updateUrl == null) return
+        writableDatabase.update("instances", ContentValues().apply {
+            if (downloadUrl != null) {
+                put("download_url", downloadUrl)
+                if (versionCode == null) putNull("download_version_code") else put("download_version_code", versionCode)
+                if (versionName == null) putNull("download_version_name") else put("download_version_name", versionName)
+            }
+            if (updateUrl != null) put("update_url", updateUrl)
+            put("updated_at", System.currentTimeMillis())
+        }, "app_id = ?", arrayOf(appId))
+    }
+
     fun updatePresentation(appId: String, name: String, iconBytes: ByteArray? = null, replaceIcon: Boolean = false): WebAppInstance {
         if (getInstance(appId) == null) throw IllegalArgumentException("App not found")
         val iconUrl = if (replaceIcon && iconBytes != null) images.put(appId, iconBytes, "image/png") else null

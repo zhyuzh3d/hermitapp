@@ -275,6 +275,11 @@ class MainActivity : ComponentActivity(), BridgeHost {
         try {
             if (raw.startsWith("hermit://share", ignoreCase = true)) {
                 continuation.resume(JSONObject().put("cancelled", false).put("kind", "happ-share").put("payload", raw))
+            } else if (raw.startsWith("hermit://add", ignoreCase = true)) {
+                val target = Uri.parse(raw).getQueryParameter("url")
+                if (target.isNullOrBlank()) throw HermitException(ErrorCodes.INVALID_ARGUMENT, "二维码缺少安装地址")
+                continuation.resume(JSONObject().put("cancelled", false).put("kind", "url")
+                    .put("url", normalizeUrl(target)).put("viaAddLink", true))
             } else {
                 continuation.resume(JSONObject().put("cancelled", false).put("kind", "url").put("url", normalizeUrl(raw)))
             }

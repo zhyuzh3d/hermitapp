@@ -271,6 +271,7 @@ class InstallCoordinator(
                 if (installedInstance != null) registry.updateDefaultIcon(appId, packageIconBytes)
                 makeReleaseReadOnly(File(destination, "web"))
                 refreshShortcut(appId)
+                registry.recordPackageSource(appId, downloadUrl, metadata?.versionCode, metadata?.versionName, metadata?.updateUrl)
                 registry.updateOperation(operationId, "succeeded", releaseId)
                 pruneReleases(appId, releaseId)
                 if (provisionalAppId != appId) File(appsRoot, provisionalAppId).deleteRecursively()
