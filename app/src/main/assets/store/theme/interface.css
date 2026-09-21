@@ -169,6 +169,8 @@ select { display:block; width:100%; min-height:48px; margin-top:9px; padding:12p
 select:disabled { opacity:1; background:var(--soft); color:var(--disabled-ink); }
 .hint,.muted { color:var(--muted); font-size:12px; font-weight:400; line-height:1.7; }
 .hint { margin:12px 0; }
+/* 长说明段落两端对齐，并允许超长单词/地址在必要时断行，避免右侧参差或横向溢出 */
+.hint,.info-card p,.empty p,.agent-warning p,.readonly-value { text-align:justify; overflow-wrap:anywhere; word-break:break-word; }
 .readonly-value { margin:12px 0 0; color:var(--muted); font-size:12px; line-height:1.6; overflow-wrap:anywhere; }
 .readonly-value code { color:var(--ink); }
 .manage-sheet-card { display:flex; flex-direction:column; padding:0; overflow:hidden; }

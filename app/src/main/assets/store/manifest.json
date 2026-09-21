@@ -1,8 +1,8 @@
 {
-  "version": 53,
-  "versionName": "1.10.25",
-  "updatedAt": "2026-09-21T18:56:16+00:00",
-  "sha256": "e541ed0854703144c12fa5d2407d4c54434732fd9be0947b82c642bae8b3b363",
-  "bytes": 178055,
-  "bundle": "../downloads/hermitshell-v1.10.25-release.zip"
+  "version": 54,
+  "versionName": "1.10.26",
+  "updatedAt": "2026-09-21T19:02:05+00:00",
+  "sha256": "5b48a1e2760b83790cab040661850dffa184f0bed47a2ab98f0066022627d098",
+  "bytes": 178262,
+  "bundle": "../downloads/hermitshell-v1.10.26-release.zip"
 }

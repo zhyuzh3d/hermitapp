@@ -11,7 +11,7 @@
   }
   const $ = selector => document.querySelector(selector);
   const $$ = selector => [...document.querySelectorAll(selector)];
-  const HERMIT_WEB_VERSION = "1.10.25";
+  const HERMIT_WEB_VERSION = "1.10.26";
   const VIEW_STATE_KEY = "hermit.shell.view-state.v1";
   const VIEWS = ["favorites", "development", "settings", "icons", "support"];
   const state = { apps: [], selected: null, deploy: null, iconStyle: "all", iconLimit: 60, settingsTab: "interface", modals: [], view: "favorites", libraryFilter: "favorites", viewEpoch: 0, viewMounted: false, addToFavorites: true, addDraft: null, managedEpoch: 0 };
