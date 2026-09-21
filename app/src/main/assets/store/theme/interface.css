@@ -143,7 +143,7 @@ main { max-width:1000px; margin:auto; padding:12px 24px calc(110px + env(safe-ar
 .share-app-icon.custom { color:transparent; }
 .share-qr-box { display:grid; place-items:center; margin:4px auto 14px; padding:12px; width:min(300px,100%); box-sizing:border-box; border-radius:22px; background:white; border:1px solid var(--line); }
 .share-qr-box img { display:block; width:100%; height:auto; aspect-ratio:1; }
-.share-network-hint { margin:0; color:var(--ink); font-size:13px; line-height:1.55; text-align:center; }
+.share-network-hint { margin:0 0 16px; color:var(--ink); font-size:13px; line-height:1.55; text-align:center; }
 .share-card > .danger { margin-top:10px; }
 .share-details { display:grid; gap:0; margin:0 0 16px; border:1px solid var(--line); border-radius:15px; overflow:hidden; }
 .share-details div { display:grid; grid-template-columns:64px minmax(0,1fr); gap:12px; padding:11px 13px; background:var(--bg); }

@@ -232,12 +232,27 @@ test("device happ sharing is a bounded one-hour file session with explicit insta
     assert.match(activity, new RegExp(`"host\\.apps\\.${method}"`));
     assert.ok(host.includes(`"apps.${method}"`));
   }
-  for (const id of ["sharePanel", "shareInstallPanel", "shareQr", "shareCreateShortcut", "installSharedHapp"]) {
+  for (const id of ["sharePanel", "shareInstallPanel", "shareQr", "shareCreateShortcut", "installSharedHapp", "shareNetworkHint"]) {
     assert.match(html, new RegExp(`id="${id}"`));
   }
   assert.match(ui, /createShortcut:state\.shareCreateShortcut/);
-  assert.match(ui, /二维码已包含六位分享密码/);
+  // One hint under the QR code, and its wording carries the one-hour validity itself.
+  assert.equal(html.includes('id="shareExpiry"'), false);
+  assert.match(ui, /让朋友使用Hermit应用扫码即可安装同款应用。二维码1小时有效。/);
   assert.match(ui, /未检测到可用局域网/);
+  assert.equal((ui.match(/二维码已包含六位分享密码/g) || []).length, 0);
+  // The exported package is named after the happ and its version, never package.zip:
+  // the file on disk keeps that name, so the save dialog and the system share sheet
+  // (which shows the FileProvider file name) both offer it.
+  assert.match(manager, /private fun packageFileName\(name: String, version: String\?\): String/);
+  assert.match(manager, /if \(clean\.startsWith\("v", true\)\) clean else "v\$clean"/);
+  assert.match(manager, /val fileName = packageFileName\(app\.name, versionLabel\)/);
+  assert.match(manager, /if \(!staging\.renameTo\(archive\)\)/);
+  assert.match(manager, /"\/package" -> file\("application\/zip", archive, downloadName\)/);
+  assert.match(manager, /val value = Outbound\(id, appId, app\.name, fileName, archive/);
+  assert.equal((activity.match(/hermitApp\.happShare\.packageFile\(/g) || []).length, 2);
+  assert.match(activity, /"host\.apps\.shareSave"[\s\S]{0,200}createFileDocument\(fileName\)/);
+  assert.match(activity, /"host\.apps\.shareSend"[\s\S]{0,300}FileProvider\.getUriForFile/);
   assert.equal(schema.properties.author.maxLength, 80);
 });
 

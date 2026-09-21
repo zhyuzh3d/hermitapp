@@ -33,12 +33,12 @@
     showIcon($("#shareAppIcon"), value.iconUrl, value.name);
     $("#shareAppName").textContent = value.name;
     $("#shareAppMeta").textContent = version(value) + " · " + bytes(value.bytes) + " · " + (value.snapshot === "development" ? "开发快照" : "正式版本");
-    $("#shareExpiry").textContent = "本次分享 1 小时内有效，二维码已包含六位分享密码。";
     const ready = !!value.networkAvailable && !!value.qrUrl;
     $("#shareQrBox").classList.toggle("hidden", !ready);
     $("#shareQr").src = ready ? value.qrUrl : "";
+    // The QR box carries the expiry itself, so one line is all the sheet needs.
     $("#shareNetworkHint").textContent = ready
-      ? "让朋友使用 HermitApp 扫描二维码，即可查看信息并确认安装。"
+      ? "让朋友使用Hermit应用扫码即可安装同款应用。二维码1小时有效。"
       : "未检测到可用局域网，不会启动下载服务。你仍可保存或发送安装包。";
     open("#sharePanel");
   }

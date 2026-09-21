@@ -119,27 +119,39 @@ class HappShareManager(
         val id = UUID.randomUUID().toString()
         val directory = File(context.cacheDir, "shared/happ-share/$id").apply { mkdirs() }
         try {
-            val archive = File(directory, "package.zip")
+            val staging = File(directory, "package.zip")
             val snapshotKind: String
             val snapshotRevision: Long?
             if (app.launchChannel == LaunchChannel.DEV) {
                 val workspace = registry.getDevWorkspace(appId)
                     ?: throw HermitException(ErrorCodes.DEV_MODE_REQUIRED, "开发工作副本不存在")
                 val artifact = devWorkspaces.buildShare(appId, workspace.revision)
-                artifact.file.copyTo(archive, overwrite = true)
+                artifact.file.copyTo(staging, overwrite = true)
                 snapshotKind = "development"
                 snapshotRevision = artifact.revision
             } else {
-                zipDirectory(installer.releaseWebRoot(release), archive)
+                zipDirectory(installer.releaseWebRoot(release), staging)
                 snapshotKind = "release"
                 snapshotRevision = null
             }
-            if (archive.length() !in 1..MAX_ZIP_BYTES) {
+            if (staging.length() !in 1..MAX_ZIP_BYTES) {
                 throw HermitException(ErrorCodes.QUOTA, "分享 ZIP 为空或超过 64 MiB")
             }
-            val sha256 = hash(archive)
-            val manifest = readManifest(archive, directory)
-            val signed = containsEntry(archive, "hermit.sig")
+            val sha256 = hash(staging)
+            val manifest = readManifest(staging, directory)
+            val signed = containsEntry(staging, "hermit.sig")
+            val versionLabel = manifest?.versionName ?: release.versionName
+            // The file keeps the name the receiver will see, so the save dialog and the
+            // system share sheet both offer "<happ name>-<version>.zip" instead of a
+            // generic package.zip that says nothing about what is inside.
+            val fileName = packageFileName(app.name, versionLabel)
+            val archive = File(directory, fileName)
+            if (archive.path != staging.path) {
+                if (!staging.renameTo(archive)) {
+                    staging.copyTo(archive, overwrite = true)
+                    staging.delete()
+                }
+            }
             val icon = File(directory, "icon.png")
             renderIcon(app.effectiveIconUrl, app.name, icon)
             val expiresAt = System.currentTimeMillis() + SESSION_TTL_MS
@@ -163,7 +175,7 @@ class HappShareManager(
             var address: String? = null
             var qr: File? = null
             if (host != null) {
-                server = ShareServer(host, password, metadata, archive, icon)
+                server = ShareServer(host, password, metadata, archive, icon, fileName)
                 try {
                     server.start(SOCKET_TIMEOUT_MS, false)
                     address = "http://$host:${server.listeningPort}"
@@ -179,8 +191,6 @@ class HappShareManager(
                     throw HermitException(ErrorCodes.NETWORK, error.message ?: "无法启动临时分享服务", true)
                 }
             }
-            val safeVersion = (manifest?.versionName ?: release.versionName)?.takeIf { it.isNotBlank() }
-            val fileName = safeFileName(listOfNotNull(app.name, safeVersion).joinToString("-")) + ".zip"
             val value = Outbound(id, appId, app.name, fileName, archive, icon, qr, password, address,
                 sha256, archive.length(), expiresAt, metadata, directory, server)
             outbound = value
@@ -552,7 +562,24 @@ class HappShareManager(
 
     private fun hashBytes(digest: MessageDigest) = digest.digest().hex()
     private fun ByteArray.hex() = joinToString("") { "%02x".format(it) }
-    private fun safeFileName(value: String) = value.replace(Regex("[^a-zA-Z0-9._\\-\\u4e00-\\u9fff]+"), "-").trim('-').take(48).ifBlank { "happ" }
+
+    /**
+     * "<happ name>-v<version>.zip", matching the released package names so a saved
+     * share is not confused with a version downloaded from the happ's own site. The
+     * name part gives way first when the pair runs long, because dropping the version
+     * would make two shares indistinguishable.
+     */
+    private fun packageFileName(name: String, version: String?): String {
+        val base = safeFileName(name, 32)
+        val tag = version?.takeIf { it.isNotBlank() }?.let {
+            val clean = safeFileName(it, 16)
+            if (clean.startsWith("v", true)) clean else "v$clean"
+        }
+        return listOfNotNull(base, tag).joinToString("-") + ".zip"
+    }
+
+    private fun safeFileName(value: String, limit: Int): String =
+        value.replace(Regex("[^a-zA-Z0-9._\\-\\u4e00-\\u9fff]+"), "-").trim('-').take(limit).ifBlank { "happ" }
 
     private inner class ShareServer(
         host: String,
@@ -560,6 +587,7 @@ class HappShareManager(
         private val metadata: JSONObject,
         private val archive: File,
         private val icon: File,
+        private val downloadName: String,
     ) : NanoHTTPD(host, 0) {
         override fun serve(session: IHTTPSession): Response {
             if (session.method != Method.GET) return text(Response.Status.METHOD_NOT_ALLOWED, "Only GET is supported")
@@ -569,7 +597,7 @@ class HappShareManager(
             return when (session.uri) {
                 "/manifest" -> bytes(Response.Status.OK, "application/json; charset=utf-8", metadata.toString().toByteArray(Charsets.UTF_8))
                 "/icon" -> file("image/png", icon, "icon.png")
-                "/package" -> file("application/zip", archive, "happ.zip")
+                "/package" -> file("application/zip", archive, downloadName)
                 else -> text(Response.Status.NOT_FOUND, "Not found")
             }
         }
