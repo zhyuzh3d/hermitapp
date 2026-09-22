@@ -2,7 +2,7 @@
 
 HermitApp 是一个面向 Android 的 happ 容器：它直接运行 HTML、CSS、JavaScript 页面，并为页面提供安装、版本、数据、文件、权限和系统能力。项目目标不是把网页重新包装成独立 APK，而是在一个开放、轻量、可离线工作的宿主中管理多个页面应用。
 
-当前正式版本为 `1.10.13`（versionCode `47`），包名为 `io.github.zhyuzh3d.hermit`，最低支持 Android 10 / API 29，compileSdk 与 targetSdk 为 37。系统语音识别语言目录通过 `speech.languages()` 从当前 Android 识别服务读取；系统 TTS 的可选语言和音色也来自当前引擎，不再声明未经运行时确认的候选。HermitUI 固定使用竖屏；其他 happ 仍可在 `hermit.json.display` 中独立声明竖屏、横屏或跟随设备，以及键盘布局策略。HermitUI 会在应用启动和恢复前台时读取 Android 固定快捷方式状态，使 happ 卡片图钉与桌面图标状态保持同步。开发服务可读取当前 HermitUI 的白名单界面快照并在原 WebView 中刷新，再调用固定函数恢复界面；普通 happ 只有当前运行 DEV 副本且 `appId` 精确匹配时才能读取快照、刷新和执行刷新后脚本。APK 替换会恢复内置 UI。MCP 初始化指令、动态 Skill 和连接入口统一要求智能体采用最小相关测试、增量同步和原位刷新，并把 Android 10、较旧厂商 WebView 及 Hermit Bridge 已公开系统能力作为推荐兼容基线；这些属于开发建议，宿主不扫描或核定 happ 代码。智能体每轮写入前只读取一次前台运行目标；目标不是所需 DEV happ 时，`hermit_enter_dev_mode` 会创建或复用开发副本、切换运行通道并打开它，避免重复检查全局开发开关和重复调度状态接口。
+当前源码版本号为 `1.10.30`（versionCode `64`），最新正式发布为 `1.10.19`（versionCode `53`）；包名为 `io.github.zhyuzh3d.hermit`，最低支持 Android 10 / API 29，compileSdk 与 targetSdk 为 37。系统语音识别语言目录通过 `speech.languages()` 从当前 Android 识别服务读取；系统 TTS 的可选语言和音色也来自当前引擎，不再声明未经运行时确认的候选。HermitUI 固定使用竖屏；其他 happ 仍可在 `hermit.json.display` 中独立声明竖屏、横屏或跟随设备，以及键盘布局策略。HermitUI 会在应用启动和恢复前台时读取 Android 固定快捷方式状态，使 happ 卡片图钉与桌面图标状态保持同步。开发服务可读取当前 HermitUI 的白名单界面快照并在原 WebView 中刷新，再调用固定函数恢复界面；普通 happ 只有当前运行 DEV 副本且 `appId` 精确匹配时才能读取快照、刷新和执行刷新后脚本。APK 替换会恢复内置 UI。MCP 初始化指令、动态 Skill 和连接入口统一要求智能体采用最小相关测试、增量同步和原位刷新，并把 Android 10、较旧厂商 WebView 及 Hermit Bridge 已公开系统能力作为推荐兼容基线；这些属于开发建议，宿主不扫描或核定 happ 代码。智能体每轮写入前只读取一次前台运行目标；目标不是所需 DEV happ 时，`hermit_enter_dev_mode` 会创建或复用开发副本、切换运行通道并打开它，避免重复检查全局开发开关和重复调度状态接口。
 
 Hermit 项目由两个同级独立仓库组成：
 
@@ -10,6 +10,14 @@ Hermit 项目由两个同级独立仓库组成：
 - `hermitweb/`：官网与 HermitUI，只推送到 `git@github.com:zhyuzh3d/hermitweb.git`。
 
 HermitUI 是 HermitApp 默认加载、并拥有宿主管理权限的官方 happ。它的源码位于 HermitWeb 的 `public/shell/`；本仓库 `app/src/main/assets/store/` 只保存随 APK 分发的同步快照。
+
+## 下载与站点
+
+- 官网：<https://hermit.airen.life/>
+- Android：[下载页](https://hermit.airen.life/pages/download.html)提供最新正式版 APK；[使用指南](https://hermit.airen.life/pages/guide.html)覆盖添加应用、权限授予和智能体开发模式。
+- 应用广场：<https://hermit.airen.life/pages/happs.html> 是 happ 的唯一官方展示入口，每个 happ 都带二维码与官方安装清单地址。二维码内容是 `hermit://add?url=<安装清单地址>`，扫码直接唤起 Hermit 的添加流程。
+- 已上架 happ：[chataxi](https://chataxi.airen.life/)（真人感语音对话与多角色群聊）、[VibeDraw](https://vibedraw.airen.life/)（实时 AI 绘图）。两个站点都先引导安装 HermitApp，再添加对应 happ；happ 不能脱离宿主单独安装。
+- 源码仓库：宿主 [zhyuzh3d/hermitapp](https://github.com/zhyuzh3d/hermitapp)、官网与 HermitUI [zhyuzh3d/hermitweb](https://github.com/zhyuzh3d/hermitweb)、happ [zhyuzh3d/chataxi](https://github.com/zhyuzh3d/chataxi) 与 [zhyuzh3d/vibedraw](https://github.com/zhyuzh3d/vibedraw)。
 
 ## 核心模型
 
@@ -30,6 +38,19 @@ Hermit 把 happ 的来源与运行方式分开描述：
 页面通过 `window.hermit` 调用数据、文件、录音与播放、系统 TTS、语音识别、定位、运动/方向/环境传感器、拍照与闪光灯、Wi-Fi、BLE、红外、网络与电池状态、分享、剪贴板、震动及通知能力。Bridge 对 happ 暴露稳定的 Android 通用能力，不暴露也不要求页面适配手机品牌或语音服务商；系统服务发现、用户选择、失效回退和诊断由 HermitApp 处理。敏感能力需要逐 happ 授权；涉及 Android runtime permission 时，还必须同时获得系统授权。Wi-Fi 与蓝牙配置遵守 Android 的用户确认和系统设置流程，不能越过系统限制静默修改。通知支持即时通知、设备端单次/每日/每周/每月/每年计划，以及由 HermitApp 约每 15 分钟同步的服务器通知；宿主不会在后台执行 happ JavaScript。
 
 核心链路按国内无 GMS 设备设计。二维码使用随 APK 打包的 CameraX 与 ZXing 离线识别，图标资源全部内置；本地运行、数据、备份和局域网开发不依赖 Google Play 服务、海外 CDN 或运行时下载。实际 Bridge 通道根据系统 WebView 能力选择安全 WebMessage 模式或兼容模式。
+
+## HermitUI
+
+HermitUI 是宿主自带的界面，也是它自己的 happ：所有安装、运行、权限、数据、备份和开发入口都在这里，底部导航固定为「收藏、开发、设置、支持」。
+
+- **收藏（应用库）**：应用卡片显示图标、名称与版本，支持收藏筛选、搜索和桌面快捷方式。添加应用有三个入口：「从压缩包」「从网址」「扫码添加」；解析出安装包时进入确认态，显示包内名称、版本、体积与图标，确认后才安装。原生数据按应用隔离，同源页面数据可以共享。
+- **开发**：智能体开发模式的开关与状态，Happ 开发插件安装地址（局域网地址、刷新与复制）、备用 USB 地址（`adb forward tcp:8766 tcp:8766`）和开发服务密码编辑。HermitUI 自身是受保护目标，不能通过该接口修改。
+- **设置**：四个分区。界面负责外观（跟随系统 / 浅色 / 深色）、界面语言（中文 / English，默认跟随系统）以及当前 HermitUI 版本与「恢复使用本地界面」「更新本地版本」；朗读（TTS）读取设备朗读引擎实际提供的引擎、声音与语言，可试听已保存设置；语音（ASR）选择连续识别服务、一次性识别界面和识别语言，并可优先离线识别；系统分区提供备份与恢复，备份由用户选择保存位置，不加密，也不包含网站登录状态和系统权限。
+- **支持**：项目与问题反馈入口。
+- **内置图标**：随包携带本地 Font Awesome Free，可按实心、常规、品牌浏览，页面直接引用而不访问外部 CDN。
+- **设备间分享**：分享 happ、保存安装包、分享安装包与停止分享，不经过第三方服务。
+
+界面本身支持中英文双语和浅色/深色主题，并可在「实时在线界面」与「本地界面」之间切换：在线模式直接加载官网发布的 HermitUI，本地模式使用 APK 内置快照，APK 替换会恢复内置 UI。
 
 ## 编写 happ
 
