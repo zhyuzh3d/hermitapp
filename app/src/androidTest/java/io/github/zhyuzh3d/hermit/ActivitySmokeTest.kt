@@ -6,9 +6,11 @@ import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.filters.LargeTest
 import androidx.core.content.ContextCompat
+import io.github.zhyuzh3d.hermit.launcher.ShortcutHost
 import androidx.core.content.FileProvider
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -22,6 +24,7 @@ import java.io.ByteArrayOutputStream
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import java.io.File
+import java.security.MessageDigest
 import java.util.UUID
 
 @RunWith(AndroidJUnit4::class)
@@ -137,6 +140,30 @@ class ActivitySmokeTest {
                 app.registry.finishDelete(id)
             }
             source.delete()
+        }
+    }
+
+    /**
+     * Installing is the moment to want an icon on the home screen, so every user-facing
+     * install path asks the launcher for one. The launcher still owns the tap, so a
+     * request the user has not confirmed must not leave a shortcut behind — and the
+     * pinned set is read first, which on this device means a real answer rather than
+     * the "unknown" fallback that would make the request unconditional.
+     */
+    @Test fun installingAHappAsksForItsDesktopIconOnlyWhenMissing() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val app = context.applicationContext as HermitApplication
+        val shortcuts = ShortcutHost(context)
+        val installed = app.installer.installZip(ByteArrayInputStream(appZip("Pin fixture", 1)), "Pin fixture")
+        try {
+            val instance = requireNotNull(app.registry.getInstance(installed.appId))
+            assertEquals(ShortcutHost.PinState.NOT_PINNED, shortcuts.pinStates(listOf(instance))[installed.appId])
+            assertEquals(ShortcutHost.PinOutcome.REQUESTED, shortcuts.requestPinIfAbsent(instance))
+            assertEquals(ShortcutHost.PinState.NOT_PINNED, shortcuts.pinStates(listOf(instance))[installed.appId])
+        } finally {
+            app.registry.deleteInstance(installed.appId)
+            app.installer.deleteAppFiles(installed.appId)
+            app.registry.finishDelete(installed.appId)
         }
     }
 
@@ -380,6 +407,165 @@ class ActivitySmokeTest {
         }
     }
 
+    @Test fun bringingAnUnchangedTargetToTheFrontKeepsTheRunningPage() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val app = context.applicationContext as HermitApplication
+        val first = app.installer.installZip(ByteArrayInputStream(appZip("Front fixture", 1)), "Front fixture")
+        val second = app.installer.installZip(ByteArrayInputStream(appZip("Other fixture", 1)), "Other fixture")
+        try {
+            val target = Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_APP_ID, first.appId)
+            ActivityScenario.launch<MainActivity>(target).use { scenario ->
+                assertTrue(waitUntilReady(scenario))
+                assertEquals("marked", evaluate(scenario, "window.__hermitFront='marked'"))
+                // A launcher tap and "intoExisting" both re-deliver the entry intent of a
+                // task that is already open. That is not a navigation request.
+                scenario.onActivity { activity ->
+                    activity.deliverIntentForTest(
+                        Intent(activity, MainActivity::class.java).putExtra(MainActivity.EXTRA_APP_ID, first.appId)
+                    )
+                }
+                assertEquals("marked", evaluate(scenario, "window.__hermitFront"))
+                // Returning from the background resumes the same page instead of reloading it.
+                scenario.moveToState(androidx.lifecycle.Lifecycle.State.STARTED)
+                scenario.moveToState(androidx.lifecycle.Lifecycle.State.RESUMED)
+                assertEquals("marked", evaluate(scenario, "window.__hermitFront"))
+                // A genuinely different target still takes over the runtime.
+                scenario.onActivity { activity ->
+                    activity.deliverIntentForTest(
+                        Intent(activity, MainActivity::class.java).putExtra(MainActivity.EXTRA_APP_ID, second.appId)
+                    )
+                }
+                assertTrue(waitUntilReady(scenario))
+                assertNull(evaluate(scenario, "window.__hermitFront"))
+                assertEquals("Other fixture", evaluate(scenario, "document.title"))
+            }
+        } finally {
+            for (id in listOf(first.appId, second.appId)) {
+                app.registry.deleteInstance(id)
+                app.installer.deleteAppFiles(id)
+                app.registry.finishDelete(id)
+            }
+        }
+    }
+
+    @Test fun relaunchingHermitKeepsTheLibraryPage() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val app = context.applicationContext as HermitApplication
+        val installed = app.installer.installZip(ByteArrayInputStream(appZip("Store return fixture", 1)), "Store return fixture")
+        try {
+            ActivityScenario.launch<MainActivity>(Intent(context, MainActivity::class.java)).use { scenario ->
+                assertTrue(waitUntilReady(scenario))
+                assertEquals("marked", evaluate(scenario, "window.__hermitFront='marked'"))
+                scenario.onActivity { activity ->
+                    activity.deliverIntentForTest(Intent(activity, MainActivity::class.java))
+                }
+                assertEquals("marked", evaluate(scenario, "window.__hermitFront"))
+                // Opening a happ from the library still replaces the library runtime.
+                scenario.onActivity { activity ->
+                    activity.deliverIntentForTest(
+                        Intent(activity, MainActivity::class.java).putExtra(MainActivity.EXTRA_APP_ID, installed.appId)
+                    )
+                }
+                assertTrue(waitUntilReady(scenario))
+                assertNull(evaluate(scenario, "window.__hermitFront"))
+            }
+        } finally {
+            app.registry.deleteInstance(installed.appId)
+            app.installer.deleteAppFiles(installed.appId)
+            app.registry.finishDelete(installed.appId)
+        }
+    }
+
+    @Test fun aTappedNotificationReachesThePageThatIsAlreadyOpen() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val app = context.applicationContext as HermitApplication
+        val installed = app.installer.installZip(ByteArrayInputStream(appZip("Notice fixture", 1)), "Notice fixture")
+        try {
+            ActivityScenario.launch<MainActivity>(
+                Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_APP_ID, installed.appId)
+            ).use { scenario ->
+                assertTrue(waitUntilReady(scenario))
+                assertEquals(
+                    "listening",
+                    evaluate(scenario, "window.__hermitOpened='none'; hermit.on('notifications.opened', d=>window.__hermitOpened=d.id); 'listening'"),
+                )
+                assertEquals("marked", evaluate(scenario, "window.__hermitFront='marked'"))
+                scenario.onActivity { activity ->
+                    activity.deliverIntentForTest(
+                        Intent(activity, MainActivity::class.java)
+                            .putExtra(MainActivity.EXTRA_APP_ID, installed.appId)
+                            .putExtra(MainActivity.EXTRA_NOTIFICATION_ID, "notice-1")
+                    )
+                }
+                repeat(20) {
+                    if (evaluate(scenario, "window.__hermitOpened") != "notice-1") android.os.SystemClock.sleep(150)
+                }
+                assertEquals("notice-1", evaluate(scenario, "window.__hermitOpened"))
+                // The payload arrives without rebuilding the page the user is looking at.
+                assertEquals("marked", evaluate(scenario, "window.__hermitFront"))
+            }
+        } finally {
+            app.registry.deleteInstance(installed.appId)
+            app.installer.deleteAppFiles(installed.appId)
+            app.registry.finishDelete(installed.appId)
+        }
+    }
+
+    @Test fun aPageTransfersMoreBytesThanOneBridgeMessageAllows() = runBlocking {
+        val context = ApplicationProvider.getApplicationContext<android.content.Context>()
+        val app = context.applicationContext as HermitApplication
+        val installed = app.installer.installZip(ByteArrayInputStream(appZip("Channel fixture", 1)), "Channel fixture")
+        try {
+            ActivityScenario.launch<MainActivity>(Intent(context, MainActivity::class.java).putExtra(MainActivity.EXTRA_APP_ID, installed.appId)).use { scenario ->
+                assertTrue(waitUntilReady(scenario))
+                // 400 KiB is past the 256 KiB single-message cap: before the chunked
+                // channel existed this request was dropped by the transport without a
+                // reply, so the page could only wait for its own timeout.
+                evaluate(scenario, """
+                    window.__hermitChannel=null; (async()=>{
+                      const total=400*1024, bytes=new Uint8Array(total);
+                      for(let i=0;i<total;i++) bytes[i]=(i*31+7)&255;
+                      const write=await hermit.files.beginWrite({name:'payload.bin',mime:'application/octet-stream'});
+                      let chunks=0;
+                      for(let at=0;at<total;at+=write.maxChunkBytes){
+                        const slice=bytes.subarray(at,at+write.maxChunkBytes);
+                        let binary='';
+                        for(const byte of slice) binary+=String.fromCharCode(byte);
+                        chunks++;
+                        await hermit.files.appendBytes({writeId:write.writeId,chunkBase64:btoa(binary)});
+                      }
+                      const file=await hermit.files.finishWrite({writeId:write.writeId});
+                      return {chunks:chunks,size:file.size,sha256:file.sha256,maxChunk:write.maxChunkBytes};
+                    })().then(x=>window.__hermitChannel=JSON.stringify(x)).catch(e=>window.__hermitChannel='ERR:'+(e.code||e.message)); 'started'
+                """.trimIndent())
+                val written = evaluateUntil(scenario, "window.__hermitChannel", 30_000)
+                assertTrue("Chunked write failed: $written", written != null && !written.startsWith("ERR:"))
+                val stored = JSONObject(written!!)
+                assertEquals(400 * 1024, stored.getInt("size"))
+                assertEquals(7, stored.getInt("chunks"))
+                assertEquals(65_536, stored.getInt("maxChunk"))
+                val expected = ByteArray(400 * 1024).also { bytes -> for (index in bytes.indices) bytes[index] = ((index * 31 + 7) and 0xff).toByte() }
+                assertEquals(
+                    MessageDigest.getInstance("SHA-256").digest(expected).joinToString("") { "%02x".format(it) },
+                    stored.getString("sha256"),
+                )
+                // The cap still exists, but it is now an answer instead of a silence. The
+                // text must be the transport's own refusal, not the 256 KiB rule inside
+                // writeText, which a raised transport cap would hide behind.
+                evaluate(scenario, "window.__hermitChannel=null; hermit.files.writeText({name:'too-big.txt',text:'x'.repeat(300*1024)}).then(()=>window.__hermitChannel='accepted').catch(e=>window.__hermitChannel='ERR:'+e.code+'|'+String(e.message).slice(0,40)); 'started'")
+                val rejected = evaluateUntil(scenario, "window.__hermitChannel", 20_000)
+                assertTrue("Oversized message was not refused by the transport: $rejected", rejected?.startsWith("ERR:E_QUOTA|消息有") == true)
+                // Boundary: a message under the cap is still delivered unchanged.
+                val fits = evaluateAsync(scenario, "hermit.files.writeText({name:'fits.txt',text:'y'.repeat(200*1024)}).then(f=>({size:f.size})).catch(e=>({error:e.code}))")
+                assertTrue("Under-cap write failed: $fits", fits?.contains("\"size\":204800") == true)
+            }
+        } finally {
+            app.registry.deleteInstance(installed.appId)
+            app.installer.deleteAppFiles(installed.appId)
+            app.registry.finishDelete(installed.appId)
+        }
+    }
+
     private fun evaluate(scenario: ActivityScenario<MainActivity>, script: String): String? {
         val latch = CountDownLatch(1)
         var decoded: String? = null
@@ -397,6 +583,17 @@ class ActivitySmokeTest {
             val value = evaluate(scenario, "window.__hermitTestResult")
             if (value != null) return value
             android.os.SystemClock.sleep(150)
+        }
+        return null
+    }
+
+    /** Polls a JS marker for longer than [evaluateAsync]'s fixed window; a chunked upload needs it. */
+    private fun evaluateUntil(scenario: ActivityScenario<MainActivity>, script: String, budgetMs: Long): String? {
+        val deadline = System.currentTimeMillis() + budgetMs
+        while (System.currentTimeMillis() < deadline) {
+            val value = evaluate(scenario, script)
+            if (value != null) return value
+            android.os.SystemClock.sleep(250)
         }
         return null
     }

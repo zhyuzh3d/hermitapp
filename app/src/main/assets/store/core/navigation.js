@@ -35,8 +35,11 @@
     cachedViewState.currentView = view;
     writeViewState();
   }
+  // A cold start is a real open, not a resume: Hermit was closed and started again, so the
+  // shell begins at home instead of replaying the tab of the previous session. The cached
+  // page is still replayed when something asks for it explicitly, through restoreCachedViewState.
   function initialView() {
-    return VIEWS.includes(cachedViewState.currentView) ? cachedViewState.currentView : "favorites";
+    return "favorites";
   }
   function restoreCachedViewState(value) {
     if (!value || typeof value !== "object") return;

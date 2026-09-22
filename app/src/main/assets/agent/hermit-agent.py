@@ -2,6 +2,7 @@
 """Hermit LAN MCP helper. Python 3.10+, standard library only; never prints passwords."""
 import argparse
 import getpass
+import glob
 import hashlib
 import http.client
 import ipaddress
@@ -9,6 +10,7 @@ import io
 import json
 import os
 from pathlib import Path
+import platform
 import shlex
 import shutil
 import stat
@@ -27,6 +29,9 @@ MAX_INCREMENTAL_TEXT_BYTES = 2 * 1024 * 1024
 MAX_INCREMENTAL_BINARY_BYTES = 8 * 1024 * 1024
 MAX_INCREMENTAL_BINARY_FILES = 8
 IGNORE = {".git", ".svn", "node_modules", "__pycache__", ".DS_Store", ".idea", ".vscode", ".env", ".hermit"}
+PLUGIN_ID = "hermit-dev-plugin"
+LEGACY_PLUGIN_IDS = ("hermit-device",)
+PLUGIN_IDS = (PLUGIN_ID,) + LEGACY_PLUGIN_IDS
 
 
 def address(value):
@@ -186,6 +191,116 @@ def default_config_root():
     if os.name == "nt":
         return Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData/Local")) / "HermitAgent"
     return Path.home() / ".config/hermit-agent"
+
+
+HOST_CAPABILITIES = (
+    ("python3", "Run the Hermit device helper itself"),
+    ("git", "Inspect repository state on the host"),
+    ("node", "Run happ checks and release packaging on the host"),
+    ("adb", "Install or update the Android host app on a device"),
+    ("java", "Build the Android host app"),
+    ("mutagen", "Publish HermitUI or a static site to a server"),
+)
+
+
+def _first_meaningful_line(text):
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if line:
+            return line[:120]
+    return None
+
+
+def host_bin_dirs():
+    """Conventional install locations to search after PATH.
+
+    These are platform conventions and environment variables, never a specific machine's layout.
+    A developer may legitimately have a tool installed without it being on a non-interactive PATH.
+    """
+    home = Path.home()
+    dirs = [Path("/opt/homebrew/bin"), Path("/usr/local/bin"), home / ".local/bin", home / "bin"]
+    for variable in ("ANDROID_HOME", "ANDROID_SDK_ROOT"):
+        value = os.environ.get(variable)
+        if value:
+            dirs.extend([Path(value) / "platform-tools", Path(value) / "cmdline-tools/latest/bin"])
+    dirs.extend([
+        home / "Library/Android/sdk/platform-tools",
+        home / "Android/Sdk/platform-tools",
+        home / "AppData/Local/Android/Sdk/platform-tools",
+    ])
+    for pattern in ("/opt/homebrew/opt/openjdk*/bin", "/usr/local/opt/openjdk*/bin", "/usr/lib/jvm/*/bin",
+                    "/Library/Java/JavaVirtualMachines/*/Contents/Home/bin"):
+        dirs.extend(sorted(Path(match) for match in glob.glob(pattern)))
+    return [directory for directory in dirs if directory.is_dir()]
+
+
+def host_command_candidates(name):
+    """Yield (path, source) for a command name, PATH first, then conventional locations."""
+    suffixes = ("", ".exe", ".cmd", ".bat") if os.name == "nt" else ("",)
+    seen = []
+    found = shutil.which(name)
+    if found:
+        seen.append(Path(found))
+        yield Path(found), "PATH"
+    for directory in host_bin_dirs():
+        for suffix in suffixes:
+            candidate = directory / (name + suffix)
+            if candidate in seen:
+                continue
+            if candidate.is_file() and (os.name == "nt" or os.access(candidate, os.X_OK)):
+                seen.append(candidate)
+                yield candidate, str(directory)
+
+
+def _host_command_version(path):
+    try:
+        done = subprocess.run([str(path), "--version"], capture_output=True, text=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        return None, False
+    if done.returncode != 0:
+        return None, False
+    return (_first_meaningful_line(done.stdout) or _first_meaningful_line(done.stderr)), True
+
+
+def host_environment(config_root=None):
+    """Probe a fixed, small capability list for the host machine and cache the ledger locally.
+
+    This is deliberately bounded: it never installs anything, never walks the filesystem and never
+    contacts the device. It exists so an agent can read what the host already has instead of
+    searching for it, and so a missing prerequisite becomes a message for the developer.
+    """
+    root = Path(config_root or os.environ.get("HERMIT_CONFIG_HOME") or default_config_root())
+    capabilities = []
+    for name, purpose in HOST_CAPABILITIES:
+        entry = {"name": name, "purpose": purpose, "present": False}
+        unusable, skipped = False, []
+        for path, source in host_command_candidates(name):
+            version, usable = _host_command_version(path)
+            if usable:
+                entry.update(present=True, path=str(path), resolvedVia=source, version=version)
+                break
+            unusable = True
+            skipped.append(str(path))
+        if not entry["present"] and unusable:
+            entry.update(present=True, path=skipped[0], version=None,
+                         note="found, but --version failed; confirm with the developer before relying on it")
+        if skipped:
+            entry["skipped"] = skipped
+        capabilities.append(entry)
+    ledger = {
+        "schema": 1,
+        "generatedAt": int(time.time() * 1000),
+        "platform": platform.platform(),
+        "interpreter": sys.executable,
+        "pythonVersion": platform.python_version(),
+        "capabilities": capabilities,
+        "note": "Search order: PATH, then conventional developer install locations, plus ANDROID_HOME/ANDROID_SDK_ROOT. present=false means not found in those places, not proof the developer lacks it: report the gap and ask. Nothing is installed automatically.",
+    }
+    root.mkdir(mode=0o700, parents=True, exist_ok=True)
+    ledger_file = root / "host-environment.json"
+    ledger_file.write_text(json.dumps(ledger, indent=2, ensure_ascii=False) + "\n")
+    ledger["ledgerFile"] = str(ledger_file)
+    return ledger
 
 
 def source_files(directory, roots=None):
@@ -373,7 +488,7 @@ def download_dev_tree(device, app_id, output=None):
     if hashlib.sha256(data).hexdigest().lower() != result["sha256"].lower():
         raise RuntimeError("Downloaded device development tree digest mismatch")
     if output is None:
-        output = Path.cwd() / ("hermit-device-" + app_id + ".zip")
+        output = Path.cwd() / (PLUGIN_ID + "-" + app_id + ".zip")
     output = Path(output).resolve()
     output.write_bytes(data)
     return dict(result, savedTo=str(output))
@@ -708,8 +823,8 @@ def deploy(device, app_id, directory, expected_release=None):
 
 def ensure_codex_marketplace(target):
     """Expose the standard ~/plugins target through Codex's personal marketplace."""
-    expected = (Path.home() / "plugins" / "hermit-device").absolute()
-    if target != expected:
+    defaults = {(Path.home() / "plugins" / name).absolute() for name in PLUGIN_IDS}
+    if target not in defaults:
         return None
     marketplace = (Path.home() / ".agents" / "plugins" / "marketplace.json").absolute()
     if marketplace.is_symlink():
@@ -727,20 +842,16 @@ def ensure_codex_marketplace(target):
     else:
         payload = {"name": "personal", "interface": {"displayName": "Personal"}, "plugins": []}
         plugins = payload["plugins"]
+    name = target.name
     entry = {
-        "name": "hermit-device",
-        "source": {"source": "local", "path": "./plugins/hermit-device"},
+        "name": name,
+        "source": {"source": "local", "path": "./plugins/" + name},
         "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
         "category": "Developer Tools",
     }
-    replaced = False
-    for index, item in enumerate(plugins):
-        if isinstance(item, dict) and item.get("name") == "hermit-device":
-            plugins[index] = entry
-            replaced = True
-            break
-    if not replaced:
-        plugins.append(entry)
+    plugins[:] = [item for item in plugins
+                  if not (isinstance(item, dict) and item.get("name") in PLUGIN_IDS)]
+    plugins.append(entry)
     marketplace.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     temporary = marketplace.with_name("." + marketplace.name + ".tmp-" + uuid.uuid4().hex)
     try:
@@ -764,15 +875,15 @@ def install_plugin(device, directory=None, force=False, package_url=None, packag
             raise RuntimeError("Explicit package URL, SHA-256 and plugin version must be provided together")
         bootstrap = {
             "serverVersion": plugin_version,
-            "plugin": {"id": "hermit-device", "version": plugin_version},
+            "plugin": {"id": PLUGIN_ID, "version": plugin_version},
             "install": {"action": "install_or_update", "packageUrl": package_url, "packageSha256": package_sha256},
         }
     else:
         bootstrap = device.bootstrap()
     plugin = bootstrap.get("plugin") or {}
     install = bootstrap.get("install") or {}
-    if plugin.get("id") != "hermit-device" or install.get("action") not in {"install_or_update", "reinstall"}:
-        raise RuntimeError("Hermit Bootstrap 未提供可安装的 hermit-device 插件")
+    if plugin.get("id") not in PLUGIN_IDS or install.get("action") not in {"install_or_update", "reinstall"}:
+        raise RuntimeError("Hermit Bootstrap 未提供可安装的 " + PLUGIN_ID + " 插件")
     package_url = install.get("packageUrl")
     if not isinstance(package_url, str) or not package_url:
         raise RuntimeError("Hermit Bootstrap 的插件包地址无效")
@@ -781,7 +892,7 @@ def install_plugin(device, directory=None, force=False, package_url=None, packag
     actual = hashlib.sha256(data).hexdigest()
     if not isinstance(expected, str) or len(expected) != 64 or expected != actual:
         raise RuntimeError("Hermit 插件包摘要校验失败，旧插件未改变")
-    default_target = (Path.home() / "plugins" / "hermit-device").absolute()
+    default_target = (Path.home() / "plugins" / PLUGIN_ID).absolute()
     target = Path(directory or default_target).expanduser().absolute()
     if target.exists() and target.is_symlink():
         raise RuntimeError("Refusing a symlinked plugin destination")
@@ -798,7 +909,7 @@ def install_plugin(device, directory=None, force=False, package_url=None, packag
         if not manifest_file.is_file():
             raise RuntimeError("Hermit 插件包缺少 manifest.json")
         manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
-        if manifest.get("id") != "hermit-device" or manifest.get("kind") != "hermit-agent-plugin":
+        if manifest.get("id") not in PLUGIN_IDS or manifest.get("kind") != "hermit-agent-plugin":
             raise RuntimeError("Hermit 插件 manifest 不匹配")
         if manifest.get("packageFormat") != "codex-plugin-archive-v1":
             raise RuntimeError("Hermit 插件包格式不是当前 Codex 插件格式")
@@ -807,7 +918,7 @@ def install_plugin(device, directory=None, force=False, package_url=None, packag
         if not codex_manifest_file.is_file() or not mcp_config_file.is_file():
             raise RuntimeError("Hermit 插件包缺少 Codex plugin.json 或 MCP 配置")
         codex_manifest = json.loads(codex_manifest_file.read_text(encoding="utf-8"))
-        if (codex_manifest.get("name") != "hermit-device" or
+        if (codex_manifest.get("name") not in PLUGIN_IDS or
                 codex_manifest.get("version") != manifest.get("codexVersion") or
                 codex_manifest.get("mcpServers") != "./.mcp.json"):
             raise RuntimeError("Hermit Codex 插件清单不匹配")
@@ -884,6 +995,7 @@ def main():
     connect.add_argument("--show-guide", action="store_true", help="Print the full current guide after connecting")
     commands.add_parser("guide")
     commands.add_parser("tools")
+    commands.add_parser("doctor", help="Cache what this host machine actually has; never installs anything")
     call = commands.add_parser("call"); call.add_argument("tool"); call.add_argument("arguments", nargs="?", default="{}")
     for name in ("deploy-dir", "sync-dir", "watch"):
         cmd = commands.add_parser(name); cmd.add_argument("app_id"); cmd.add_argument("directory")
@@ -909,7 +1021,7 @@ def main():
     build = commands.add_parser("build"); build.add_argument("app_id"); build.add_argument("version_code", type=int); build.add_argument("version_name"); build.add_argument("output")
     publish = commands.add_parser("publish"); publish.add_argument("app_id"); publish.add_argument("version_code", type=int); publish.add_argument("version_name")
     plugin = commands.add_parser("install-plugin", help="Install or update the Hermit plugin from this development service")
-    plugin.add_argument("--directory", default=str(Path.home() / "plugins/hermit-device"))
+    plugin.add_argument("--directory", default=str(Path.home() / "plugins" / PLUGIN_ID))
     plugin.add_argument("--force", action="store_true", help="Reinstall even when the local plugin version is unchanged")
     plugin.add_argument("--package-url", help="Same-origin package URL already obtained from Bootstrap")
     plugin.add_argument("--package-sha256", help="Expected package digest already obtained from Bootstrap")
@@ -925,14 +1037,16 @@ def main():
                   "credentialFile": str(device.credential_file)}
         if args.show_guide:
             result["guidance"] = device.tool("hermit_get_guide")
+    elif args.command == "doctor":
+        result = host_environment()
     elif args.command == "install-plugin":
         result = install_plugin(device, args.directory, args.force, args.package_url, args.package_sha256, args.plugin_version)
     elif args.command == "client-config":
         script = str(Path(__file__).resolve())
         stdio_args = [script, "--address", device.base, "stdio"]
-        codex_args = ["codex", "mcp", "add", "hermit-device", "--", sys.executable] + stdio_args
+        codex_args = ["codex", "mcp", "add", PLUGIN_ID, "--", sys.executable] + stdio_args
         result = {"platforms": ["Windows", "macOS", "Linux"],
-                  "mcpServers": {"hermit-device": {"command": sys.executable, "args": stdio_args}},
+                  "mcpServers": {PLUGIN_ID: {"command": sys.executable, "args": stdio_args}},
                   "commands": {"posix": shlex.join(codex_args), "windows": subprocess.list2cmdline(codex_args)},
                   "remoteHTTP": {"url": device.base + "/mcp", "header": "Authorization: Bearer <current password>", "note": "Use your client's secret storage; run connect first for stdio. This command only prints templates, never edits client configuration."}}
     elif args.command == "stdio":

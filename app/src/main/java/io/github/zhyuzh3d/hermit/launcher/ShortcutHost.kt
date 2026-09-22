@@ -67,6 +67,28 @@ class ShortcutHost(private val context: Context) {
         return manager.requestPinShortcut(shortcut, null)
     }
 
+    enum class PinOutcome(val value: String) {
+        REQUESTED("requested"),
+        ALREADY_PINNED("alreadyPinned"),
+        UNSUPPORTED("unsupported"),
+    }
+
+    /**
+     * Installing something means wanting to open it, so a freshly installed happ
+     * asks for its desktop icon straight away. The pinned set is read first, so an
+     * app that already has its icon is left alone and one the user removed on
+     * purpose is not put back behind their back. The launcher still owns the final
+     * tap: requestPinShortcut is a request, not an insertion.
+     */
+    fun requestPinIfAbsent(instance: WebAppInstance): PinOutcome {
+        when (pinStates(listOf(instance))[instance.appId] ?: PinState.UNKNOWN) {
+            PinState.PINNED -> return PinOutcome.ALREADY_PINNED
+            PinState.UNSUPPORTED -> return PinOutcome.UNSUPPORTED
+            PinState.NOT_PINNED, PinState.UNKNOWN -> Unit
+        }
+        return if (requestPin(instance)) PinOutcome.REQUESTED else PinOutcome.UNSUPPORTED
+    }
+
     fun update(instance: WebAppInstance) {
         val ids = runCatching {
             manager.pinnedShortcuts.asSequence()

@@ -433,7 +433,53 @@ class MainActivity : ComponentActivity(), BridgeHost {
             instance.happId?.let { intent.putExtra(EXTRA_HAPP_ID, it) }
             instance.publisherKeyId?.let { intent.putExtra(EXTRA_PUBLISHER_KEY_ID, it) }
         }
-        showTarget(instance?.appId ?: requestedAppId, fromLibrary, intent.getStringExtra(EXTRA_ROUTE))
+        val route = intent.getStringExtra(EXTRA_ROUTE)
+        // Android re-delivers the entry intent every time an existing task comes back
+        // to the foreground, and "intoExisting" reuses a running happ task. Neither is
+        // a request for a different page, so the runtime that is already showing stays.
+        if (runtimeServesTarget(instance?.appId ?: requestedAppId, instance)) {
+            HappTaskHost.applyDescription(this, instance)
+            openVisibleRoute(instance, route)
+            deliverPendingOpenedNotification()
+            return
+        }
+        showTarget(instance?.appId ?: requestedAppId, fromLibrary, route)
+    }
+
+    /**
+     * Hands a notification the user opened to the page that is already on screen: it is past
+     * `app.ready`, so the payload must not wait for a reload. A page that is still loading
+     * keeps the payload pending and receives it from `app.ready` as usual.
+     */
+    private fun deliverPendingOpenedNotification() {
+        if (pendingOpenedNotification == null) return
+        val view = webView ?: return
+        view.evaluateJavascript("String(!!(window.hermit&&window.hermit.isReady))") { ready ->
+            if (webView !== view || ready != "\"true\"") return@evaluateJavascript
+            val opened = pendingOpenedNotification ?: return@evaluateJavascript
+            pendingOpenedNotification = null
+            bridge?.emit("notifications.opened", opened)
+        }
+    }
+
+    /**
+     * True when the page on screen already belongs to [targetAppId] in exactly the shape
+     * the registry describes now. Coming back to the foreground must not rebuild it.
+     */
+    private fun runtimeServesTarget(targetAppId: String?, target: WebAppInstance?): Boolean {
+        val running = session ?: return false
+        if (webView == null) return false
+        if (targetAppId == null) return running.role == RuntimeRole.STORE
+        if (target == null || running.role != RuntimeRole.WEB_APP) return false
+        val current = running.instance ?: return false
+        return current.appId == target.appId && !runtimeDefinitionChanged(current, target)
+    }
+
+    /** A deliberate route for the happ that is already running navigates in place. */
+    private fun openVisibleRoute(instance: WebAppInstance?, route: String?) {
+        if (session?.role != RuntimeRole.WEB_APP || instance == null || route.isNullOrBlank()) return
+        val target = runCatching { resolveAppRoute(instance, route) }.getOrNull() ?: return
+        if (webView?.url != target) webView?.loadUrl(target)
     }
 
     @Suppress("DEPRECATION")
@@ -441,11 +487,26 @@ class MainActivity : ComponentActivity(), BridgeHost {
         intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
     } else intent.getParcelableExtra(Intent.EXTRA_STREAM)
 
+    /**
+     * Installing something is the moment to want it on the home screen, so the icon
+     * is asked for here — after a user-facing install only. The release transaction
+     * does not do this itself: it also runs for updates, for the agent workspace and
+     * inside tests, where a launcher confirmation would be an intrusion. The pinned
+     * set still decides, so an app that already has its icon, or one the user removed
+     * on purpose, is left exactly as it is.
+     */
+    private fun requestShortcut(appId: String, wanted: Boolean = true): ShortcutHost.PinOutcome? {
+        if (!wanted) return null
+        val instance = hermitApp.registry.getInstance(appId) ?: return null
+        return runCatching { shortcuts.requestPinIfAbsent(instance) }.getOrNull()
+    }
+
     private fun importSharedZip(uri: Uri) {
         showTarget(null, false)
         lifecycleScope.launch {
             try {
                 val result = hermitApp.installer.installUri(uri, null, ::chooseIdentityInstall)
+                requestShortcut(result.appId)
                 Toast.makeText(this@MainActivity, "ZIP 副本已导入", Toast.LENGTH_LONG).show()
                 hermitApp.registry.getInstance(result.appId)?.let(::launchHappTask)
             } catch (error: Throwable) {
@@ -760,21 +821,24 @@ class MainActivity : ComponentActivity(), BridgeHost {
         if (webView !== view || pending.role != current.role || pending.appId != current.instance?.appId) return
         pendingAgentReload = null
         val state = pending.restoreStateJson ?: "null"
-        val postScript = pending.postReloadScript?.let(JSONObject::quote)
         val script = """
             (async () => {
               const state = $state;
-              try {
-                if (state !== null) {
+              if (state !== null) {
+                try {
                   const hook = window.hermitDevState;
                   if (hook && typeof hook.restore === "function") await hook.restore(state);
                   else window.dispatchEvent(new CustomEvent("hermitdevrestore", { detail:state }));
-                }
-                ${if (postScript == null) "" else "(0, eval)($postScript);"}
-              } catch (error) { console.error("Hermit post-refresh action failed", error); }
+                } catch (error) { console.error("Hermit state restore failed", error); }
+              }
             })()
         """.trimIndent()
         view.evaluateJavascript(script, null)
+        // The document CSP is "default-src 'self' data: blob:" and forbids eval, so quoting
+        // the script and evaluating it was rejected by the policy before it could ever run.
+        // Injecting the source itself is not subject to that policy. It is a separate call
+        // so a failing state restore can no longer swallow the script as well.
+        pending.postReloadScript?.let { view.evaluateJavascript(it, null) }
     }
 
     private fun resolveAppRoute(app: WebAppInstance, route: String?): String {
@@ -1370,6 +1434,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
         "host.apps.shareStop" -> hermitApp.happShare.stop(params.optString("sessionId").takeIf { it.isNotBlank() })
         "host.apps.shareInstall" -> {
             val shareId = params.getString("shareId")
+            val createShortcut = params.optBoolean("createShortcut", true)
             val incoming = withContext(Dispatchers.IO) { hermitApp.happShare.download(shareId) }
             try {
                 val result = incoming.file.inputStream().use { input ->
@@ -1381,9 +1446,8 @@ class MainActivity : ComponentActivity(), BridgeHost {
                         identityChoice = ::chooseIdentityInstall,
                     )
                 }
-                val installed = hermitApp.registry.getInstance(result.appId)
-                    ?: throw HermitException(ErrorCodes.STORAGE, "安装完成后未找到 happ 实例")
-                val requested = params.optBoolean("createShortcut", true) && shortcuts.requestPin(installed)
+                val outcome = requestShortcut(result.appId, createShortcut)
+                val requested = outcome == ShortcutHost.PinOutcome.REQUESTED || outcome == ShortcutHost.PinOutcome.ALREADY_PINNED
                 JSONObject().put("installed", true).put("appId", result.appId).put("releaseId", result.releaseId)
                     .put("shortcutRequested", requested)
             } finally { hermitApp.happShare.finishInbound(shareId) }
@@ -1416,6 +1480,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 if (params.optBoolean("favorite")) hermitApp.registry.setFavorite(result.appId, true) else presented
             }
             shortcuts.update(updated)
+            requestShortcut(result.appId)
             JSONObject().put("cancelled", false).put("appId", result.appId).put("releaseId", result.releaseId)
         }
         "host.apps.inspectUrl" -> {
@@ -1493,6 +1558,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
                     }
                 }
                 shortcuts.update(updated)
+                requestShortcut(result.appId)
                 updated.toJson().put("cancelled", false).put("installStrategy", "local").put("installKind", "package")
             } finally {
                 source.file.delete()
@@ -1523,24 +1589,28 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 if (params.optBoolean("favorite")) hermitApp.registry.setFavorite(installed.appId, true) else presented
             }
             shortcuts.update(updated)
+            requestShortcut(installed.appId)
             updated.toJson().put("cancelled", false).put("installStrategy", installed.strategy).put("installKind", installed.kind)
         }
         "host.apps.importZip" -> {
             val uri = pickZip() ?: return JSONObject().put("cancelled", true)
             val result = hermitApp.installer.installUri(uri, params.optString("name").takeIf { it.isNotBlank() }, ::chooseIdentityInstall)
             if (params.optBoolean("favorite")) withContext(Dispatchers.IO) { hermitApp.registry.setFavorite(result.appId, true) }
+            requestShortcut(result.appId)
             JSONObject().put("cancelled", false).put("appId", result.appId).put("releaseId", result.releaseId)
         }
         "host.apps.importDirectory" -> {
             val uri = pickTree() ?: return JSONObject().put("cancelled", true)
             val result = hermitApp.installer.installTree(uri, params.optString("name").takeIf { it.isNotBlank() }, ::chooseIdentityInstall)
             if (params.optBoolean("favorite")) withContext(Dispatchers.IO) { hermitApp.registry.setFavorite(result.appId, true) }
+            requestShortcut(result.appId)
             JSONObject().put("cancelled", false).put("appId", result.appId).put("releaseId", result.releaseId)
         }
         "host.apps.installPackageUrl" -> {
             val result = hermitApp.remoteInstaller.installHttps(params.getString("url"), params.optString("name").takeIf { it.isNotBlank() },
                 identityChoice = ::chooseIdentityInstall)
             if (params.optBoolean("favorite")) withContext(Dispatchers.IO) { hermitApp.registry.setFavorite(result.appId, true) }
+            requestShortcut(result.appId)
             JSONObject().put("appId", result.appId).put("releaseId", result.releaseId)
         }
         "host.apps.installGitHub" -> {
@@ -1549,6 +1619,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
                 params.optString("path"), params.optString("name").takeIf { it.isNotBlank() }, identityChoice = ::chooseIdentityInstall
             )
             if (params.optBoolean("favorite")) withContext(Dispatchers.IO) { hermitApp.registry.setFavorite(result.appId, true) }
+            requestShortcut(result.appId)
             JSONObject().put("appId", result.appId).put("releaseId", result.releaseId)
         }
         "host.apps.updateFromSource" -> {
@@ -1937,7 +2008,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
     private suspend fun dispatchPublic(session: RuntimeSession, method: String, params: JSONObject): Any? {
         val app = session.instance
         return when (method) {
-            "runtime.info" -> JSONObject().put("apiMajor", 1).put("apiMinor", 12)
+            "runtime.info" -> JSONObject().put("apiMajor", 1).put("apiMinor", 13)
                 .put("sessionId", session.sessionId).put("appId", session.appId)
                 .put("role", session.role.name.lowercase()).put("webViewPackage", WebViewCompat.getCurrentWebViewPackage(this)?.versionName)
                 .put("runtimeMode", app?.runtimeMode?.name?.lowercase() ?: if (storeRunningMode == "online") "live" else "local")
@@ -1975,6 +2046,21 @@ class MainActivity : ComponentActivity(), BridgeHost {
             }
             "app.checkUpdate" -> JSONObject().put("updateUrl", app?.updateUrl ?: JSONObject.NULL)
                 .put("canCheck", app?.updateUrl != null || app?.sourceAdapter in setOf("online-manifest", "online-descriptor", "https-package", "github"))
+            // 页面应用只能备份自己：目标实例来自会话，参数里没有 appId，
+            // 否则任何 happ 都能把别的实例的记录与附件导到用户选定的位置。
+            // 先用系统文件选择器确定保存位置，再按统一备份格式整包写出（记录、附件、本地代码、自定义图标）。
+            "app.backup" -> {
+                val target = requireApp(app)
+                val uri = createBackupDocument("${safeDocumentName(target.name)}-${backupTimestamp()}.hermit-backup.zip")
+                    ?: return JSONObject().put("cancelled", true)
+                val deployStatus = hermitApp.developmentServer.status()
+                if (deployStatus.optBoolean("active") && deployStatus.optString("appId") == target.appId) {
+                    hermitApp.developmentServer.stop("Backup exported")
+                }
+                backup.export(target.appId, uri)
+                    .put("cancelled", false)
+                    .put("fileName", queryDisplayName(uri) ?: "")
+            }
             "system.language" -> systemLanguageInfo()
             "app.reload" -> {
                 root.postDelayed({ showTarget(app?.appId, launchedFromLibrary) }, 80)
@@ -2107,6 +2193,21 @@ class MainActivity : ComponentActivity(), BridgeHost {
             "files.pickInline" -> requireApp(app).let { pickInlineFile(params) }
             "files.writeText" -> requireApp(app).let { withContext(Dispatchers.IO) {
                 files.writeText(it.appId, session.dataGeneration!!, params.optString("name", "note.txt"), params.getString("text"))
+            } }
+            // A page that has more bytes than one bridge message can carry writes
+            // them in 64 KiB chunks and then hands the logical file ID to
+            // network.request({ bodyLogicalFileId }) or multipart.
+            "files.beginWrite" -> requireApp(app).let { withContext(Dispatchers.IO) {
+                files.beginWrite(session.sessionId, it.appId, session.dataGeneration!!, params.optString("name", "file"), params.optString("mime", "application/octet-stream"))
+            } }
+            "files.appendBytes" -> requireApp(app).let { withContext(Dispatchers.IO) {
+                files.appendBytes(session.sessionId, it.appId, session.dataGeneration!!, params.getString("writeId"), params.getString("chunkBase64"))
+            } }
+            "files.finishWrite" -> requireApp(app).let { withContext(Dispatchers.IO) {
+                files.finishWrite(session.sessionId, it.appId, session.dataGeneration!!, params.getString("writeId"))
+            } }
+            "files.abortWrite" -> requireApp(app).let { withContext(Dispatchers.IO) {
+                files.abortWrite(session.sessionId, it.appId, session.dataGeneration!!, params.getString("writeId"))
             } }
             "files.readText" -> requireApp(app).let { withContext(Dispatchers.IO) {
                 files.readText(it.appId, session.dataGeneration!!, params.getString("logicalFileId"), params.optInt("maxBytes", 256 * 1024))
@@ -3331,6 +3432,11 @@ class MainActivity : ComponentActivity(), BridgeHost {
         importSharedZip(uri)
     }
 
+    @VisibleForTesting(otherwise = VisibleForTesting.PRIVATE)
+    fun deliverIntentForTest(intent: Intent) {
+        handleIntent(intent)
+    }
+
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         root.setBackgroundColor(ContextCompat.getColor(this, R.color.hermit_background))
@@ -3388,7 +3494,7 @@ class MainActivity : ComponentActivity(), BridgeHost {
         }
         val runningApp = session?.instance
         if (currentApp != null && runningApp != null && runtimeDefinitionChanged(runningApp, currentApp)) {
-            showTarget(currentApp.appId, false)
+            showTarget(currentApp.appId, launchedFromLibrary)
             return
         }
         HappTaskHost.applyDescription(this, currentApp)

@@ -13,7 +13,7 @@ for (const path of [
   "app/src/main/assets/store/store.css",
   "app/src/main/assets/store/store.js",
   "app/src/main/assets/agent/tools.json",
-  "app/src/main/assets/agent/hermit-device/SKILL.md",
+  "app/src/main/assets/agent/hermit-dev-plugin/SKILL.md",
   "app/src/main/assets/agent/hermit-agent.py",
   "app/src/main/assets/agent/webapp-authoring.md",
   "app/src/main/assets/agent/hermit-api.d.ts",

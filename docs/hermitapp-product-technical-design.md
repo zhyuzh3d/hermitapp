@@ -419,7 +419,7 @@ v1 将网页可调用的任意 SQL 收敛为 `hermit.data` 的键控 JSON 记录
 
 应用文件采用本地 OSS 风格的对象存储：文件本体写入 `filesDir/instances/<appId>/data/<dataGeneration>/files/`，SQLite 只保存 `logicalFileId`、对象 URL、名称、MIME、大小和 SHA-256 等元数据。保存时先写临时文件、刷盘，再原子提交对象索引；App 代码目录只读。SAF 选入文件默认复制到当前实例，移除原文件不影响已导入内容。导出走系统目标选择器，不让网页提交 Android 物理路径。
 
-原生选择、拍照、较大 Native HTTP 响应和 TTS 导出均产生相同逻辑文件对象，并返回同源对象 URL；视频缩略图也作为文件对象。只有不超过 256 KiB 的文本可经 RPC 读取；较大内容由原生流直接导入、导出或分享，不通过巨大 Base64 JSON。文件写入绑定当前实例和 dataGeneration，完成前不进入索引。分享给其他 Android 应用的只读文件使用独立副本和 URI grant，不能因切到分享目标就立即删除；该副本按短期 TTL 清理，不授予对原数据目录的访问。通用二进制分块读写仍不作为公共 RPC，页面通过对象 URL 使用 `<img>`、`<audio>`、`<video>` 或上传接口。
+原生选择、拍照、较大 Native HTTP 响应和 TTS 导出均产生相同逻辑文件对象，并返回同源对象 URL；视频缩略图也作为文件对象。只有不超过 256 KiB 的文本可经 RPC 读取；较大内容由原生流直接导入、导出或分享，不通过巨大 Base64 JSON。文件写入绑定当前实例和 dataGeneration，完成前不进入索引。分享给其他 Android 应用的只读文件使用独立副本和 URI grant，不能因切到分享目标就立即删除；该副本按短期 TTL 清理，不授予对原数据目录的访问。写入侧提供分块通道：`files.beginWrite`/`appendBytes`/`finishWrite`/`abortWrite` 让页面把任意大小的字节写进文件库，每块不超过 64 KiB，句柄绑定页面会话与 dataGeneration，完成前不进索引，因此“单条消息 256 KiB”只约束 RPC JSON，不再约束页面能够传输的字节总量。读取侧没有分块 API，页面仍通过对象 URL 或 8 MiB 以内的内联文本使用文件。
 
 本地网关保留 `/__hermit/` 命名空间，v1 只向当前页面发布当前 appId/dataGeneration 的对象 URL；HermitUI 可读取宿主图标对象。跨应用或跨 dataGeneration 即使知道 logicalFileId 或对象 URL 也不能读取对应文件。
 
@@ -470,7 +470,7 @@ Native network.request 使用独立配置的 OkHttp client：关闭自动重定�
 
 在 Store 的“开发”Tab 中显式开启开发服务，默认端口 8766。LAN 服务绑定全部本机接口但只公布当前可信局域网 IPv4；USB 备用在设备 loopback 启动同一服务，通过 `adb forward tcp:8766 tcp:8766` 访问。两条传输共享工具、密码、开发工作副本和并发控制。密码首次生成后保存在宿主私有偏好，应用升级/服务重启不变；修改密码后旧值立即失效。多台电脑可共享当前密码，不设配对、客户端名单、独立令牌或应用白名单。
 
-标准 MCP Streamable HTTP（无状态 JSON 响应，无 SSE）提供工具、资源和提示词发现。根地址和 `/.well-known/hermit-agent` 是无需密码的接入入口，`/skills/hermit-device/SKILL.md` 和 MCP guide/resource 提供随 APK 同步更新的实时指导；公开入口只描述认证方式和能力目录，不返回密码、应用或代码数据。缺少 Authorization 的受保护请求返回带发现地址、说明地址和认证头模板的结构化 401，且不计入错误密码限流；只有实际提交错误凭据才累计失败次数。密码只允许放在 `Authorization: Bearer` 请求头，禁止放进 URL 路径、查询参数或 fragment。客户端的 MCP 注册和 Skill 安装必须由客户端执行；本地 Skill 只保留动态拉取规则，不固定功能清单或保存密码。HTTP/stdio Python 标准库助手兼容不方便直接注册 HTTP MCP 的客户端，不增加页面框架或构建依赖。
+标准 MCP Streamable HTTP（无状态 JSON 响应，无 SSE）提供工具、资源和提示词发现。根地址和 `/.well-known/hermit-agent` 是无需密码的接入入口，`/skills/hermit-dev-plugin/SKILL.md` 和 MCP guide/resource 提供随 APK 同步更新的实时指导；公开入口只描述认证方式和能力目录，不返回密码、应用或代码数据。缺少 Authorization 的受保护请求返回带发现地址、说明地址和认证头模板的结构化 401，且不计入错误密码限流；只有实际提交错误凭据才累计失败次数。密码只允许放在 `Authorization: Bearer` 请求头，禁止放进 URL 路径、查询参数或 fragment。客户端的 MCP 注册和 Skill 安装必须由客户端执行；本地 Skill 只保留动态拉取规则，不固定功能清单或保存密码。HTTP/stdio Python 标准库助手兼容不方便直接注册 HTTP MCP 的客户端，不增加页面框架或构建依赖。
 
 智能体在初始化 happ 开发前按统一规范锁定本地目录：用户指定目录优先，其次复用用户目录 `~/hermit/happ-dev.json` 中以精确 `happId` 为键的绝对路径；没有记录时由智能体判断是否使用当前项目工作空间，否则落到 `~/hermit/happs/`。新目录统一命名为 `happ-<happId 中的点改为横线>`。一个 `happId` 只有一个活动路径，用户移动或替换时原子更新记录；旧路径失效时不扫描磁盘或暗中创建副本。记录允许智能体保存自己的版本备忘，但 Hermit 服务不读取它决定目录、版本或同步方向，也不允许其中出现开发密码或设备凭据。
 
@@ -527,6 +527,8 @@ v1 传完整快照。未来若添加差分上传，只能改变 materialize 的�
 
 备份默认不加密，可能包含个人内容；导出确认应准确提示并使用系统文件选择器。密码加密属于后续独立协议，不自创弱加密。没有实现时不能宣传端到端加密。
 
+页面也可以请求导出自己：`hermit.app.backup()` 只处理发起调用的实例（实例来自会话，参数不能指定 `appId`），先由系统文件选择器确定保存位置，再按与“应用库导出”完全相同的格式、容量上限和内容集合写出。它不因此获得管理接口，也不能读取或导出别的实例。
+
 导出前暂停目标实例与写操作，读取一致的应用记录和文件清单。记录以受限 JSONL 等逻辑格式导出，避免把来自外部的任意 SQLite 文件直接作为宿主数据库打开。文件和代码流式归档并计算摘要。空间不足或中断不产生可导入的半完成备份。
 
 恢复首先验证大小、结构、格式和摘要，再走统一 staging。默认恢复为新实例，生成新 appId 和 Web Profile；保留实例域内的 logicalFileId，使任意 JSON 中的附件引用仍成立，旧 appId 仅作来源元数据。短期 FileHandle/media URL 不得作为持久附件引用或进入备份；恢复后重新取得 handle，记录 revision 也按新 generation 重新产生。
@@ -570,6 +572,7 @@ UI 线程只负责 WebView、系统 UI 和轻量消息验证；协程调度器�
 | 实例 Hermit 数据总量 | 逻辑文件 256 MiB / 10,000 个；记录 JSON 128 MiB / 100,000 条 |
 | 单 JSON 记录 / scan / batch | 64 KiB；100 条且响应不超 RPC 上限；100 操作且请求不超 RPC 上限 |
 | 普通 RPC / 瞬时队列 | 每文档最多 16 个待决请求；消息 256 KiB、JSON 嵌套 16 层，超出立即错误 |
+| 分块文件写入 | 每块 64 KiB；单文件 64 MiB、单应用 256 MiB；每会话 2 个、全局 4 个未完成句柄；闲置 2 分钟回收 |
 | Native HTTP | 受 Bridge 在途上限约束；连接 15 秒、读写各 30 秒；内联 1 MiB，文件响应 64 MiB |
 | 部署连接 / 上传 | 最多 4 执行线程、8 个排队连接、1 个上传；会话闲置 15 分钟，ZIP 64 MiB |
 | 诊断 | 按需生成脱敏状态摘要；不保留页面正文、文件内容、token 或设备序列号 |

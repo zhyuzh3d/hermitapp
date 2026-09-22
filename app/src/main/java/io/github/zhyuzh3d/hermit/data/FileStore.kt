@@ -4,6 +4,7 @@ import android.content.ContentValues
 import android.content.Context
 import android.database.sqlite.SQLiteDatabase
 import android.net.Uri
+import android.util.Base64
 import androidx.core.content.FileProvider
 import io.github.zhyuzh3d.hermit.model.ErrorCodes
 import io.github.zhyuzh3d.hermit.model.HermitException
@@ -18,6 +19,23 @@ import java.util.UUID
 
 class FileStore(private val context: Context) {
     data class StoredFile(val logicalId: String, val name: String, val mime: String, val size: Long, val sha256: String, val url: String)
+
+    private class PendingWrite(
+        val owner: String,
+        val appId: String,
+        val generation: String,
+        val logicalId: String,
+        val name: String,
+        val mime: String,
+        val temporary: File,
+        val stream: FileOutputStream,
+        val digest: MessageDigest,
+        val appBytesAtStart: Long,
+        var bytes: Long = 0L,
+        var lastAccessAt: Long = System.currentTimeMillis(),
+    )
+
+    private val writes = LinkedHashMap<String, PendingWrite>()
 
     fun import(appId: String, generation: String, input: InputStream, name: String, mime: String): JSONObject {
         return importWithId(appId, generation, UUID.randomUUID().toString(), input, name, mime)
@@ -55,28 +73,95 @@ class FileStore(private val context: Context) {
             temporary.delete()
             throw error
         }
-        val hash = digest.digest().hex()
-        if (!temporary.renameTo(target)) {
-            temporary.delete()
-            throw HermitException(ErrorCodes.STORAGE, "无法提交文件")
+        return commit(appId, generation, logicalId, temporary, safeName, mime, size, digest.digest().hex())
+    }
+
+    /**
+     * The blocked alternative to a single oversized RPC message. A page opens a
+     * write handle, appends 64 KiB chunks, then commits; nothing about the file
+     * has to fit in one bridge message. Handles are owned by the calling page
+     * session, so a navigation can never continue someone else's write, and an
+     * abandoned handle is reaped by [pruneWrites] or by the next [usage] sweep.
+     */
+    @Synchronized
+    fun beginWrite(owner: String, appId: String, generation: String, name: String, mime: String): JSONObject {
+        pruneWrites()
+        if (writes.values.count { it.owner == owner } >= MAX_WRITES_PER_SESSION || writes.size >= MAX_WRITES_TOTAL) {
+            throw HermitException(ErrorCodes.QUOTA, "未完成的分块写入数量已达上限")
         }
+        val logicalId = UUID.randomUUID().toString()
+        val root = root(appId, generation)
+        if (File(root, logicalId).exists() || metadata(appId, generation, logicalId) != null) {
+            throw HermitException(ErrorCodes.CONFLICT, "文件 ID 已存在")
+        }
+        val (currentBytes, currentFiles) = usage(appId, generation)
+        if (currentFiles >= MAX_APP_FILES) throw HermitException(ErrorCodes.QUOTA, "应用文件数量已达上限")
+        val writeId = UUID.randomUUID().toString()
+        val temporary = File(root, ".writing-$logicalId")
+        writes[writeId] = PendingWrite(
+            owner = owner, appId = appId, generation = generation, logicalId = logicalId,
+            name = sanitizeName(name), mime = normalizeMime(mime),
+            temporary = temporary, stream = FileOutputStream(temporary),
+            digest = MessageDigest.getInstance("SHA-256"), appBytesAtStart = currentBytes,
+            lastAccessAt = System.currentTimeMillis(),
+        )
+        return JSONObject().put("writeId", writeId).put("maxChunkBytes", MAX_CHUNK_BYTES)
+    }
+
+    @Synchronized
+    fun appendBytes(owner: String, appId: String, generation: String, writeId: String, chunkBase64: String): JSONObject {
+        val handle = ownedWrite(writeId, owner, appId, generation)
+        val chunk = if (chunkBase64.isEmpty()) ByteArray(0) else runCatching { Base64.decode(chunkBase64, Base64.DEFAULT) }
+            .getOrElse { throw HermitException(ErrorCodes.INVALID_ARGUMENT, "chunkBase64 无效") }
+        if (chunk.size > MAX_CHUNK_BYTES) throw HermitException(ErrorCodes.QUOTA, "单个数据块超过 64 KiB")
+        val total = handle.bytes + chunk.size
+        if (total > MAX_FILE_BYTES) throw HermitException(ErrorCodes.QUOTA, "单个文件超过 64 MiB")
+        if (handle.appBytesAtStart + total > MAX_APP_FILE_BYTES) throw HermitException(ErrorCodes.QUOTA, "应用文件总量超过 256 MiB")
+        if (chunk.isNotEmpty()) {
+            handle.stream.write(chunk)
+            handle.digest.update(chunk)
+            handle.bytes = total
+        }
+        handle.lastAccessAt = System.currentTimeMillis()
+        return JSONObject().put("writeId", writeId).put("receivedBytes", handle.bytes).put("maxChunkBytes", MAX_CHUNK_BYTES)
+    }
+
+    @Synchronized
+    fun finishWrite(owner: String, appId: String, generation: String, writeId: String): JSONObject {
+        val handle = ownedWrite(writeId, owner, appId, generation)
         try {
-            openIndex(appId, generation).use { db ->
-                db.insertOrThrow("files", null, ContentValues().apply {
-                    put("logical_id", logicalId); put("display_name", safeName); put("mime", normalizeMime(mime))
-                    put("size", size); put("sha256", hash); put("object_url", objectUrl(logicalId)); put("created_at", System.currentTimeMillis())
-                })
-            }
-        } catch (error: Throwable) {
-            target.delete()
-            throw error
+            handle.stream.flush()
+            handle.stream.fd.sync()
+        } finally {
+            runCatching { handle.stream.close() }
         }
-        return StoredFile(logicalId, safeName, normalizeMime(mime), size, hash, objectUrl(logicalId)).json()
+        // The handle stays registered until the commit, because the sweep inside
+        // usage() must not mistake this still-open temporary file for garbage.
+        val (currentBytes, currentFiles) = usage(appId, generation)
+        writes.remove(writeId)
+        if (currentFiles >= MAX_APP_FILES) {
+            handle.temporary.delete()
+            throw HermitException(ErrorCodes.QUOTA, "应用文件数量已达上限")
+        }
+        if (currentBytes + handle.bytes > MAX_APP_FILE_BYTES) {
+            handle.temporary.delete()
+            throw HermitException(ErrorCodes.QUOTA, "应用文件总量超过 256 MiB")
+        }
+        return commit(appId, generation, handle.logicalId, handle.temporary, handle.name, handle.mime, handle.bytes, handle.digest.digest().hex())
+    }
+
+    @Synchronized
+    fun abortWrite(owner: String, appId: String, generation: String, writeId: String): JSONObject {
+        val handle = ownedWrite(writeId, owner, appId, generation)
+        writes.remove(writeId)
+        runCatching { handle.stream.close() }
+        handle.temporary.delete()
+        return JSONObject().put("writeId", writeId).put("aborted", true)
     }
 
     fun writeText(appId: String, generation: String, name: String, text: String): JSONObject {
         val bytes = text.toByteArray(Charsets.UTF_8)
-        if (bytes.size > MAX_INLINE_BYTES) throw HermitException(ErrorCodes.QUOTA, "文本超过 256 KiB，请使用文件导入")
+        if (bytes.size > MAX_INLINE_BYTES) throw HermitException(ErrorCodes.QUOTA, "文本超过 256 KiB，请改用 files.beginWrite 分块写入")
         return import(appId, generation, bytes.inputStream(), name, "text/plain")
     }
 
@@ -222,9 +307,54 @@ class FileStore(private val context: Context) {
 
     private fun usage(appId: String, generation: String): Pair<Long, Long> = openIndex(appId, generation).use { db ->
         root(appId, generation).listFiles { file -> file.name.startsWith(".deleted-") }?.forEach { it.delete() }
+        // A temporary file is protected by its own modification time, not by the
+        // in-memory handle table: an idle-but-live write keeps touching its file,
+        // while a temporary file left behind by a killed process does not.
+        val cutoff = System.currentTimeMillis() - WRITE_IDLE_TTL_MS
+        root(appId, generation).listFiles { file -> file.name.startsWith(".writing-") && file.lastModified() < cutoff }
+            ?.forEach { it.delete() }
         db.rawQuery("SELECT COALESCE(SUM(size), 0), COUNT(*) FROM files", null).use { cursor ->
             cursor.moveToFirst()
             cursor.getLong(0) to cursor.getLong(1)
+        }
+    }
+
+    /** Atomically publishes a fully written temporary file under its logical ID. */
+    private fun commit(appId: String, generation: String, logicalId: String, temporary: File, safeName: String, mime: String, size: Long, hash: String): JSONObject {
+        val target = File(root(appId, generation), logicalId)
+        if (!temporary.renameTo(target)) {
+            temporary.delete()
+            throw HermitException(ErrorCodes.STORAGE, "无法提交文件")
+        }
+        try {
+            openIndex(appId, generation).use { db ->
+                db.insertOrThrow("files", null, ContentValues().apply {
+                    put("logical_id", logicalId); put("display_name", safeName); put("mime", normalizeMime(mime))
+                    put("size", size); put("sha256", hash); put("object_url", objectUrl(logicalId)); put("created_at", System.currentTimeMillis())
+                })
+            }
+        } catch (error: Throwable) {
+            target.delete()
+            throw error
+        }
+        return StoredFile(logicalId, safeName, normalizeMime(mime), size, hash, objectUrl(logicalId)).json()
+    }
+
+    private fun ownedWrite(writeId: String, owner: String, appId: String, generation: String): PendingWrite {
+        val handle = writes[writeId] ?: throw HermitException(ErrorCodes.INVALID_ARGUMENT, "分块写入不存在或已经结束")
+        if (handle.owner != owner || handle.appId != appId || handle.generation != generation) {
+            throw HermitException(ErrorCodes.ORIGIN_DENIED, "分块写入不属于当前页面会话")
+        }
+        return handle
+    }
+
+    private fun pruneWrites() {
+        val cutoff = System.currentTimeMillis() - WRITE_IDLE_TTL_MS
+        writes.entries.toList().forEach { (id, handle) ->
+            if (handle.lastAccessAt >= cutoff) return@forEach
+            writes.remove(id)
+            runCatching { handle.stream.close() }
+            handle.temporary.delete()
         }
     }
 
@@ -256,6 +386,10 @@ class FileStore(private val context: Context) {
         private const val MAX_APP_FILES = 10_000L
         private const val MAX_INLINE_BYTES = 256 * 1024
         private const val MAX_EXTENDED_INLINE_BYTES = 8 * 1024 * 1024
+        private const val MAX_CHUNK_BYTES = 64 * 1024
+        private const val MAX_WRITES_PER_SESSION = 2
+        private const val MAX_WRITES_TOTAL = 4
+        private const val WRITE_IDLE_TTL_MS = 2 * 60 * 1000L
         private const val SHARE_TTL_MS = 24L * 60 * 60 * 1000
     }
 }

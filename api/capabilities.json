@@ -1,14 +1,14 @@
 {
   "apiMajor": 1,
-  "apiMinor": 12,
+  "apiMinor": 13,
   "roles": ["store", "web_app"],
   "public": {
     "runtime": ["info", "capabilities"],
-    "app": ["info", "reload", "ready", "checkUpdate", "setRuntimeMode"],
+    "app": ["info", "reload", "ready", "checkUpdate", "setRuntimeMode", "backup"],
     "appearance": ["reportTheme"],
     "permissions": ["status", "request"],
     "data": ["get", "put", "delete", "scan", "batch"],
-    "files": ["import", "writeText", "readText", "list", "export", "delete", "share"],
+    "files": ["import", "writeText", "beginWrite", "appendBytes", "finishWrite", "abortWrite", "readText", "list", "export", "delete", "share"],
     "audio": ["startRecording", "stopRecording", "cancelRecording", "play", "stopPlayback"],
     "tts": ["availability", "preferences", "voices", "languageAvailability", "speak", "stop", "export"],
     "speech": ["availability", "preferences", "languages", "start", "recognizeOnce", "stop", "cancel"],

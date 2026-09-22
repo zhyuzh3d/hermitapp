@@ -65,7 +65,7 @@
       window.scrollTo(0, 0);
     };
   });
-  let refreshEpoch = 0;
+  let refreshEpoch = 0, renderedApps = null;
   async function refresh() {
     const epoch = ++refreshEpoch;
     const result = await host.call("apps.list", {});
@@ -73,6 +73,13 @@
     state.apps = result.apps || [];
     $("#libraryUnavailable").classList.add("hidden");
     $("#loading").classList.add("hidden");
+    // The mounted cards already say exactly what this answer says. A read that changes
+    // nothing leaves the list untouched, so coming back to the foreground cannot rebuild
+    // it, jump the scroll or drop the element the user was typing in. Real changes still
+    // rebuild below.
+    const rendered = JSON.stringify(state.apps);
+    if (rendered === renderedApps) return;
+    renderedApps = rendered;
     const root = $("#apps"), cards = document.createDocumentFragment();
     for (const app of state.apps) {
       const fragment = $("#appTemplate").content.cloneNode(true), card = fragment.querySelector(".app-card");

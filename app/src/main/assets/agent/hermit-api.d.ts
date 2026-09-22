@@ -24,7 +24,7 @@ export interface HermitApi {
     info(): Promise<{ apiMajor: 1; apiMinor: number; sessionId: string; appId: string; role: "store" | "web_app"; webViewPackage: string | null; runtimeMode: "local" | "live"; launchChannel: "stable" | "dev"; devRevision: number | null; bridgeMode: "shared-web-message" | "shared-legacy-bridge"; isolatedProfiles: boolean }>;
     capabilities(): Promise<{ capabilities: HermitCapability[] }>;
   };
-  app: { info(): Promise<Record<string, unknown>>; reload(): Promise<{ reloading: true }>; ready(): Promise<{ recorded: true }>; checkUpdate(): Promise<{ canCheck: boolean }>; setRuntimeMode(params: { runtimeMode: "local" | "live" }): Promise<Record<string, unknown>> };
+  app: { info(): Promise<Record<string, unknown>>; reload(): Promise<{ reloading: true }>; ready(): Promise<{ recorded: true }>; checkUpdate(): Promise<{ canCheck: boolean }>; setRuntimeMode(params: { runtimeMode: "local" | "live" }): Promise<Record<string, unknown>>; backup(): Promise<{ cancelled: true } | { cancelled: false; exported: true; appId: string; bytes: number; fileName: string }> };
   appearance: { reportTheme(params: { theme: "light" | "dark" }): Promise<{ theme: "light" | "dark"; applied: true }> };
   permissions: {
     status(params: { capability: HermitPermissionCapability; scope?: string }): Promise<Record<string, unknown>>;
@@ -42,6 +42,10 @@ export interface HermitApi {
     pickImage(params?: { maxDimension?: number; maxBytes?: number }): Promise<{ cancelled: true } | (HermitFile & { cancelled: false })>;
     pickInline(params: { accept: string; maxBytes?: number }): Promise<{ cancelled: true } | { cancelled: false; name: string; mime: string; size: number; dataUrl: string }>;
     writeText(params: { name: string; text: string }): Promise<HermitFile>;
+    beginWrite(params: { name: string; mime?: string }): Promise<{ writeId: string; maxChunkBytes: number }>;
+    appendBytes(params: { writeId: string; chunkBase64: string }): Promise<{ writeId: string; receivedBytes: number; maxChunkBytes: number }>;
+    finishWrite(params: { writeId: string }): Promise<HermitFile>;
+    abortWrite(params: { writeId: string }): Promise<{ writeId: string; aborted: true }>;
     readText(params: { logicalFileId: string; maxBytes?: number }): Promise<HermitFile & { text: string }>;
     list(): Promise<{ files: HermitFile[] }>;
     export(params: { logicalFileId: string }): Promise<{ exported?: true; cancelled: boolean }>;

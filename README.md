@@ -2,7 +2,7 @@
 
 HermitApp 是一个面向 Android 的 happ 容器：它直接运行 HTML、CSS、JavaScript 页面，并为页面提供安装、版本、数据、文件、权限和系统能力。项目目标不是把网页重新包装成独立 APK，而是在一个开放、轻量、可离线工作的宿主中管理多个页面应用。
 
-当前构建版本为 `1.10.37`（versionCode `71`），官网下载页当前提供 `1.10.19`（versionCode `53`）。版本号由 `scripts/build-release.sh` 在正式构建时通过 `-PhermitVersionName` / `-PhermitVersionCode` 注入，`app/build.gradle.kts` 里的值只是缺省回退，不能当成发布版本读。包名为 `io.github.zhyuzh3d.hermit`，最低支持 Android 10 / API 29，compileSdk 与 targetSdk 为 37。系统语音识别语言目录通过 `speech.languages()` 从当前 Android 识别服务读取；系统 TTS 的可选语言和音色也来自当前引擎，不再声明未经运行时确认的候选。HermitUI 固定使用竖屏；其他 happ 仍可在 `hermit.json.display` 中独立声明竖屏、横屏或跟随设备，以及键盘布局策略。HermitUI 会在应用启动和恢复前台时读取 Android 固定快捷方式状态，使 happ 卡片图钉与桌面图标状态保持同步。开发服务可读取当前 HermitUI 的白名单界面快照并在原 WebView 中刷新，再调用固定函数恢复界面；普通 happ 只有当前运行 DEV 副本且 `appId` 精确匹配时才能读取快照、刷新和执行刷新后脚本。APK 替换会恢复内置 UI。MCP 初始化指令、动态 Skill 和连接入口统一要求智能体采用最小相关测试、增量同步和原位刷新，并把 Android 10、较旧厂商 WebView 及 Hermit Bridge 已公开系统能力作为推荐兼容基线；这些属于开发建议，宿主不扫描或核定 happ 代码。智能体每轮写入前只读取一次前台运行目标；目标不是所需 DEV happ 时，`hermit_enter_dev_mode` 会创建或复用开发副本、切换运行通道并打开它，避免重复检查全局开发开关和重复调度状态接口。
+当前构建版本为 `1.10.45`（versionCode `79`），官网下载页当前提供 `1.10.45`（versionCode `79`）。版本号由 `scripts/build-release.sh` 在正式构建时通过 `-PhermitVersionName` / `-PhermitVersionCode` 注入，`app/build.gradle.kts` 里的值只是缺省回退，不能当成发布版本读。包名为 `io.github.zhyuzh3d.hermit`，最低支持 Android 10 / API 29，compileSdk 与 targetSdk 为 37。系统语音识别语言目录通过 `speech.languages()` 从当前 Android 识别服务读取；系统 TTS 的可选语言和音色也来自当前引擎，不再声明未经运行时确认的候选。HermitUI 固定使用竖屏；其他 happ 仍可在 `hermit.json.display` 中独立声明竖屏、横屏或跟随设备，以及键盘布局策略。HermitUI 会在应用启动和恢复前台时读取 Android 固定快捷方式状态，使 happ 卡片图钉与桌面图标状态保持同步；回到前台只重读会变的数据，不重建正在看的页面，关闭后重新打开则从首页开始。开发服务可读取当前 HermitUI 的白名单界面快照并在原 WebView 中刷新，再调用固定函数恢复界面；普通 happ 只有当前运行 DEV 副本且 `appId` 精确匹配时才能读取快照、刷新和执行刷新后脚本。APK 替换会恢复内置 UI。MCP 初始化指令、动态 Skill 和连接入口统一要求智能体采用最小相关测试、增量同步和原位刷新，并把 Android 10、较旧厂商 WebView 及 Hermit Bridge 已公开系统能力作为推荐兼容基线；这些属于开发建议，宿主不扫描或核定 happ 代码。智能体每轮写入前只读取一次前台运行目标；目标不是所需 DEV happ 时，`hermit_enter_dev_mode` 会创建或复用开发副本、切换运行通道并打开它，避免重复检查全局开发开关和重复调度状态接口。
 
 Hermit 项目由两个同级独立仓库组成：
 
@@ -85,7 +85,7 @@ my-happ/
 
 HermitUI 的“开发”Tab 可开启全局智能体开发模式。可信电脑使用页面显示的局域网地址和六位密码连接 MCP 服务；USB 可通过同一服务转发。每个普通 happ 有且只有一个开发副本，必须先切换为运行开发副本，智能体才能增量创建、修改、移动或删除文件。保存后可在同一 WebView 快速刷新并等待渲染确认；正式发布时再构建 ZIP，经标准更新事务安装。HermitUI 是受保护目标，不能通过该接口修改。
 
-该服务使用可信局域网内的明文 HTTP，不能暴露到公网。开发模式开关会持久保存，退到后台、空闲或 Wi-Fi 临时断开不会自动关闭；应用进程重建后会恢复服务。Hermit 每 15 秒检查 Wi-Fi、手机热点或以太网地址，地址变化时提醒重新告知智能体。普通蜂窝数据受运营商 NAT 和入站策略限制，不发布为开发地址；USB 仍可作为备用。动态客户端说明随 APK 位于 `app/src/main/assets/agent/hermit-device/SKILL.md`。
+该服务使用可信局域网内的明文 HTTP，不能暴露到公网。开发模式开关会持久保存，退到后台、空闲或 Wi-Fi 临时断开不会自动关闭；应用进程重建后会恢复服务。Hermit 每 15 秒检查 Wi-Fi、手机热点或以太网地址，地址变化时提醒重新告知智能体。普通蜂窝数据受运营商 NAT 和入站策略限制，不发布为开发地址；USB 仍可作为备用。动态客户端说明随 APK 位于 `app/src/main/assets/agent/hermit-dev-plugin/SKILL.md`。
 
 仓库仍保留面向单个实例的旧式 ADB/LAN 部署脚本，适合明确取得短期 token 的兼容流程：
 

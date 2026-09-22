@@ -30,6 +30,10 @@ import java.util.concurrent.Semaphore
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 
+/** Installed plugin identity. Renamed from the legacy id, which stays accepted while existing installs migrate. */
+private const val PLUGIN_ID = "hermit-dev-plugin"
+private const val LEGACY_PLUGIN_ID = "hermit-device"
+
 /** An explicitly enabled, process-scoped developer control plane, separate from page RPC authority. */
 class AgentDevelopmentServer(
     private val context: Context,
@@ -309,7 +313,7 @@ class AgentDevelopmentServer(
     }
 
     private fun asset(path: String) = context.assets.open(path).bufferedReader().use { it.readText() }
-    private val guideText by lazy { asset("agent/hermit-device/SKILL.md") }
+    private val guideText by lazy { asset("agent/$PLUGIN_ID/SKILL.md") }
     private val webappGuideText by lazy { asset("agent/webapp-authoring.md") }
     private val pageApiText by lazy { asset("agent/hermit-api.d.ts") }
     private fun guide() = guideText
@@ -347,16 +351,17 @@ class AgentDevelopmentServer(
         val output = ByteArrayOutputStream()
         ZipOutputStream(output).use { zip ->
             val manifest = JSONObject().put("kind", "hermit-agent-plugin")
-                .put("protocol", 1).put("id", "hermit-device").put("version", BuildConfig.VERSION_NAME)
+                .put("protocol", 1).put("id", PLUGIN_ID).put("version", BuildConfig.VERSION_NAME)
                 .put("codexVersion", codexVersion)
-                .put("replaceScope", "hermit-device-only")
+                .put("replaceScope", "$PLUGIN_ID-only")
+                .put("replaces", JSONArray(listOf(LEGACY_PLUGIN_ID)))
                 .put("packageFormat", "codex-plugin-archive-v1")
                 .put("files", JSONArray(listOf(
                     "manifest.json", ".codex-plugin/plugin.json", ".mcp.json",
-                    "SKILL.md", "skills/hermit-device/SKILL.md", "hermit-agent.py", "install.md"
+                    "SKILL.md", "skills/$PLUGIN_ID/SKILL.md", "hermit-agent.py", "install.md"
                 )))
             val codexManifest = JSONObject()
-                .put("name", "hermit-device")
+                .put("name", PLUGIN_ID)
                 .put("version", codexVersion)
                 .put("description", "Develop runnable Hermit happs on an authorized Android device.")
                 .put("author", JSONObject().put("name", "Hermit"))
@@ -372,7 +377,7 @@ class AgentDevelopmentServer(
                     .put("category", "Developer Tools")
                     .put("capabilities", JSONArray(listOf("Write", "Interactive")))
                     .put("defaultPrompt", JSONArray(listOf("Prepare the selected Hermit happ for local development."))))
-            val mcpConfig = JSONObject().put("mcpServers", JSONObject().put("hermit-device", JSONObject()
+            val mcpConfig = JSONObject().put("mcpServers", JSONObject().put(PLUGIN_ID, JSONObject()
                 .put("type", "stdio")
                 .put("command", "python3")
                 .put("args", JSONArray(listOf("${'$'}{CODEX_PLUGIN_ROOT}/hermit-agent.py", "--address", baseAddress, "stdio")))
@@ -382,9 +387,9 @@ class AgentDevelopmentServer(
                 ".codex-plugin/plugin.json" to codexManifest.toString(2),
                 ".mcp.json" to mcpConfig.toString(2),
                 "SKILL.md" to guide(),
-                "skills/hermit-device/SKILL.md" to guide(),
+                "skills/$PLUGIN_ID/SKILL.md" to guide(),
                 "hermit-agent.py" to asset("agent/hermit-agent.py"),
-                "install.md" to "This is a Codex plugin archive and a Hermit agent bundle. Install atomically at ~/plugins/hermit-device, verify packageSha256, then register the stdio MCP described by Bootstrap. The password is requested only when the MCP helper first authenticates."
+                "install.md" to "This is a Codex plugin archive and a Hermit agent bundle. Install atomically at ~/plugins/$PLUGIN_ID, verify packageSha256, then register the stdio MCP described by Bootstrap. It supersedes the legacy $LEGACY_PLUGIN_ID installation of the same product. The password is requested only when the MCP helper first authenticates."
             )
             files.forEach { (name, content) ->
                 val entry = ZipEntry(name).apply { time = 0L }
@@ -434,9 +439,9 @@ class AgentDevelopmentServer(
                     "/" -> return bootstrapResponse(session)
                     "/connect" -> return text(200, "text/plain", connectionGuide())
                     "/.well-known/hermit-agent" -> return json(200, discovery())
-                    "/skills/hermit-device/SKILL.md" -> return text(200, "text/markdown", guide())
+                    "/skills/$PLUGIN_ID/SKILL.md", "/skills/$LEGACY_PLUGIN_ID/SKILL.md" -> return text(200, "text/markdown", guide())
                     "/hermit-agent.py" -> return text(200, "text/x-python", asset("agent/hermit-agent.py"))
-                    "/plugin/hermit-device" -> return binary(200, "application/zip", pluginPackage(), "hermit-device.zip")
+                    "/plugin/$PLUGIN_ID", "/plugin/$LEGACY_PLUGIN_ID" -> return binary(200, "application/zip", pluginPackage(), "$PLUGIN_ID.zip")
                 }
                 val authorization = session.headers["authorization"]
                 if (authorization.isNullOrBlank()) return authenticationRequired()
@@ -484,7 +489,7 @@ class AgentDevelopmentServer(
             return if (accept.contains("text/html") && !accept.contains("application/json")) {
                 text(200, "text/html", bootstrapHtml())
             } else json(200, bootstrap()).apply {
-                addHeader("Link", "<$address/.well-known/hermit-agent>; rel=\"service-desc\", <$address/mcp>; rel=\"mcp\", <$address/plugin/hermit-device>; rel=\"plugin\"")
+                addHeader("Link", "<$address/.well-known/hermit-agent>; rel=\"service-desc\", <$address/mcp>; rel=\"mcp\", <$address/plugin/$PLUGIN_ID>; rel=\"plugin\"")
             }
         }
 
@@ -495,13 +500,14 @@ class AgentDevelopmentServer(
             .put("packageFormat", "codex-plugin-archive-v1")
             .put("codexIntegration", "mcp-stdio")
             .put("nativeCodexPlugin", true)
-            .put("plugin", JSONObject().put("id", "hermit-device").put("version", BuildConfig.VERSION_NAME)
+            .put("plugin", JSONObject().put("id", PLUGIN_ID).put("version", BuildConfig.VERSION_NAME)
                 .put("codexVersion", "${BuildConfig.VERSION_NAME}+codex.${AgentWorkspace.sha(address.toByteArray()).take(12)}")
                 .put("displayName", "Hermit happ development"))
             .put("install", JSONObject().put("action", "install_or_update").put("requiresUserConfirmation", true)
-                .put("packageUrl", "$address/plugin/hermit-device").put("packageFormat", "codex-plugin-archive-v1")
-                .put("packageSha256", pluginSha256()).put("replaceScope", "hermit-device-only")
-                .put("target", "~/plugins/hermit-device")
+                .put("packageUrl", "$address/plugin/$PLUGIN_ID").put("packageFormat", "codex-plugin-archive-v1")
+                .put("packageSha256", pluginSha256()).put("replaceScope", "$PLUGIN_ID-only")
+                .put("replaces", JSONArray(listOf(LEGACY_PLUGIN_ID)))
+                .put("target", "~/plugins/$PLUGIN_ID")
                 .put("strategy", "atomic_replace_if_hash_differs")
                 .put("existingSameVersion", "no_op")
                 .put("installer", JSONObject()
@@ -510,25 +516,25 @@ class AgentDevelopmentServer(
                     .put("downloadName", "hermit-agent.py")
                     .put("commands", JSONObject()
                         .put("posix", JSONArray(listOf("python3", "<downloadedHelper>", "--address", address,
-                            "install-plugin", "--package-url", "$address/plugin/hermit-device",
+                            "install-plugin", "--package-url", "$address/plugin/$PLUGIN_ID",
                             "--package-sha256", pluginSha256(), "--plugin-version", BuildConfig.VERSION_NAME)))
                         .put("windows", JSONArray(listOf("py", "-3", "<downloadedHelper>", "--address", address,
-                            "install-plugin", "--package-url", "$address/plugin/hermit-device",
+                            "install-plugin", "--package-url", "$address/plugin/$PLUGIN_ID",
                             "--package-sha256", pluginSha256(), "--plugin-version", BuildConfig.VERSION_NAME)))))
                 .put("mcpRegistration", JSONObject()
-                    .put("name", "hermit-device")
+                    .put("name", PLUGIN_ID)
                     .put("transport", "stdio")
                     .put("helper", "hermit-agent.py")
                     .put("args", JSONArray(listOf("--address", address, "stdio")))
                     .put("credentialMode", "helper-managed")
                     .put("passwordInConfig", false)
                     .put("registrationMode", "codex-plugin")
-                    .put("registerCommand", JSONArray(listOf("codex", "plugin", "add", "hermit-device@personal")))
-                    .put("stdioFallbackCommand", JSONArray(listOf("codex", "mcp", "add", "hermit-device", "--", "<python>", "<pluginDir>/hermit-agent.py", "--address", address, "stdio")))
+                    .put("registerCommand", JSONArray(listOf("codex", "plugin", "add", "$PLUGIN_ID@personal")))
+                    .put("stdioFallbackCommand", JSONArray(listOf("codex", "mcp", "add", PLUGIN_ID, "--", "<python>", "<pluginDir>/hermit-agent.py", "--address", address, "stdio")))
                     .put("replaceExisting", true)
                     .put("authenticateCommand", JSONArray(listOf("<python>", "<pluginDir>/hermit-agent.py", "--address", address, "connect"))))
                 .put("afterInstall", "register_mcp_then_authenticate")
-                .put("fallback", JSONObject().put("skillUrl", "$address/skills/hermit-device/SKILL.md")
+                .put("fallback", JSONObject().put("skillUrl", "$address/skills/$PLUGIN_ID/SKILL.md")
                     .put("helperUrl", "$address/hermit-agent.py")
                     .put("helperSha256", AgentWorkspace.sha(asset("agent/hermit-agent.py").toByteArray()))))
             .put("connection", JSONObject().put("mcpUrl", "$address/mcp").put("transport", "streamable-http")
@@ -543,7 +549,7 @@ class AgentDevelopmentServer(
                     .put("headers", JSONObject().put("Accept", "application/json")))
                 .put("doNot", JSONArray(listOf("read workspace instructions", "search repositories", "open a browser", "scan the LAN", "guess passwords")))
                 .put("successStates", JSONArray(listOf("installed", "mcpRegistered", "authenticated"))))
-            .put("bootstrapInstruction", "安装或更新 hermit-device 插件；安装完成后连接 mcpUrl，并按插件说明准备本地 happ 开发。")
+            .put("bootstrapInstruction", "安装或更新 $PLUGIN_ID 插件（它取代旧的 $LEGACY_PLUGIN_ID 安装）；安装完成后连接 mcpUrl，并按插件说明准备本地 happ 开发。")
             .put("discoveryInstruction", "Read GET /.well-known/hermit-agent for the same cached Bootstrap contract.")
             .put("guidanceVersion", guidanceVersion).put("schemaDigest", AgentWorkspace.sha(catalogText.toByteArray()))
             .put("resourceDigests", resourceDigests).put("intentIndex", intentIndex()).put("toolIndex", toolIndex())
@@ -554,7 +560,7 @@ class AgentDevelopmentServer(
             <!doctype html><meta charset=\"utf-8\"><title>Hermit 智能体开发插件</title>
             <h1>Hermit 智能体开发插件</h1>
             <p>把这个地址提供给智能体，它可以从这里安装或更新 Hermit 开发插件，然后连接当前设备的 MCP 开发能力。</p>
-            <p>插件：hermit-device ${BuildConfig.VERSION_NAME}</p>
+            <p>插件：$PLUGIN_ID ${BuildConfig.VERSION_NAME}</p>
             <p>安装后连接：<code>$address/mcp</code></p>
             <p>开发密码：请在手机打开 Hermit 应用，在“开发配置”中查看。</p>
             <p>手机网络变化或密码失效时，也请在“开发配置”中获取当前地址和密码。</p>
@@ -563,7 +569,7 @@ class AgentDevelopmentServer(
         private fun connectionGuide() = """
             Hermit ${BuildConfig.VERSION_NAME} agent development connection
             Address: $address
-            Read GET / with Accept: application/json to obtain the hermit-agent-bootstrap contract. Install or update hermit-device from install.packageUrl, verify its packageSha256, then connect to connection.mcpUrl. /.well-known/hermit-agent returns the same contract for cache refresh. Fetch the short skill only when guidanceVersion changes. Read hermit://tool-index and one hermit://tool/TOOL_NAME schema on demand; do not load full schemas unnecessarily.
+            Read GET / with Accept: application/json to obtain the hermit-agent-bootstrap contract. Install or update $PLUGIN_ID from install.packageUrl, verify its packageSha256, then connect to connection.mcpUrl. /.well-known/hermit-agent returns the same contract for cache refresh. Fetch the short skill only when guidanceVersion changes. Read hermit://tool-index and one hermit://tool/TOOL_NAME schema on demand; do not load full schemas unnecessarily.
             This is a trusted-LAN HTTP service, not an encrypted Internet endpoint.
             Ask the user for the current six-character password displayed in Hermit. No pairing or per-computer identity.
             POST MCP JSON-RPC to /mcp with Authorization: Bearer <password> and Accept: application/json, text/event-stream.
@@ -649,7 +655,7 @@ class AgentDevelopmentServer(
                         val selected = protocol.takeIf { it in LEGACY_PROTOCOLS } ?: LEGACY_PROTOCOLS.first()
                         JSONObject().put("protocolVersion", selected)
                             .put("capabilities", capabilities())
-                            .put("serverInfo", JSONObject().put("name", "hermit-device").put("version", BuildConfig.VERSION_NAME))
+                            .put("serverInfo", JSONObject().put("name", PLUGIN_ID).put("version", BuildConfig.VERSION_NAME))
                             .put("instructions", conciseServerInstructions())
                     }
                     "ping" -> JSONObject()
@@ -672,7 +678,7 @@ class AgentDevelopmentServer(
                 if (modern) {
                     result.put("resultType", "complete")
                     result.put("_meta", JSONObject().put("io.modelcontextprotocol/serverInfo",
-                        JSONObject().put("name", "hermit-device").put("version", BuildConfig.VERSION_NAME)))
+                        JSONObject().put("name", PLUGIN_ID).put("version", BuildConfig.VERSION_NAME)))
                 }
                 return json(200, JSONObject().put("jsonrpc", "2.0").put("id", id).put("result", result))
             } catch (error: RpcError) { return json(200, rpcError(id, error.code, error.message)) }

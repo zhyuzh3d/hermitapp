@@ -5,6 +5,7 @@ import json
 import hashlib
 import os
 from pathlib import Path
+import sys
 import tempfile
 import threading
 import unittest
@@ -120,6 +121,21 @@ class AgentHelperTest(unittest.TestCase):
                 self.assertEqual("./plugins/hermit-device", payload["plugins"][0]["source"]["path"])
                 helper.ensure_codex_marketplace(home / "plugins" / "hermit-device")
                 self.assertEqual(1, len(json.loads(marketplace.read_text())["plugins"]))
+
+    def test_plugin_identity_is_renamed_and_legacy_marketplace_entry_is_migrated(self):
+        self.assertEqual("hermit-dev-plugin", helper.PLUGIN_ID)
+        self.assertIn("hermit-device", helper.PLUGIN_IDS)
+        with tempfile.TemporaryDirectory() as temp:
+            home = Path(temp)
+            with patch("pathlib.Path.home", return_value=home):
+                legacy = helper.ensure_codex_marketplace(home / "plugins" / "hermit-device")
+                self.assertEqual("hermit-device", json.loads(legacy.read_text())["plugins"][0]["name"])
+                marketplace = helper.ensure_codex_marketplace(home / "plugins" / helper.PLUGIN_ID)
+                plugins = json.loads(marketplace.read_text())["plugins"]
+            self.assertEqual(["hermit-dev-plugin"], [item["name"] for item in plugins])
+            self.assertEqual("./plugins/hermit-dev-plugin", plugins[0]["source"]["path"])
+            with patch("pathlib.Path.home", return_value=home):
+                self.assertIsNone(helper.ensure_codex_marketplace(home / "plugins" / "unrelated-plugin"))
 
     def test_credentials_are_private_and_rotation_replaces_one_value(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -406,6 +422,45 @@ class AgentHelperTest(unittest.TestCase):
             self.assertIn("hermit_get_happ_dev_status", names)
             self.assertIn("hermit_hot_update_happ", names)
             self.assertNotIn("hermit_list_dev_files", names)
+
+
+    def test_doctor_caches_a_bounded_host_ledger_and_installs_nothing(self):
+        with tempfile.TemporaryDirectory() as temp:
+            ledger = helper.host_environment(config_root=temp)
+            ledger_file = Path(temp) / "host-environment.json"
+            self.assertEqual(str(ledger_file), ledger["ledgerFile"])
+            self.assertEqual(["host-environment.json"], sorted(entry.name for entry in Path(temp).iterdir()))
+            written = json.loads(ledger_file.read_text())
+            self.assertEqual(ledger["capabilities"], written["capabilities"])
+            self.assertEqual([name for name, _ in helper.HOST_CAPABILITIES],
+                             [entry["name"] for entry in ledger["capabilities"]])
+            self.assertEqual(sys.executable, ledger["interpreter"])
+            for entry in ledger["capabilities"]:
+                self.assertTrue(entry["purpose"])
+                self.assertEqual(entry["present"], bool(entry.get("path")))
+
+
+    def test_doctor_resolves_beyond_path_and_never_invents_a_version(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            working = root / "hermit-doctor-probe"
+            working.write_text("#!/bin/sh\necho probe 9.9.9\n")
+            working.chmod(0o755)
+            broken = root / "hermit-doctor-broken"
+            broken.write_text("#!/bin/sh\necho 'Unable to locate a runtime.' >&2\nexit 1\n")
+            broken.chmod(0o755)
+            capabilities = (("hermit-doctor-probe", "Probe a conventional directory"),
+                            ("hermit-doctor-broken", "Probe a command whose --version fails"))
+            with patch.object(helper, "host_bin_dirs", lambda: [root]), patch.object(helper, "HOST_CAPABILITIES", capabilities):
+                ledger = helper.host_environment(config_root=root / "cfg")
+            resolved, failing = ledger["capabilities"]
+            self.assertTrue(resolved["present"])
+            self.assertEqual(str(working), resolved["path"])
+            self.assertEqual(str(root), resolved["resolvedVia"])
+            self.assertEqual("probe 9.9.9", resolved["version"])
+            self.assertTrue(failing["present"])
+            self.assertIsNone(failing["version"])
+            self.assertIn("--version failed", failing["note"])
 
 
 if __name__ == "__main__": unittest.main()

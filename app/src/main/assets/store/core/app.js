@@ -37,19 +37,22 @@
   }
   $("#retryLibrary").onclick = start;
   addEventListener("hermitready", start);
-  document.addEventListener("visibilitychange", () => {
-    if (!document.hidden && connected && host.ready()) H.navigation.showView(state.view).catch(error => H.ui.say(error.message, true));
-  });
-  addEventListener("hermitresume", async () => {
-    if (!connected || !host.ready()) return;
-    try {
-      await H.features.library.refresh();
-      if (state.selected) {
-        state.selected = state.apps.find(app => app.appId === state.selected.appId) || state.selected;
-        if (H.features.manage && !$("#managePanel").classList.contains("hidden")) H.features.manage.renderManageDraft();
-      }
-    } catch (error) { H.ui.say(error.message || "桌面图标状态刷新失败，请重试。", true); }
-  });
+  // Returning to the foreground must not change what the user was looking at: the page was
+  // never unloaded, so the mounted view stays exactly as it was and only what can have
+  // changed while Hermit was away is re-read. The system signal and the Host signal mean the
+  // same thing, so a single return runs one pass instead of replaying the view twice.
+  let returning = null;
+  function resyncOnReturn() {
+    if (!connected || !host.ready()) return Promise.resolve();
+    if (!returning) returning = H.features.library.refresh().then(() => {
+      if (!state.selected) return;
+      state.selected = state.apps.find(app => app.appId === state.selected.appId) || state.selected;
+      if (H.features.manage && !$("#managePanel").classList.contains("hidden")) H.features.manage.renderManageDraft();
+    }).catch(error => { H.ui.say(error.message || "桌面图标状态刷新失败，请重试。", true); }).then(() => { returning = null; });
+    return returning;
+  }
+  document.addEventListener("visibilitychange", () => { if (!document.hidden) resyncOnReturn(); });
+  addEventListener("hermitresume", resyncOnReturn);
   if (host.ready()) start();
   else {
     H.navigation.showView(H.navigation.initialView(), false);

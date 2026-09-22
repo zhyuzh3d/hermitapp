@@ -50,6 +50,23 @@ test("backup contract excludes ambient trust state", () => {
   for (const excluded of ["webProfile", "cookies", "webStorage", "permissions", "developerTokens"]) assert.ok(source.includes(excluded));
 });
 
+test("a happ can back itself up but never chooses whose data leaves", () => {
+  const caps = JSON.parse(fs.readFileSync("api/capabilities.json", "utf8"));
+  const activity = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
+  const bridge = fs.readFileSync("app/src/main/assets/bridge/hermit-v1.js", "utf8");
+  assert.ok(caps.public.app.includes("backup"), "self-backup must stay a public app capability");
+  const start = activity.indexOf('"app.backup" ->');
+  const end = activity.indexOf('"system.language" ->');
+  assert.ok(start > 0 && end > start, "the public self-backup method must be dispatched");
+  const branch = activity.slice(start, end);
+  assert.match(branch, /requireApp\(app\)/, "the target instance must come from the calling session");
+  assert.doesNotMatch(branch, /params\./, "the caller must not be able to steer the export");
+  assert.match(branch, /createBackupDocument\(/, "the destination must come from the system picker");
+  assert.match(branch, /backup\.export\(target\.appId, uri\)/, "the unified single-happ export must do the packaging");
+  assert.match(branch, /developmentServer\.stop\(/, "an active deployment must stop before a consistent export");
+  assert.ok(bridge.includes(String.raw`app\.backup`), "the picker plus archive write needs the long bridge timeout");
+});
+
 test("all upstream free font assets referenced by the bundled CSS are present", () => {
   const root = "app/src/main/assets/shared/fontawesome";
   const css = fs.readFileSync(root + "/css/all.min.css", "utf8");
@@ -62,7 +79,7 @@ test("all upstream free font assets referenced by the bundled CSS are present", 
 test("agent catalog, guide snapshots and shared-password authority stay aligned", () => {
   const root = "app/src/main/assets/agent/";
   const tools = JSON.parse(fs.readFileSync(root + "tools.json", "utf8"));
-  const guide = fs.readFileSync(root + "hermit-device/SKILL.md", "utf8");
+  const guide = fs.readFileSync(root + "hermit-dev-plugin/SKILL.md", "utf8");
   const server = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/deploy/AgentDevelopmentServer.kt", "utf8");
   const discovery = server.slice(server.indexOf("private fun bootstrap()"), server.indexOf("private fun bootstrapHtml()"));
   assert.equal(new Set(tools.map(tool => tool.name)).size, 37);
@@ -100,7 +117,7 @@ test("agent catalog, guide snapshots and shared-password authority stay aligned"
   assert.match(discovery, /put\("nativeCodexPlugin", true\)/);
   assert.match(discovery, /atomic_replace_if_hash_differs/);
   assert.match(discovery, /register_mcp_then_authenticate/);
-  assert.match(discovery, /codex", "plugin", "add", "hermit-device@personal/);
+  assert.match(discovery, /codex", "plugin", "add", "\$PLUGIN_ID@personal/);
   assert.match(server, /ZipEntry\(name\)\.apply \{ time = 0L \}/);
   assert.match(server, /packageSha256/);
   assert.doesNotMatch(server, /\/pw\/|password.*(?:path|query|fragment)/i);
@@ -553,13 +570,48 @@ test("native HTTP supports session-bound incremental reads and logical file uplo
   assert.match(types, /interface HermitNetworkSocket/);
 });
 
+test("a page can push more bytes than one bridge message into the file store", () => {
+  const caps = JSON.parse(fs.readFileSync("api/capabilities.json", "utf8"));
+  const main = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
+  const store = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/data/FileStore.kt", "utf8");
+  const web = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/bridge/BridgeController.kt", "utf8");
+  const legacy = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/bridge/LegacyBridgeController.kt", "utf8");
+  const protocol = fs.readFileSync("api/protocol-v1.md", "utf8");
+  const types = fs.readFileSync("sdk/hermit-api.d.ts", "utf8");
+  assert.deepEqual(caps.public.files, ["import", "writeText", "beginWrite", "appendBytes", "finishWrite", "abortWrite", "readText", "list", "export", "delete", "share"]);
+  for (const call of ["beginWrite", "appendBytes", "finishWrite", "abortWrite"]) {
+    assert.match(main, new RegExp(`"files\\.${call}" -> requireApp\\(app\\)`), `${call} must be dispatched to the calling instance`);
+  }
+  assert.match(main, /files\.appendBytes\(session\.sessionId, it\.appId, session\.dataGeneration!!, params\.getString\("writeId"\), params\.getString\("chunkBase64"\)\)/);
+  // A handle belongs to the page session that opened it; a caller cannot name another one.
+  assert.match(store, /handle\.owner != owner \|\| handle\.appId != appId \|\| handle\.generation != generation/);
+  assert.match(store, /MAX_CHUNK_BYTES = 64 \* 1024/);
+  assert.match(store, /单个数据块超过 64 KiB/);
+  assert.match(store, /MAX_WRITES_PER_SESSION = 2/);
+  assert.match(store, /WRITE_IDLE_TTL_MS = 2 \* 60 \* 1000L/);
+  // The chunked write publishes through the same atomic rename as an inline import.
+  assert.match(store, /private fun commit\(appId: String, generation: String/);
+  assert.equal((store.match(/commit\(appId, generation/g) || []).length, 2, "import and chunked write must share one commit path");
+  // An oversized message is answered on its own request id instead of vanishing.
+  for (const controller of [web, legacy]) {
+    assert.match(controller, /MAX_MESSAGE_BYTES = 256 \* 1024/);
+    assert.match(controller, /oversizedRequestId\(/);
+    assert.match(controller, /ErrorCodes\.QUOTA, oversizedMessage\(size\)/);
+    assert.match(controller, /files\.beginWrite\/appendBytes\/finishWrite/);
+    assert.doesNotMatch(controller, /> MAX_MESSAGE_BYTES\) return/, "an over-limit message must not be dropped in silence");
+  }
+  assert.match(protocol, /answered with `E_QUOTA` on its own request id/);
+  assert.match(types, /beginWrite\(params: \{ name: string; mime\?: string \}\)/);
+  assert.match(types, /appendBytes\(params: \{ writeId: string; chunkBase64: string \}\)/);
+});
+
 test("system capability adapters are discoverable, permission-gated and foreground-bound", () => {
   const caps = JSON.parse(fs.readFileSync("api/capabilities.json", "utf8"));
   const manifest = fs.readFileSync("app/src/main/AndroidManifest.xml", "utf8");
   const main = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
   const bridge = fs.readFileSync("app/src/main/assets/bridge/hermit-v1.js", "utf8");
   const types = fs.readFileSync("sdk/hermit-api.d.ts", "utf8");
-  assert.equal(caps.apiMinor, 12);
+  assert.equal(caps.apiMinor, 13);
   assert.deepEqual(caps.public.appearance, ["reportTheme"]);
   assert.deepEqual(caps.public.tts, ["availability", "preferences", "voices", "languageAvailability", "speak", "stop", "export"]);
   assert.deepEqual(caps.public.speech, ["availability", "preferences", "languages", "start", "recognizeOnce", "stop", "cancel"]);
@@ -601,4 +653,28 @@ test("system capability adapters are discoverable, permission-gated and foregrou
   assert.match(fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/capability/SensorController.kt", "utf8"), /MAX_RATE_HZ = 60\.0/);
   assert.match(fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/capability/WifiController.kt", "utf8"), /directSavedNetworkChangesAllowed", false/);
   assert.match(fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/capability/InfraredController.kt", "utf8"), /MAX_TOTAL_US = 2_000_000L/);
+});
+
+test("the installed plugin identity is hermit-dev-plugin and the legacy name stays installable", () => {
+  const root = "app/src/main/assets/agent/";
+  const server = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/deploy/AgentDevelopmentServer.kt", "utf8");
+  const discovery = server.slice(server.indexOf("private fun bootstrap()"), server.indexOf("private fun bootstrapHtml()"));
+  const helper = fs.readFileSync(root + "hermit-agent.py", "utf8");
+  const guide = fs.readFileSync(root + "hermit-dev-plugin/SKILL.md", "utf8");
+  assert.match(server, /private const val PLUGIN_ID = "hermit-dev-plugin"/);
+  assert.match(server, /private const val LEGACY_PLUGIN_ID = "hermit-device"/);
+  assert.match(discovery, /put\("id", PLUGIN_ID\)/);
+  assert.match(discovery, /put\("replaces", JSONArray\(listOf\(LEGACY_PLUGIN_ID\)\)\)/);
+  assert.match(discovery, /put\("name", PLUGIN_ID\)/);
+  assert.match(discovery, /put\("target", "~\/plugins\/\$PLUGIN_ID"\)/);
+  assert.match(discovery, /skills\/\$PLUGIN_ID\/SKILL\.md/);
+  assert.match(server, /"skills\/\$PLUGIN_ID\/SKILL\.md" to guide\(\)/);
+  assert.match(server, /put\("mcpServers", JSONObject\(\)\.put\(PLUGIN_ID,/);
+  assert.match(helper, /^PLUGIN_ID = "hermit-dev-plugin"$/m);
+  assert.match(helper, /LEGACY_PLUGIN_IDS = \("hermit-device",\)/);
+  assert.match(helper, /plugin\.get\("id"\) not in PLUGIN_IDS/);
+  assert.match(helper, /default_target = \(Path\.home\(\) \/ "plugins" \/ PLUGIN_ID\)/);
+  assert.match(guide, /^name: hermit-dev-plugin$/m);
+  assert.ok(fs.existsSync(root + "hermit-dev-plugin/SKILL.md"));
+  assert.ok(!fs.existsSync(root + "hermit-device/SKILL.md"));
 });

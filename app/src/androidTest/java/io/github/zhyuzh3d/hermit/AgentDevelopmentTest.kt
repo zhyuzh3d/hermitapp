@@ -142,7 +142,7 @@ class AgentDevelopmentTest {
         assertTrue(discovery.getJSONArray("toolIndex").length() >= 26)
         assertTrue(discovery.getJSONArray("intentIndex").length() >= 5)
         assertTrue(discovery.getJSONObject("resourceDigests").has("webappGuide"))
-        assertEquals(200, request("/skills/hermit-device/SKILL.md", credential = null).first)
+        assertEquals(200, request("/skills/hermit-dev-plugin/SKILL.md", credential = null).first)
         assertEquals(200, request("/hermit-agent.py", credential = null).first)
         val initialized = rpc("initialize", JSONObject().put("protocolVersion", "2025-11-25").put("clientInfo", JSONObject().put("name", "test").put("version", "1")).put("capabilities", JSONObject()))
         assertEquals("2025-11-25", initialized.getString("protocolVersion"))
@@ -166,7 +166,7 @@ class AgentDevelopmentTest {
         val modernResult = JSONObject(modernResponse.second).getJSONObject("result")
         assertTrue(modernResult.getJSONArray("supportedVersions").toString().contains("2026-07-28"))
         assertEquals("complete", modernResult.getString("resultType"))
-        assertEquals("hermit-device", modernResult.getJSONObject("_meta")
+        assertEquals("hermit-dev-plugin", modernResult.getJSONObject("_meta")
             .getJSONObject("io.modelcontextprotocol/serverInfo").getString("name"))
         val notice = "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}".toByteArray()
         assertEquals(202, request("/mcp", "POST", notice).first)
@@ -194,7 +194,7 @@ class AgentDevelopmentTest {
         assertTrue(bootstrap.getJSONObject("plugin").getString("codexVersion").startsWith(bootstrap.getJSONObject("plugin").getString("version") + "+codex."))
         assertEquals("install_or_update", bootstrap.getJSONObject("install").getString("action"))
         assertEquals("codex-plugin-archive-v1", bootstrap.getJSONObject("install").getString("packageFormat"))
-        assertEquals("~/plugins/hermit-device", bootstrap.getJSONObject("install").getString("target"))
+        assertEquals("~/plugins/hermit-dev-plugin", bootstrap.getJSONObject("install").getString("target"))
         assertEquals("atomic_replace_if_hash_differs", bootstrap.getJSONObject("install").getString("strategy"))
         assertEquals("no_op", bootstrap.getJSONObject("install").getString("existingSameVersion"))
         assertEquals("register_mcp_then_authenticate", bootstrap.getJSONObject("install").getString("afterInstall"))
@@ -225,7 +225,7 @@ class AgentDevelopmentTest {
         }
         assertTrue(entries.contains(".codex-plugin/plugin.json"))
         assertTrue(entries.contains(".mcp.json"))
-        assertTrue(entries.contains("skills/hermit-device/SKILL.md"))
+        assertTrue(entries.contains("skills/hermit-dev-plugin/SKILL.md"))
         assertEquals(bootstrap.getJSONObject("plugin").getString("codexVersion"), codexManifest!!.getString("version"))
     }
 

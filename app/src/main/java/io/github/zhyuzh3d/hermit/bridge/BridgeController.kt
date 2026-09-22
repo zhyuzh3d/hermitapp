@@ -45,7 +45,16 @@ class BridgeController(
     override fun install() {
         WebViewCompat.addWebMessageListener(webView, TRANSPORT_NAME, setOf(session.origin)) { _, message, sourceOrigin, isMainFrame, replyProxy ->
             val text = message.data ?: return@addWebMessageListener
-            if (text.toByteArray().size > MAX_MESSAGE_BYTES) return@addWebMessageListener
+            val size = text.toByteArray().size
+            if (size > MAX_MESSAGE_BYTES) {
+                // Dropping this silently would leave the page waiting for its own
+                // client timeout with nothing to act on. Answering the request id
+                // makes the cap observable, so the page can switch to the chunked
+                // file channel instead of retrying the same oversized message.
+                Log.w(TAG, "Bridge message of $size bytes exceeds the $MAX_MESSAGE_BYTES byte cap")
+                replyError(replyProxy, oversizedRequestId(text), ErrorCodes.QUOTA, oversizedMessage(size))
+                return@addWebMessageListener
+            }
             if (exceedsNestingLimit(text)) {
                 replyError(replyProxy, null, ErrorCodes.INVALID_ARGUMENT, "消息嵌套层级过深")
                 return@addWebMessageListener
@@ -208,6 +217,25 @@ class BridgeController(
     private fun safePost(proxy: JavaScriptReplyProxy, message: String) {
         runCatching { proxy.postMessage(message) }
     }
+
+    /**
+     * A message that is too large to accept is also too large to parse freely, so
+     * the request ID is read from the only position it can occupy: the envelope
+     * writes `id` before any parameter, and a JSON string value can never contain
+     * a bare `"id":"` because its own quotes would be escaped.
+     */
+    private fun oversizedRequestId(text: String): String? {
+        val marker = "\"id\":\""
+        val start = text.indexOf(marker)
+        if (start < 0) return null
+        val from = start + marker.length
+        val end = text.indexOf('"', from)
+        if (end < 0 || end - from > 128) return null
+        return text.substring(from, end).takeIf { it.isNotBlank() }
+    }
+
+    private fun oversizedMessage(size: Int) =
+        "消息有 ${size / 1024} KiB，超过宿主单次请求上限 256 KiB；请改用 files.beginWrite/appendBytes/finishWrite 分块写入"
 
     private fun exceedsNestingLimit(value: String): Boolean {
         var depth = 0

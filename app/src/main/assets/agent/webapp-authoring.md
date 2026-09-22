@@ -87,7 +87,7 @@ save.onclick = async () => {
 
 Hermit 把每次安装展开为只读 release，更新先生成新 release 再原子切换，并至少保留前一版供回退。包代码不能写入自身目录；动态文件使用 `hermit.files`，结构化数据使用 `hermit.data`。可选的 `hermit.sig` 只证明同一发布公钥的版本连续性，不自动取得任何权限。
 
-必须同时保留 `hermitready` 监听和即时 `isReady` 检查：现代 WebView 会在文档起始阶段提供 API，旧 WebView 的线上实时页面可能要等首次加载完成后才收到兼容注入。不要在脚本第一行无条件调用 `hermit`。网页 Cookie/WebStorage 使用共享资料空间并遵守同源规则；旧式桥接模式另外不能保证 iframe 级 Bridge 隔离。页面可通过 `hermit.runtime.info()` 的 `runtimeMode` 判断本地或实时运行，通过 `bridgeMode`、`siteDataPolicy` 和 `isolatedProfiles` 解释宿主兼容环境。happ 可以调用 `hermit.app.setRuntimeMode({ runtimeMode: "local" | "live" })` 切换自己的运行方式；宿主只接受当前实例已经具备的本地 release 或 `liveUrl`，切换结果写入 Registry 并重新加载当前实例。
+必须同时保留 `hermitready` 监听和即时 `isReady` 检查：现代 WebView 会在文档起始阶段提供 API，旧 WebView 的线上实时页面可能要等首次加载完成后才收到兼容注入。不要在脚本第一行无条件调用 `hermit`。网页 Cookie/WebStorage 使用共享资料空间并遵守同源规则；旧式桥接模式另外不能保证 iframe 级 Bridge 隔离。页面可通过 `hermit.runtime.info()` 的 `runtimeMode` 判断本地或实时运行，通过 `bridgeMode`、`siteDataPolicy` 和 `isolatedProfiles` 解释宿主兼容环境。happ 可以调用 `hermit.app.setRuntimeMode({ runtimeMode: "local" | "live" })` 切换自己的运行方式；宿主只接受当前实例已经具备的本地 release 或 `liveUrl`，切换结果写入 Registry 并重新加载当前实例。happ 也可以用 `hermit.app.backup()` 备份自己：宿主先让用户用系统文件选择器确定保存位置，再按应用库单应用备份的同一格式整包导出记录、文件、本地代码和自定义图标，结果返回 `cancelled`、`fileName` 和导出字节数。它只处理调用方自己的实例，不能指定 appId，也不接受其他参数。
 
 happ 需要按 Android 系统语言选择自身支持的界面语言时，调用 `hermit.system.language()`。返回的 `languageTag` 是当前首选 BCP-47 标签，`language`、`script`、`region` 是便于匹配的拆分字段，`preferredLanguages` 按系统优先级排列。该接口每次调用都读取当前系统事实，不需要权限，也不替 happ 保存手动覆盖项。页面应先匹配完整 `languageTag`，再匹配基础 `language`，最后回退自己的默认语言；例如只支持中英文时可将 `language === "zh"` 选为中文，其余统一回退英文。用户在 happ 内手动选定语言后，应由 happ 自己保存并优先使用该选择。
 
@@ -154,7 +154,7 @@ document.body.append(hermit.icons.create('heart', { style: 'regular', label: '�
 
 Hermit 提供全应用“智能体开发模式”：在 HermitUI 的开发 Tab 开启，向可信智能体提供手机显示的局域网 HTTP 基址和六位数字密码；没有 Wi-Fi 时可仅启动 USB 服务并执行 `adb forward tcp:8766 tcp:8766`。局域网和 USB 使用同一套接口、同一个密码和同一份开发数据。所有电脑共用密码，不配对、不绑定电脑或客户端；修改密码后旧密码立即失效。密码只用于 Hermit 已开放的开发管理接口，不替代系统和逐应用能力授权。局域网 HTTP 未加密，只适用于可信网络，不应公网暴露。
 
-访问无需密码的根地址获取 Bootstrap；智能体先以 `Accept: application/json` 请求一次 `/`，按 `install.packageSha256` 安装或更新原生 `hermit-device` Codex 插件，再按 `install.mcpRegistration` 注册 MCP。`/.well-known/hermit-agent` 是同一清单的缓存别名，`/mcp` 是标准 Streamable HTTP 接口，`/skills/hermit-device/SKILL.md` 是随 APK 更新的动态指南。未带认证访问受保护接口时，服务以结构化 401 返回发现地址、说明地址和 `Authorization: Bearer <password>` 模板，智能体据此向用户索取当前密码；密码不得放入 URL 路径、查询参数、fragment、页面、Skill、日志或仓库。不能安装原生插件的客户端使用声明的 Skill/helper fallback 或直接连接 MCP；服务同时提供无需第三方 Python 库的 HTTP/stdio 助手。
+访问无需密码的根地址获取 Bootstrap；智能体先以 `Accept: application/json` 请求一次 `/`，按 `install.packageSha256` 安装或更新原生 `hermit-dev-plugin` Codex 插件，再按 `install.mcpRegistration` 注册 MCP。`/.well-known/hermit-agent` 是同一清单的缓存别名，`/mcp` 是标准 Streamable HTTP 接口，`/skills/hermit-dev-plugin/SKILL.md` 是随 APK 更新的动态指南。未带认证访问受保护接口时，服务以结构化 401 返回发现地址、说明地址和 `Authorization: Bearer <password>` 模板，智能体据此向用户索取当前密码；密码不得放入 URL 路径、查询参数、fragment、页面、Skill、日志或仓库。不能安装原生插件的客户端使用声明的 Skill/helper fallback 或直接连接 MCP；服务同时提供无需第三方 Python 库的 HTTP/stdio 助手。
 
 HermitUI 仍不是可写开发目标，但它是页面调度的受保护例外。只要全局智能体开发服务已开启、调用方通过密码授权且 HermitUI 正在前台，智能体就能调用 `hermit_get_page_state` 获取其白名单快照，并调用 `hermit_reload_shell` 刷新。传入 `runtimeMode: "online"` 可选择官方实时页面，普通进程重启保留该选择，APK 替换则按恢复机制回到内置 UI。HermitUI 不接收任意 JavaScript；刷新后只由 APK 调用官方固定的 `window.hermitDevState.restore(state)`，也不开放 HermitUI 文件。
 
@@ -206,6 +206,28 @@ await hermit.notifications.schedule({
 有 `liveUrl` 的 happ 可以用 `notifications.setEndpoint({ endpoint: '/api/hermit/notifications' })` 登记严格同源的 HTTP(S) 地址。Hermit 最低每 15 分钟统一 GET 一次，也会在登记时触发一次补查；请求只携带该 Origin Cookie 中名为 `notify-token` 的字段。响应只接受 `notifications`、`cancel` 与 `cursor` 数据，不执行代码。纯本地 happ、跨 Origin 和本机回环地址不能登记 endpoint。
 
 业务数据建议用 `hermit.data` / `hermit.files`，代码更新不会清除这些数据。Hermit 的文件采用本地对象存储：内容落在宿主文件系统，数据库和接口只保留 `logicalFileId`、`url`、摘要等元数据；`hermit.files.pickImage()` 使用 Android 照片选择器并返回持久化的 `HermitFile`（可直接使用其 `url`），不会返回或持久化 Base64。`hermit.files.import({ accept: "video/*" })` 可将用户选择的大文件保存为逻辑文件，视频缩略图也作为独立文件对象返回。只有明确调用 `hermit.files.pickInline()` 选择不超过调用方上限的小文件时，才会返回临时 data URL；它适合提交给 ASR 等必须内联的协议，不应写入 `hermit.data`。`hermit.files.readText()` 默认只内联 256 KiB，处理模型返回的较大 JSON 时可显式传 `maxBytes`，宿主最高限制为 8 MiB。页面使用相机、定位等能力仍须经过逐应用授权与相应 Android 系统授权。图标资源不涉及敏感权限。
+
+宿主接受单条消息的硬上限是 256 KiB，超过该值只回 `E_QUOTA` 而不执行任何动作。所以页面自己生成的、可能超过 256 KiB 的字节不能再塞进一次调用：改用 `hermit.files.beginWrite({ name, mime })` 取得 `writeId` 和 `maxChunkBytes`，用 `hermit.files.appendBytes({ writeId, chunkBase64 })` 逐块提交不超过 64 KiB 的 Base64（每次返回累计 `receivedBytes` 便于显示进度），最后 `hermit.files.finishWrite({ writeId })` 原子提交并得到 `HermitFile`；中途放弃就调用 `hermit.files.abortWrite({ writeId })`。写入句柄只属于创建它的页面会话，切页后不能续写，长时间无进展的句柄会被宿主回收。分块写入只负责把字节落到文件库，随后的传输仍由 `network.request` 的 `bodyLogicalFileId` 或 `multipart` 完成，单文件上限 64 MiB、单应用总量 256 MiB。
+
+```js
+const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+const bytes = new Uint8Array(await blob.arrayBuffer());
+const write = await hermit.files.beginWrite({ name: 'sketch.png', mime: 'image/png' });
+try {
+  for (let at = 0; at < bytes.length; at += write.maxChunkBytes) {
+    const slice = bytes.subarray(at, at + write.maxChunkBytes);
+    let binary = '';
+    for (const byte of slice) binary += String.fromCharCode(byte);
+    const progress = await hermit.files.appendBytes({ writeId: write.writeId, chunkBase64: btoa(binary) });
+    console.log(progress.receivedBytes, '/', bytes.length);
+  }
+  const file = await hermit.files.finishWrite({ writeId: write.writeId });
+  await hermit.network.request({ url: 'https://example.com/upload', method: 'POST', contentType: file.mime, bodyLogicalFileId: file.logicalFileId });
+} catch (error) {
+  await hermit.files.abortWrite({ writeId: write.writeId }).catch(() => {});
+  throw error;
+}
+```
 
 跨域流式响应使用 `network.openStream/readStream/closeStream`。`openStream` 与 `network.request` 接受同样的 URL、方法、Header 和超时设置，也接受 `bodyLogicalFileId` 或由文本与逻辑文件组成的 `multipart`；宿主逐 Origin 授权，跨 Origin 重定向会移除凭据。页面应循环读取不超过 64 KiB 的 Base64 字节块，并在取消、离开当前任务或解析失败时调用 `closeStream`。流 ID 只属于创建它的页面会话，页面退出后宿主自动关闭。
 

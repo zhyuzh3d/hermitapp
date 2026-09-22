@@ -1,6 +1,7 @@
 package io.github.zhyuzh3d.hermit.bridge
 
 import android.annotation.SuppressLint
+import android.util.Log
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import io.github.zhyuzh3d.hermit.model.ErrorCodes
@@ -37,7 +38,17 @@ class LegacyBridgeController(
     private val transport = object {
         @JavascriptInterface
         fun postMessage(message: String?) {
-            if (message == null || message.toByteArray().size > MAX_MESSAGE_BYTES) return
+            if (message == null) return
+            val size = message.toByteArray().size
+            if (size > MAX_MESSAGE_BYTES) {
+                // Same reasoning as the WebMessage path: a silent drop would hide
+                // the cap behind the page's own timeout.
+                Log.w(TAG, "Bridge message of $size bytes exceeds the $MAX_MESSAGE_BYTES byte cap")
+                webView.post {
+                    if (session.alive) replyError(oversizedRequestId(message), ErrorCodes.QUOTA, oversizedMessage(size))
+                }
+                return
+            }
             webView.post { if (session.alive) handle(message) }
         }
     }
@@ -186,6 +197,25 @@ class LegacyBridgeController(
             .toString())
     }
 
+    /**
+     * A message that is too large to accept is also too large to parse freely, so
+     * the request ID is read from the only position it can occupy: the envelope
+     * writes `id` before any parameter, and a JSON string value can never contain
+     * a bare `"id":"` because its own quotes would be escaped.
+     */
+    private fun oversizedRequestId(text: String): String? {
+        val marker = "\"id\":\""
+        val start = text.indexOf(marker)
+        if (start < 0) return null
+        val from = start + marker.length
+        val end = text.indexOf('"', from)
+        if (end < 0 || end - from > 128) return null
+        return text.substring(from, end).takeIf { it.isNotBlank() }
+    }
+
+    private fun oversizedMessage(size: Int) =
+        "消息有 ${size / 1024} KiB，超过宿主单次请求上限 256 KiB；请改用 files.beginWrite/appendBytes/finishWrite 分块写入"
+
     private fun exceedsNestingLimit(value: String): Boolean {
         var depth = 0
         var quoted = false
@@ -210,6 +240,7 @@ class LegacyBridgeController(
 
     companion object {
         const val NATIVE_NAME = "__hermitLegacyNativeV1"
+        private const val TAG = "HermitLegacyBridge"
         private const val MAX_MESSAGE_BYTES = 256 * 1024
         private const val MAX_IN_FLIGHT = 16
         private const val MAX_JSON_DEPTH = 16
