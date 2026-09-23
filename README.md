@@ -4,12 +4,7 @@ HermitApp 是一个面向 Android 的 happ 容器：它直接运行 HTML、CSS�
 
 当前构建版本为 `1.10.45`（versionCode `79`），官网下载页当前提供 `1.10.45`（versionCode `79`）。版本号由 `scripts/build-release.sh` 在正式构建时通过 `-PhermitVersionName` / `-PhermitVersionCode` 注入，`app/build.gradle.kts` 里的值只是缺省回退，不能当成发布版本读。包名为 `io.github.zhyuzh3d.hermit`，最低支持 Android 10 / API 29，compileSdk 与 targetSdk 为 37。系统语音识别语言目录通过 `speech.languages()` 从当前 Android 识别服务读取；系统 TTS 的可选语言和音色也来自当前引擎，不再声明未经运行时确认的候选。HermitUI 固定使用竖屏；其他 happ 仍可在 `hermit.json.display` 中独立声明竖屏、横屏或跟随设备，以及键盘布局策略。HermitUI 会在应用启动和恢复前台时读取 Android 固定快捷方式状态，使 happ 卡片图钉与桌面图标状态保持同步；回到前台只重读会变的数据，不重建正在看的页面，关闭后重新打开则从首页开始。开发服务可读取当前 HermitUI 的白名单界面快照并在原 WebView 中刷新，再调用固定函数恢复界面；普通 happ 只有当前运行 DEV 副本且 `appId` 精确匹配时才能读取快照、刷新和执行刷新后脚本。APK 替换会恢复内置 UI。MCP 初始化指令、动态 Skill 和连接入口统一要求智能体采用最小相关测试、增量同步和原位刷新，并把 Android 10、较旧厂商 WebView 及 Hermit Bridge 已公开系统能力作为推荐兼容基线；这些属于开发建议，宿主不扫描或核定 happ 代码。智能体每轮写入前只读取一次前台运行目标；目标不是所需 DEV happ 时，`hermit_enter_dev_mode` 会创建或复用开发副本、切换运行通道并打开它，避免重复检查全局开发开关和重复调度状态接口。
 
-Hermit 项目由两个同级独立仓库组成：
-
-- `hermitapp/`：Android 宿主，本仓库只推送到 `git@github.com:zhyuzh3d/hermitapp.git`。
-- `hermitweb/`：官网与 HermitUI，只推送到 `git@github.com:zhyuzh3d/hermitweb.git`。
-
-HermitUI 是 HermitApp 默认加载、并拥有宿主管理权限的官方 happ。它的源码位于 HermitWeb 的 `public/shell/`；本仓库 `app/src/main/assets/store/` 只保存随 APK 分发的同步快照。
+HermitUI 是 HermitApp 默认加载、并拥有宿主管理权限的官方 happ —— 打开应用看到的就是它。它随 APK 一起分发，本仓库 `app/src/main/assets/store/` 保存的就是随包发布的快照，用户侧不需要再安装任何界面。
 
 ## 下载与站点
 
@@ -17,7 +12,8 @@ HermitUI 是 HermitApp 默认加载、并拥有宿主管理权限的官方 happ�
 - Android：[下载页](https://hermit.airen.life/pages/download.html)提供最新正式版 APK；[使用指南](https://hermit.airen.life/pages/guide.html)覆盖添加应用、权限授予和智能体开发模式。
 - 应用广场：<https://hermit.airen.life/pages/happs.html> 是 happ 的唯一官方展示入口，每个 happ 都带二维码与官方安装清单地址。二维码内容是 `hermit://add?url=<安装清单地址>`，扫码直接唤起 Hermit 的添加流程。
 - 已上架 happ：[chataxi](https://chataxi.airen.life/)（真人感语音对话与多角色群聊）、[VibeDraw](https://vibedraw.airen.life/)（实时 AI 绘图）。两个站点都先引导安装 HermitApp，再添加对应 happ；happ 不能脱离宿主单独安装。
-- 源码仓库：宿主 [zhyuzh3d/hermitapp](https://github.com/zhyuzh3d/hermitapp)、官网与 HermitUI [zhyuzh3d/hermitweb](https://github.com/zhyuzh3d/hermitweb)、happ [zhyuzh3d/chataxi](https://github.com/zhyuzh3d/chataxi) 与 [zhyuzh3d/vibedraw](https://github.com/zhyuzh3d/vibedraw)。
+- 源码仓库：[zhyuzh3d/hermitapp](https://github.com/zhyuzh3d/hermitapp)，以及两个 happ 仓库 [zhyuzh3d/chataxi](https://github.com/zhyuzh3d/chataxi) 与 [zhyuzh3d/vibedraw](https://github.com/zhyuzh3d/vibedraw)。
+- 安装包：[Releases](https://github.com/zhyuzh3d/hermitapp/releases) 提供最新正式版 APK 与校验文件，可以直接下载。
 
 ## 核心模型
 
@@ -110,7 +106,7 @@ export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
 ./scripts/quick-check.sh android
 ```
 
-HermitUI 必须先在同级 HermitWeb 修改，再同步快照：
+HermitUI 的源码不在本仓库。上游改好并发布之后，再把快照同步进来 —— 不要直接改本仓库里的快照：
 
 ```sh
 node tools/sync-shell-assets.mjs
