@@ -5,7 +5,7 @@
 > 官网：<https://hermit.airen.life/> · [下载 Android 安装包](https://hermit.airen.life/pages/download.html) · [使用指南](https://hermit.airen.life/pages/guide.html) · [应用广场](https://hermit.airen.life/pages/happs.html) · [GitHub Releases](https://github.com/zhyuzh3d/hermitapp/releases) · [MIT License](./LICENSE)
 
 - 包名：`life.airen.hermit`
-- 当前源码版本：`1.11.0`(versionCode `80`),由 `app/build.gradle.kts` 决定
+- 当前源码版本：`1.11.1`(versionCode `81`),由 `app/build.gradle.kts` 决定
 - 运行要求：Android 10 及以上(minSdk 29),无需 Google Play 服务
 - 形态：Kotlin + Gradle(Android 宿主 APK),页面侧为原生 HTML / CSS / JavaScript
 

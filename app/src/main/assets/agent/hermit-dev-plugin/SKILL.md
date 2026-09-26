@@ -54,9 +54,35 @@ It writes `host-environment.json` into the helper's config directory and prints 
 Every entry ends at its stated criterion. Stop there.
 
 - Connect and prepare: one authenticated call, then one `hermit_enter_dev_mode` for the target when it is not already the foreground DEV runtime. Done when the call answers.
-- Change a happ page: edit, then one `develop-dir` or `sync-dir` (or `hermit_hot_update_happ`). Done when the sync reports `render=rendered` and the page shows the change. Packaging and version bumping are a separate request, not part of this loop.
+- Change a happ page: edit, then one `develop-dir` or `sync-dir` (or `hermit_hot_update_happ`). Done when the sync reports `render=rendered` and the page shows the change. Every completed update also raises the third segment of the happ version and keeps image bytes out of the database — see Standing rules below. Packaging a release ZIP is a separate request, not part of this loop.
 - Verify a visual change: read `hermit_get_page_state` (`hermit_capture_screen` only when the developer asks to see it). Done when that reading proves the specific change.
 - Promote a stable release: on an explicit request only, then one `update-dir`. Done when it reports the installed version and `launchChannel=stable`.
+
+## Standing rules for every completed update
+
+Three things belong to every task that changes a happ or this plugin, whether or not the task asked for them. Do them without being reminded, and say so in the report.
+
+**1. Raise the third version segment.** Make the last edit of an update go to `hermit.json`: the third segment of `version.name` +1 (`0.1.21` → `0.1.22`, `1.4.9` → `1.4.10`), plus one on `version.code` so it stays monotonic. That is the number the developer reads on the device to tell one update from the next, so an update that leaves it unchanged is not finished. This bump is part of the page-edit loop; it is not packaging, and it never means build or publish a release ZIP.
+
+**2. Keep image and media bytes out of the database.** When a happ stores an image, put the bytes into host file storage and persist only the reference:
+
+```js
+const picked = await hermit.files.pickImage();   // Android photo picker, returns a persistent HermitFile
+if (!picked.cancelled) {
+  await hermit.data.put({
+    collection: 'photos', key: id,
+    value: { file: picked.url, mime: picked.mime, size: picked.size, sha256: picked.sha256 }
+  });
+}
+```
+
+- `hermit.files.pickImage()` returns a persistent `HermitFile` — `logicalFileId`, `url`, `mime`, `size`, `sha256` — whose `url` can be stored and rendered directly. Use `hermit.files.import({ accept })` for a larger user-chosen file, and `beginWrite` / `appendBytes` / `finishWrite` for bytes the page generated.
+- What goes into `hermit.data` is the `logicalFileId` / `url` and its metadata. Never a Base64 string, a data URL or a raw byte blob — no matter how small the image looks, and never as a shortcut for "it is only a thumbnail".
+- `hermit.files.pickInline()` is the one call that returns a temporary data URL, and it exists only for protocols that must inline bytes (ASR, for example). Its result must never reach `hermit.data`.
+- One message is capped at 256 KiB and anything larger fails with `E_QUOTA` without doing anything — a second reason image bytes do not belong in a database call.
+- Host file storage also survives code updates and keeps database rows small; a Base64 column grows every row it touches.
+
+**3. A plugin update only ships as a new host version.** This document travels inside the plugin package the Hermit host generates at `GET /plugin/hermit-dev-plugin`, and that package's version is the host's own `versionName` — its bytes come from the host's `assets/agent/` tree at request time. Editing this file therefore changes nothing on any device by itself: a plugin update means raising the third segment of the host `versionName` (with `versionCode`) together, refreshing the source-version line, then rebuilding and redeploying the host. Version and document must never drift apart.
 
 ## Local workspace
 

@@ -10,8 +10,8 @@ android {
         applicationId = "life.airen.hermit"
         minSdk = 29
         targetSdk = 37
-        versionCode = providers.gradleProperty("hermitVersionCode").orNull?.toInt() ?: 80
-        versionName = providers.gradleProperty("hermitVersionName").orNull ?: "1.11.0"
+        versionCode = providers.gradleProperty("hermitVersionCode").orNull?.toInt() ?: 81
+        versionName = providers.gradleProperty("hermitVersionName").orNull ?: "1.11.1"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true
