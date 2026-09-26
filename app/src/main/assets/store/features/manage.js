@@ -4,7 +4,7 @@
   const { $, $$, state, host } = H;
   const { say, busy, bind, open, close, confirmAction } = H.ui;
   const { hasLocal, hasLive, sourceLabel, runtimeLabel, refresh, resetFilters, pin, renderPinButton } = H.features.library;
-  const capabilityLabels = { "camera.capture": "拍照", "microphone.record": "麦克风录音", speech: "语音识别", "location.approximate": "大致位置", "location.precise": "精确位置", "clipboard.read": "读取剪贴板", network: "网络请求", notifications: "发送通知" };
+  const capabilityLabels = { "camera.capture": "拍照", "microphone.record": "麦克风录音", speech: "语音识别", "location.approximate": "大致位置", "location.precise": "精确位置", "clipboard.read": "读取剪贴板", "screen.capture": "截屏", "screen.record": "录屏", network: "网络请求", notifications: "发送通知" };
   let releaseState = { appId:null, result:null, visible:10 };
 
   /** The freshest instance for the open panel: every control acts on this one. */

@@ -21,7 +21,7 @@ test -z "$(git -C "$ROOT" status --porcelain --untracked-files=normal)" || {
 test ! -e "$OUT" || { echo "Refusing to overwrite versioned release directory: $OUT" >&2; exit 1; }
 
 BADGING=$($AAPT dump badging "$RELEASE_SOURCE")
-printf '%s\n' "$BADGING" | grep -q "package: name='io.github.zhyuzh3d.hermit'"
+printf '%s\n' "$BADGING" | grep -q "package: name='life.airen.hermit'"
 printf '%s\n' "$BADGING" | grep -q "versionName='$VERSION'"
 VERSION_CODE=$(printf '%s\n' "$BADGING" | sed -n "s/^package:.*versionCode='\([^']*\)'.*/\1/p" | head -n 1)
 CERT_SHA256=$($APKSIGNER verify --print-certs "$RELEASE_SOURCE" | sed -n 's/^.*certificate SHA-256 digest: //p' | head -n 1 | tr '[:lower:]' '[:upper:]')
@@ -53,7 +53,7 @@ const manifest = {
   builtAt: e.BUILT_AT,
   sourceCommit: e.SOURCE_COMMIT,
   sourceTreeClean: true,
-  applicationId: 'io.github.zhyuzh3d.hermit',
+  applicationId: 'life.airen.hermit',
   versionName: e.VERSION,
   versionCode: Number(e.VERSION_CODE),
   sdk: { min: 29, target: 37, compile: 37 },
@@ -92,7 +92,7 @@ const sbom = {
   bomFormat: 'CycloneDX', specVersion: '1.5', version: 1,
   metadata: {
     timestamp: e.BUILT_AT,
-    component: { type: 'application', name: 'Hermit', version: e.VERSION, 'bom-ref': `pkg:generic/io.github.zhyuzh3d.hermit@${e.VERSION}`, purl: `pkg:generic/io.github.zhyuzh3d.hermit@${e.VERSION}` },
+    component: { type: 'application', name: 'Hermit', version: e.VERSION, 'bom-ref': `pkg:generic/life.airen.hermit@${e.VERSION}`, purl: `pkg:generic/life.airen.hermit@${e.VERSION}` },
     properties: [{ name: 'hermit:sourceCommit', value: e.SOURCE_COMMIT }],
   },
   components,

@@ -21,7 +21,7 @@ HermitApp 是个人 Android 页面应用工作台：把用户自己制作、维�
 | 页面开发原则 | 纯原生 HTML + JavaScript + CSS 直接编写，无框架、无构建前置依赖；应用库、示例、教程与验收使用相同模式 |
 | 第三方工具边界 | 不为 React/Vue 等框架或 Vite/Webpack 等工具增加专属支持；已生成的静态产物可按普通页面添加，不检测或拒绝其框架来源 |
 | 公共图标 | 完整 Font Awesome Free 7.3.1 离线字体/CSS；不包含 Pro；页面直接使用 HTML 图标类名，无需 npm/CDN |
-| Android 身份 | release 的 applicationId 与 namespace 均为 `io.github.zhyuzh3d.hermit` |
+| Android 身份 | release 的 applicationId 与 namespace 均为 `life.airen.hermit` |
 | 主导航 | 收藏、全部、开发、设置、支持五个等宽入口；收藏是应用属性，不复制实例 |
 | 桌面入口 | Hermit 主图标进入内置应用库；Web App 快捷方式携带稳定 appId |
 | 扫码添加 | 收藏与全部均使用 APK 内置离线解码器识别 URL；不依赖 Google Play 服务或运行时下载；识别后只预填表单，仍需用户确认 |
@@ -170,8 +170,8 @@ Capacitor 官方仍把 `server.url` 描述为开发 live reload 用途。这里�
 
 | 项目 | 初始锁定目标 |
 | --- | --- |
-| release applicationId / namespace | `io.github.zhyuzh3d.hermit` |
-| debug applicationId | `io.github.zhyuzh3d.hermit.debug`，可与 release 并存，不参与正式升级链 |
+| release applicationId / namespace | `life.airen.hermit` |
+| debug applicationId | `life.airen.hermit.debug`，可与 release 并存，不参与正式升级链 |
 | minSdk / compileSdk / targetSdk | 29 / 37 / 37 |
 | JDK / AGP / Gradle | JDK 17 / AGP 9.1.1 / Gradle 9.3.1 |
 | AndroidX WebKit | 1.17.0，实际能力仍逐项检测 |
@@ -384,10 +384,13 @@ Hermit 不再自创“仅本次”级别；grant 按 `instanceId + capability + 
 | 震动、剪贴板写入、电池/网络状态 | 自动允许，限制频率；剪贴板写入需明确交互 | 按 Adapter 实际所需 |
 | 选择文件、分享、系统拍照 | 允许发起可信系统 UI，用户可取消 | SAF/授权 URI；系统 Camera Intent 不为此预申请 CAMERA |
 | 语音识别、定位、剪贴板读取 | 按实例首次询问 | 麦克风/精度等实际需求 |
+| 截屏、录屏 | 按实例首次询问；录屏每次还需系统投屏同意，该同意不记忆 | MediaProjection 同意（每次）；录麦克风时另需 RECORD_AUDIO |
 | Native 网络请求 | 按实例与明确目标 Origin 询问，默认无目标 | INTERNET；局域网按系统版本另检查 |
 | 安装、删除、授权管理、开发连接 | Store 角色专属 | 不向普通 Web App 暴露 |
 
 系统授权 UI 由串行 PermissionBroker 协调，最多一个系统弹窗；返回时核对原 instanceId、session 和 documentEpoch。Android 可能已经授予整个 APK 权限，但页面已离开时不能把结果误发或授予新页面。
+
+截屏与录屏多一层用户当面同意：Hermit grant 按实例持久化，而 Android 的投屏同意（MediaProjection）每次调用都要用户重新确认，且宿主不缓存、不复用该同意。这两个同意语义不同，不能互相替代 —— 已授予的 Hermit grant 只是省去 Hermit 自己的弹窗，系统投屏弹窗仍然出现。投屏会话由 `foregroundServiceType="mediaProjection"` 的前台服务持有，因此录屏可以跨页面后台继续，而 Hermit 自己的录音能力仍只在前台存活。受平台限制，一次投屏同意只允许建立一个虚拟显示，所以录制进行中不能同时截屏。
 
 Android Manifest 只声明实际实现所需权限与组件。语音使用 RECORD_AUDIO；定位和 Wi-Fi 扫描使用 coarse/fine；Android 12+ 蓝牙使用 nearby scan/connect，Android 13+ Wi-Fi 连接使用 nearby Wi-Fi，计步使用 ACTIVITY_RECOGNITION；红外仅声明普通 TRANSMIT_IR。TTS/识别/拍照按需配置 package visibility；FileProvider 仅暴露专用分享目录；不申请 all-files、后台位置或传感器高采样率权限。
 
@@ -438,6 +441,7 @@ v1 将网页可调用的任意 SQL 收敛为 `hermit.data` 的键控 JSON 记录
 | location | getCurrent、watch、clearWatch | 前台、精度/超时/最大缓存年龄明确，后台停止 watch |
 | sensors | availability、watch、clearWatch | 逐传感器硬件事实；方向由旋转向量计算；最高 60 Hz；后台释放 |
 | camera | capturePhoto、torchStatus、setTorch | 系统 Camera Intent + FileProvider；闪光灯另行授权；取消清临时文件 |
+| screen | availability、capture、startRecording、stopRecording、cancelRecording | 抓取整个设备屏幕（含其他应用）；每次需系统投屏同意；录屏由 `mediaProjection` 前台服务持有，页面退到后台不中断；一次同意只允许一个虚拟显示，故录制中不能截屏；产物导入当前实例文件库 |
 | shell QR | CameraX 预览 + ZXing 本地二维码解码 | 属于应用库功能；单独请求 Hermit 相机权限，不把相机能力授权给页面，不联网 |
 | share | text、file | 系统 chooser，回调不能证明对方已读取或发布 |
 | clipboard | write、read | 读取受前台/系统与逐实例限制 |
@@ -450,7 +454,7 @@ v1 将网页可调用的任意 SQL 收敛为 `hermit.data` 的键控 JSON 记录
 | battery | status、watch、clearWatch | 前台电量、充电、温度、电压和省电状态 |
 | system | openSettings | 只允许固定的 Wi-Fi、蓝牙、位置、语音、TTS 和本应用设置页，不接受任意 Intent |
 
-麦克风、系统文件选择器、拍照和扫码等排他资源同时只允许一个操作，其余返回忙碌或进入有界队列。原始录音是 Hermit 本地基础能力，单次默认上限五分钟、绝对上限 30 分钟，停止后原子导入当前实例的逻辑文件；取消、切应用或退出前台时释放录音器并删除临时文件。扬声器既可由 `audio.play` 播放逻辑文件，也可由标准 `<audio>` / Web Audio 播放页面资源，后者继续遵守用户手势策略。
+麦克风、系统文件选择器、拍照、扫码、截屏和录屏等排他资源同时只允许一个操作，其余返回忙碌或有界错误。截屏在请求的投屏会话有效期内生成一张整屏静帧；录屏可选择无音轨、仅系统声音、仅麦克风或两者混音，混音不经过 MediaRecorder 的音轨（它只能有一个音源），而是由两个 AudioRecord 按墙钟时间轴在原生侧混成 PCM 再编码 AAC，最后与视频轨合流；系统声音受 `AudioPlaybackCaptureConfiguration` 限制，只覆盖媒体、游戏与未知用途，被采集应用可主动排除，DRM 内容永远采不到。录屏单次时长默认三分钟、上限 30 分钟，`maxBytes` 是单个交付文件的上限（默认 48 MiB，硬钳至 256 MiB，等于文件库的单文件上限），达到任一上限即正常收尾并返回已落盘文件。超过单文件上限的录制走**分段**：`MediaRecorder.setNextOutputFile` 在 90% 通知窗口排队下一个文件、在 `NEXT_OUTPUT_FILE_STARTED` 时切换，编码器不重启所以段间不丢帧；音频侧不随段重启，整场一条连续流，每段在合流时按音频采样时钟切出自己的时间窗（`positionUs()`），因此段边界没有声音空洞。每段独立导入文件库并触发 `screen.recording.segment`。原始录音是 Hermit 本地基础能力，单次默认上限五分钟、绝对上限 30 分钟，停止后原子导入当前实例的逻辑文件；取消、切应用或退出前台时释放录音器并删除临时文件。扬声器既可由 `audio.play` 播放逻辑文件，也可由标准 `<audio>` / Web Audio 播放页面资源，后者继续遵守用户手势策略。
 
 Android 10/11 不调用 API 31 才提供的 on-device SpeechRecognizer；定位在 Android 10 使用单次更新兼容路径。语音适配层枚举标准 Android TTS Service、RecognitionService 和 Recognizer Activity，吸收系统默认绑定、用户选择、已卸载服务和仅界面识别等差异。普通 happ 只看到是否支持朗读、连续识别、一次性识别、离线模式、局部结果和语言检测等稳定事实；服务包名与组件名只进入 Store-only 设置和诊断。选定 TTS 失效时尝试系统默认引擎并发出通用回退事件；ASR 缺失或失败返回明确状态和可处理错误，不导致宿主异常。传感器、Wi-Fi、蓝牙、红外和闪光灯也逐项读取设备事实，不能按 Android 版本、品牌或提供商猜测；系统开关关闭与 Android/happ 授权不足分别返回。
 
@@ -569,10 +573,10 @@ UI 线程只负责 WebView、系统 UI 和轻量消息验证；协程调度器�
 | --- | --- |
 | manifest / RPC JSON | 64 KiB / 256 KiB；嵌套深度 16 |
 | ZIP 传输 / 展开 / 单文件 / 文件数 | 64 MiB / 256 MiB / 64 MiB / 10,000；异常压缩比另拒绝 |
-| 实例 Hermit 数据总量 | 逻辑文件 256 MiB / 10,000 个；记录 JSON 128 MiB / 100,000 条 |
+| 实例 Hermit 数据总量 | 逻辑文件单文件 256 MiB、单应用总量 256 MiB / 10,000 个；记录 JSON 128 MiB / 100,000 条 |
 | 单 JSON 记录 / scan / batch | 64 KiB；100 条且响应不超 RPC 上限；100 操作且请求不超 RPC 上限 |
 | 普通 RPC / 瞬时队列 | 每文档最多 16 个待决请求；消息 256 KiB、JSON 嵌套 16 层，超出立即错误 |
-| 分块文件写入 | 每块 64 KiB；单文件 64 MiB、单应用 256 MiB；每会话 2 个、全局 4 个未完成句柄；闲置 2 分钟回收 |
+| 分块文件写入 | 每块 64 KiB；单文件 256 MiB、单应用 256 MiB；每会话 2 个、全局 4 个未完成句柄；闲置 2 分钟回收 |
 | Native HTTP | 受 Bridge 在途上限约束；连接 15 秒、读写各 30 秒；内联 1 MiB，文件响应 64 MiB |
 | 部署连接 / 上传 | 最多 4 执行线程、8 个排队连接、1 个上传；会话闲置 15 分钟，ZIP 64 MiB |
 | 诊断 | 按需生成脱敏状态摘要；不保留页面正文、文件内容、token 或设备序列号 |

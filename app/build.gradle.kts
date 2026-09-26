@@ -3,15 +3,15 @@ plugins {
 }
 
 android {
-    namespace = "io.github.zhyuzh3d.hermit"
+    namespace = "life.airen.hermit"
     compileSdk = 37
 
     defaultConfig {
-        applicationId = "io.github.zhyuzh3d.hermit"
+        applicationId = "life.airen.hermit"
         minSdk = 29
         targetSdk = 37
-        versionCode = providers.gradleProperty("hermitVersionCode").orNull?.toInt() ?: 64
-        versionName = providers.gradleProperty("hermitVersionName").orNull ?: "1.10.30"
+        versionCode = providers.gradleProperty("hermitVersionCode").orNull?.toInt() ?: 80
+        versionName = providers.gradleProperty("hermitVersionName").orNull ?: "1.11.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables.useSupportLibrary = true

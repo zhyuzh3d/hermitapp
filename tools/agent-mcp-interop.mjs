@@ -13,7 +13,7 @@ if (!sdk) throw new Error("Set HERMIT_MCP_SDK_ROOT to the installed @modelcontex
 const { Client } = await import(pathToFileURL(path.join(sdk, "dist/esm/client/index.js")));
 const { StreamableHTTPClientTransport } = await import(pathToFileURL(path.join(sdk, "dist/esm/client/streamableHttp.js")));
 const adb = (...args) => execFileSync("adb", ["-d", ...args], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] });
-const readConnection = () => JSON.parse(adb("exec-out", "run-as", "io.github.zhyuzh3d.hermit.debug", "cat", "files/agent-interop.json"));
+const readConnection = () => JSON.parse(adb("exec-out", "run-as", "life.airen.hermit.debug", "cat", "files/agent-interop.json"));
 let config;
 for (let i = 0; i < 300; i++) {
   try { config = readConnection(); break; } catch { await new Promise(resolve => setTimeout(resolve, 200)); }
@@ -62,7 +62,7 @@ try {
   const read = await one.callTool({ name: "hermit_read_dev_file", arguments: { appId: created.appId, path: "index.html" } });
   assert(read.structuredContent.content.includes("directory deployment"));
 
-  adb("shell", "run-as", "io.github.zhyuzh3d.hermit.debug", "touch", "files/agent-interop.rotate");
+  adb("shell", "run-as", "life.airen.hermit.debug", "touch", "files/agent-interop.rotate");
   let changed;
   for (let i = 0; i < 50; i++) { changed = readConnection(); if (changed.password !== config.password) break; await new Promise(resolve => setTimeout(resolve, 100)); }
   assert(changed.password !== config.password, "Password rotation did not complete");
@@ -73,6 +73,6 @@ try {
   console.log("PASS: real LAN MCP SDK initialize, two concurrent password-sharing clients, tools/resources, create/patch/open, Python binary ZIP publish, and live password rotation invalidating both old clients.");
 } finally {
   await Promise.allSettled(clients.map(client => client.close()));
-  adb("shell", "run-as", "io.github.zhyuzh3d.hermit.debug", "touch", "files/agent-interop.done");
+  adb("shell", "run-as", "life.airen.hermit.debug", "touch", "files/agent-interop.done");
   if (temp) fs.rmSync(temp, { recursive: true, force: true });
 }

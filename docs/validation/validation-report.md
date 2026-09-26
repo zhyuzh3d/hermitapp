@@ -1,6 +1,6 @@
 # Hermit 1.4.0 自动化与 Android 11 兼容验证报告
 
-验证日期：2026-09-11。验证对象为 `io.github.zhyuzh3d.hermit`，versionName 1.4.0、versionCode 6、minSdk 29、target/compileSdk 37。交付 APK 的准确摘要以 release 校验输出与同目录 `SHA256SUMS` 为准。
+验证日期：2026-09-11。验证对象为 `life.airen.hermit`，versionName 1.4.0、versionCode 6、minSdk 29、target/compileSdk 37。交付 APK 的准确摘要以 release 校验输出与同目录 `SHA256SUMS` 为准。
 
 ## 结论
 

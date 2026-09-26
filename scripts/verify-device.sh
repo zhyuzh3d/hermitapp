@@ -14,8 +14,8 @@ DEVICE_COUNT=$($ADB devices | awk 'NR>1 && $2=="device" {n++} END {print n+0}')
 test "$DEVICE_COUNT" -gt 0 || { echo "No ready Android device or emulator" >&2; exit 1; }
 test "$DEVICE_COUNT" -eq 1 || { echo "Exactly one ready device is required for an unambiguous report" >&2; exit 1; }
 SDK=$($ADB shell getprop ro.build.version.sdk | tr -d '\r')
-RELEASE=$($ADB shell dumpsys package io.github.zhyuzh3d.hermit 2>/dev/null | grep -E 'versionName=|versionCode=' | head -n 2 || true)
-DEBUG=$($ADB shell dumpsys package io.github.zhyuzh3d.hermit.debug 2>/dev/null | grep -E 'versionName=|versionCode=' | head -n 2 || true)
+RELEASE=$($ADB shell dumpsys package life.airen.hermit 2>/dev/null | grep -E 'versionName=|versionCode=' | head -n 2 || true)
+DEBUG=$($ADB shell dumpsys package life.airen.hermit.debug 2>/dev/null | grep -E 'versionName=|versionCode=' | head -n 2 || true)
 RELEASE_JSON=$(printf '%s' "$RELEASE" | tr '\n' ';' | sed 's/;*$//')
 DEBUG_JSON=$(printf '%s' "$DEBUG" | tr '\n' ';' | sed 's/;*$//')
 WEBVIEW=$($ADB shell dumpsys webviewupdate 2>/dev/null | sed -n 's/.*Current WebView package (name, version): (\([^)]*\)).*/\1/p' | head -n 1 | tr -d '\r' || true)

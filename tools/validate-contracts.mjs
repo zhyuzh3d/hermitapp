@@ -1,7 +1,7 @@
 import fs from "node:fs";
 
 const capabilities = JSON.parse(fs.readFileSync("api/capabilities.json", "utf8"));
-const native = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
+const native = fs.readFileSync("app/src/main/java/life/airen/hermit/MainActivity.kt", "utf8");
 const sdk = fs.readFileSync("sdk/hermit-api.d.ts", "utf8");
 const bridge = fs.readFileSync("app/src/main/assets/bridge/hermit-v1.js", "utf8");
 for (const [namespace, methods] of Object.entries(capabilities.public)) {

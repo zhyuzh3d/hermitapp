@@ -2,7 +2,7 @@
 
 HermitApp 是一个面向 Android 的 happ 容器：它直接运行 HTML、CSS、JavaScript 页面，并为页面提供安装、版本、数据、文件、权限和系统能力。项目目标不是把网页重新包装成独立 APK，而是在一个开放、轻量、可离线工作的宿主中管理多个页面应用。
 
-当前构建版本为 `1.10.45`（versionCode `79`），官网下载页当前提供 `1.10.45`（versionCode `79`）。版本号由 `scripts/build-release.sh` 在正式构建时通过 `-PhermitVersionName` / `-PhermitVersionCode` 注入，`app/build.gradle.kts` 里的值只是缺省回退，不能当成发布版本读。包名为 `io.github.zhyuzh3d.hermit`，最低支持 Android 10 / API 29，compileSdk 与 targetSdk 为 37。系统语音识别语言目录通过 `speech.languages()` 从当前 Android 识别服务读取；系统 TTS 的可选语言和音色也来自当前引擎，不再声明未经运行时确认的候选。HermitUI 固定使用竖屏；其他 happ 仍可在 `hermit.json.display` 中独立声明竖屏、横屏或跟随设备，以及键盘布局策略。HermitUI 会在应用启动和恢复前台时读取 Android 固定快捷方式状态，使 happ 卡片图钉与桌面图标状态保持同步；回到前台只重读会变的数据，不重建正在看的页面，关闭后重新打开则从首页开始。开发服务可读取当前 HermitUI 的白名单界面快照并在原 WebView 中刷新，再调用固定函数恢复界面；普通 happ 只有当前运行 DEV 副本且 `appId` 精确匹配时才能读取快照、刷新和执行刷新后脚本。APK 替换会恢复内置 UI。MCP 初始化指令、动态 Skill 和连接入口统一要求智能体采用最小相关测试、增量同步和原位刷新，并把 Android 10、较旧厂商 WebView 及 Hermit Bridge 已公开系统能力作为推荐兼容基线；这些属于开发建议，宿主不扫描或核定 happ 代码。智能体每轮写入前只读取一次前台运行目标；目标不是所需 DEV happ 时，`hermit_enter_dev_mode` 会创建或复用开发副本、切换运行通道并打开它，避免重复检查全局开发开关和重复调度状态接口。
+当前构建版本为 `1.10.45`（versionCode `79`），官网下载页当前提供 `1.10.45`（versionCode `79`）。版本号由 `scripts/build-release.sh` 在正式构建时通过 `-PhermitVersionName` / `-PhermitVersionCode` 注入，`app/build.gradle.kts` 里的值只是缺省回退，不能当成发布版本读。包名为 `life.airen.hermit`，最低支持 Android 10 / API 29，compileSdk 与 targetSdk 为 37。系统语音识别语言目录通过 `speech.languages()` 从当前 Android 识别服务读取；系统 TTS 的可选语言和音色也来自当前引擎，不再声明未经运行时确认的候选。HermitUI 固定使用竖屏；其他 happ 仍可在 `hermit.json.display` 中独立声明竖屏、横屏或跟随设备，以及键盘布局策略。HermitUI 会在应用启动和恢复前台时读取 Android 固定快捷方式状态，使 happ 卡片图钉与桌面图标状态保持同步；回到前台只重读会变的数据，不重建正在看的页面，关闭后重新打开则从首页开始。开发服务可读取当前 HermitUI 的白名单界面快照并在原 WebView 中刷新，再调用固定函数恢复界面；普通 happ 只有当前运行 DEV 副本且 `appId` 精确匹配时才能读取快照、刷新和执行刷新后脚本。APK 替换会恢复内置 UI。MCP 初始化指令、动态 Skill 和连接入口统一要求智能体采用最小相关测试、增量同步和原位刷新，并把 Android 10、较旧厂商 WebView 及 Hermit Bridge 已公开系统能力作为推荐兼容基线；这些属于开发建议，宿主不扫描或核定 happ 代码。智能体每轮写入前只读取一次前台运行目标；目标不是所需 DEV happ 时，`hermit_enter_dev_mode` 会创建或复用开发副本、切换运行通道并打开它，避免重复检查全局开发开关和重复调度状态接口。
 
 HermitUI 是 HermitApp 默认加载、并拥有宿主管理权限的官方 happ —— 打开应用看到的就是它。它随 APK 一起分发，本仓库 `app/src/main/assets/store/` 保存的就是随包发布的快照，用户侧不需要再安装任何界面。
 
@@ -31,7 +31,7 @@ Hermit 把 happ 的来源与运行方式分开描述：
 
 应用库支持本地目录/ZIP、HTTP(S) 页面或安装包、局域网地址及公开 Git 仓库来源；提供收藏、搜索、扫码预填、桌面快捷方式、重装、更新、代码回退、备份恢复和卸载保留数据。安装包采用严格的 `hermit.json`，线上页面可通过同 Origin 的 `/hermit-install.json` 提供本地安装包。
 
-页面通过 `window.hermit` 调用数据、文件、录音与播放、系统 TTS、语音识别、定位、运动/方向/环境传感器、拍照与闪光灯、Wi-Fi、BLE、红外、网络与电池状态、分享、剪贴板、震动及通知能力。Bridge 对 happ 暴露稳定的 Android 通用能力，不暴露也不要求页面适配手机品牌或语音服务商；系统服务发现、用户选择、失效回退和诊断由 HermitApp 处理。敏感能力需要逐 happ 授权；涉及 Android runtime permission 时，还必须同时获得系统授权。Wi-Fi 与蓝牙配置遵守 Android 的用户确认和系统设置流程，不能越过系统限制静默修改。通知支持即时通知、设备端单次/每日/每周/每月/每年计划，以及由 HermitApp 约每 15 分钟同步的服务器通知；宿主不会在后台执行 happ JavaScript。
+页面通过 `window.hermit` 调用数据、文件、录音与播放、系统 TTS、语音识别、定位、运动/方向/环境传感器、拍照与闪光灯、截屏与录屏、Wi-Fi、BLE、红外、网络与电池状态、分享、剪贴板、震动及通知能力。Bridge 对 happ 暴露稳定的 Android 通用能力，不暴露也不要求页面适配手机品牌或语音服务商；系统服务发现、用户选择、失效回退和诊断由 HermitApp 处理。敏感能力需要逐 happ 授权；涉及 Android runtime permission 时，还必须同时获得系统授权。截屏与录屏抓取的是**整个设备屏幕**,包含其他应用,因此除 happ 授权外每次都还要用户当面确认系统投屏弹窗;这次确认绝不记忆,而录屏期间宿主以前台服务持有会话,页面退到后台不会中断。Wi-Fi 与蓝牙配置遵守 Android 的用户确认和系统设置流程，不能越过系统限制静默修改。通知支持即时通知、设备端单次/每日/每周/每月/每年计划，以及由 HermitApp 约每 15 分钟同步的服务器通知；宿主不会在后台执行 happ JavaScript。
 
 核心链路按国内无 GMS 设备设计。二维码使用随 APK 打包的 CameraX 与 ZXing 离线识别，图标资源全部内置；本地运行、数据、备份和局域网开发不依赖 Google Play 服务、海外 CDN 或运行时下载。实际 Bridge 通道根据系统 WebView 能力选择安全 WebMessage 模式或兼容模式。
 
@@ -129,4 +129,5 @@ node tools/sync-shell-assets.mjs
 - [隐私与数据边界](docs/privacy-and-data.md)
 - [实体设备验收清单](docs/validation/physical-device-checklist.md)
 - [开发计划](plans/hermitapp-v1-development-plan.md)
+- [截屏与录屏开发计划](plans/hermitapp-screen-capture-recording-plan.md)
 - [执行记录](plans/hermitapp-v1-execution-log.md)

@@ -5,15 +5,15 @@ import fs from "node:fs";
 test("release identity and protocol major are frozen", () => {
   const build = fs.readFileSync("app/build.gradle.kts", "utf8");
   const caps = JSON.parse(fs.readFileSync("api/capabilities.json", "utf8"));
-  assert.match(build, /applicationId = "io\.github\.zhyuzh3d\.hermit"/);
+  assert.match(build, /applicationId = "life\.airen\.hermit"/);
   assert.match(build, /minSdk = 29/);
   assert.equal(caps.apiMajor, 1);
 });
 
 test("happ display policy is package-scoped and restored outside the happ", () => {
   const schema = JSON.parse(fs.readFileSync("api/hermit.schema.json", "utf8"));
-  const manifest = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/install/PackageManifest.kt", "utf8");
-  const activity = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
+  const manifest = fs.readFileSync("app/src/main/java/life/airen/hermit/install/PackageManifest.kt", "utf8");
+  const activity = fs.readFileSync("app/src/main/java/life/airen/hermit/MainActivity.kt", "utf8");
   assert.deepEqual(schema.properties.display.properties.orientation.enum, ["unspecified", "portrait", "landscape"]);
   assert.deepEqual(schema.properties.display.properties.keyboard.enum, ["resize", "overlay"]);
   assert.match(manifest, /displayOrientation/);
@@ -26,10 +26,10 @@ test("happ display policy is package-scoped and restored outside the happ", () =
 
 test("bridge keeps the isolated transport and an explicit legacy fallback", () => {
   const bridge = fs.readFileSync("app/src/main/assets/bridge/hermit-v1.js", "utf8");
-  const native = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/bridge/BridgeController.kt", "utf8");
-  const legacy = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/bridge/LegacyBridgeController.kt", "utf8");
+  const native = fs.readFileSync("app/src/main/java/life/airen/hermit/bridge/BridgeController.kt", "utf8");
+  const legacy = fs.readFileSync("app/src/main/java/life/airen/hermit/bridge/LegacyBridgeController.kt", "utf8");
   const bootstrap = fs.readFileSync("app/src/main/assets/bridge/legacy-bootstrap.js", "utf8");
-  const activity = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
+  const activity = fs.readFileSync("app/src/main/java/life/airen/hermit/MainActivity.kt", "utf8");
   const devRuntime = activity.slice(activity.indexOf("val devRuntime"), activity.indexOf("val sessionSdk"));
   assert.match(bridge, /kind: "hello"/);
   assert.match(native, /addWebMessageListener/);
@@ -46,13 +46,13 @@ test("bridge keeps the isolated transport and an explicit legacy fallback", () =
 });
 
 test("backup contract excludes ambient trust state", () => {
-  const source = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/backup/BackupCoordinator.kt", "utf8");
+  const source = fs.readFileSync("app/src/main/java/life/airen/hermit/backup/BackupCoordinator.kt", "utf8");
   for (const excluded of ["webProfile", "cookies", "webStorage", "permissions", "developerTokens"]) assert.ok(source.includes(excluded));
 });
 
 test("a happ can back itself up but never chooses whose data leaves", () => {
   const caps = JSON.parse(fs.readFileSync("api/capabilities.json", "utf8"));
-  const activity = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
+  const activity = fs.readFileSync("app/src/main/java/life/airen/hermit/MainActivity.kt", "utf8");
   const bridge = fs.readFileSync("app/src/main/assets/bridge/hermit-v1.js", "utf8");
   assert.ok(caps.public.app.includes("backup"), "self-backup must stay a public app capability");
   const start = activity.indexOf('"app.backup" ->');
@@ -80,7 +80,7 @@ test("agent catalog, guide snapshots and shared-password authority stay aligned"
   const root = "app/src/main/assets/agent/";
   const tools = JSON.parse(fs.readFileSync(root + "tools.json", "utf8"));
   const guide = fs.readFileSync(root + "hermit-dev-plugin/SKILL.md", "utf8");
-  const server = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/deploy/AgentDevelopmentServer.kt", "utf8");
+  const server = fs.readFileSync("app/src/main/java/life/airen/hermit/deploy/AgentDevelopmentServer.kt", "utf8");
   const discovery = server.slice(server.indexOf("private fun bootstrap()"), server.indexOf("private fun bootstrapHtml()"));
   assert.equal(new Set(tools.map(tool => tool.name)).size, 37);
   const toolIndex = tools.map(({ name, description }) => ({ name, description }));
@@ -134,7 +134,7 @@ test("agent catalog, guide snapshots and shared-password authority stay aligned"
   assert.doesNotMatch(server, /IDLE_MS|空闲 30 分钟，开发连接已关闭/);
   assert.match(server, /commitGuard = \{ guarded\(authorization/);
   assert.match(server, /guardedValue\(authorization\) \{\s*devWorkspaces\.apply/);
-  const activity = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
+  const activity = fs.readFileSync("app/src/main/java/life/airen/hermit/MainActivity.kt", "utf8");
   assert.match(activity, /"host\.agent\.refresh" -> hermitApp\.agentServer\.refreshNetwork\(\)/);
   const onStop = activity.match(/override fun onStop\(\) \{([\s\S]*?)super\.onStop\(\)/)?.[1] || "";
   assert.doesNotMatch(onStop, /agentServer\.stop/);
@@ -167,7 +167,7 @@ test("store navigation, favorites, support fallback and QR bridge remain wired",
   assert.match(css, /grid-template-columns:repeat\(4,minmax\(0,1fr\)\)/);
   assert.match(script, /"apps\.favorite"/);
   assert.match(script, /activeVersion/);
-  assert.match(fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8"), /\.put\("activeVersion"/);
+  assert.match(fs.readFileSync("app/src/main/java/life/airen/hermit/MainActivity.kt", "utf8"), /\.put\("activeVersion"/);
   assert.match(script, /"apps\.scanQr"/);
   assert.match(script, /"support\.open"/);
   assert.match(html, /10knet·zhyuzh3d/);
@@ -183,11 +183,11 @@ test("store navigation, favorites, support fallback and QR bridge remain wired",
 });
 
 test("package defaults and custom happ icon overrides stay distinct", () => {
-  const activity = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
-  const installer = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/install/InstallCoordinator.kt", "utf8");
-  const processor = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/install/IconProcessor.kt", "utf8");
-  const registry = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/registry/AppRegistry.kt", "utf8");
-  const shortcuts = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/launcher/ShortcutHost.kt", "utf8");
+  const activity = fs.readFileSync("app/src/main/java/life/airen/hermit/MainActivity.kt", "utf8");
+  const installer = fs.readFileSync("app/src/main/java/life/airen/hermit/install/InstallCoordinator.kt", "utf8");
+  const processor = fs.readFileSync("app/src/main/java/life/airen/hermit/install/IconProcessor.kt", "utf8");
+  const registry = fs.readFileSync("app/src/main/java/life/airen/hermit/registry/AppRegistry.kt", "utf8");
+  const shortcuts = fs.readFileSync("app/src/main/java/life/airen/hermit/launcher/ShortcutHost.kt", "utf8");
   assert.match(activity, /"host\.apps\.updatePresentation"/);
   assert.match(activity, /decodePngDataUrl/);
   assert.match(activity, /put\("preview", iconSourceDataUrl\(uri\)\)/);
@@ -208,10 +208,10 @@ test("package defaults and custom happ icon overrides stay distinct", () => {
 });
 
 test("host media uses object URLs and keeps inline bytes transient", () => {
-  const imageStore = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/data/HostImageStore.kt", "utf8");
-  const fileStore = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/data/FileStore.kt", "utf8");
-  const gateway = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/runtime/ObjectAssetGateway.kt", "utf8");
-  const registry = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/registry/AppRegistry.kt", "utf8");
+  const imageStore = fs.readFileSync("app/src/main/java/life/airen/hermit/data/HostImageStore.kt", "utf8");
+  const fileStore = fs.readFileSync("app/src/main/java/life/airen/hermit/data/FileStore.kt", "utf8");
+  const gateway = fs.readFileSync("app/src/main/java/life/airen/hermit/runtime/ObjectAssetGateway.kt", "utf8");
+  const registry = fs.readFileSync("app/src/main/java/life/airen/hermit/registry/AppRegistry.kt", "utf8");
   assert.match(imageStore, /objects\/images/);
   assert.match(imageStore, /objectUrl/);
   assert.match(fileStore, /object_url TEXT NOT NULL/);
@@ -222,10 +222,10 @@ test("host media uses object URLs and keeps inline bytes transient", () => {
 });
 
 test("device happ sharing is a bounded one-hour file session with explicit install confirmation", () => {
-  const manager = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/share/HappShareManager.kt", "utf8");
-  const service = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/share/HappShareService.kt", "utf8");
-  const gateway = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/runtime/HappShareAssetGateway.kt", "utf8");
-  const activity = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
+  const manager = fs.readFileSync("app/src/main/java/life/airen/hermit/share/HappShareManager.kt", "utf8");
+  const service = fs.readFileSync("app/src/main/java/life/airen/hermit/share/HappShareService.kt", "utf8");
+  const gateway = fs.readFileSync("app/src/main/java/life/airen/hermit/runtime/HappShareAssetGateway.kt", "utf8");
+  const activity = fs.readFileSync("app/src/main/java/life/airen/hermit/MainActivity.kt", "utf8");
   const manifest = fs.readFileSync("app/src/main/AndroidManifest.xml", "utf8");
   const html = fs.readFileSync("app/src/main/assets/store/index.html", "utf8");
   const ui = fs.readFileSync("app/src/main/assets/store/features/share.js", "utf8");
@@ -307,7 +307,7 @@ test("development password is read only outside a deliberate modal save", () => 
 test("development page names the plugin install address and logs operations instead of showing them", () => {
   const html = fs.readFileSync("app/src/main/assets/store/index.html", "utf8");
   const development = fs.readFileSync("app/src/main/assets/store/features/development.js", "utf8");
-  const server = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/deploy/AgentDevelopmentServer.kt", "utf8");
+  const server = fs.readFileSync("app/src/main/java/life/airen/hermit/deploy/AgentDevelopmentServer.kt", "utf8");
   assert.ok(html.includes("请把下面的插件地址粘贴给你的智能体开发软件（如WorkBuddy、Codex等），并要求它从这个地址安装插件。安装完毕后，就可以要求它进入特定Happ应用开发模式进行修改和安装更新。"));
   assert.ok(html.includes('<span class="field-label">Happ开发插件安装地址</span>'));
   assert.ok(html.includes('<span class="field-label">备用安装地址（USB连接）</span>'));
@@ -320,7 +320,7 @@ test("development page names the plugin install address and logs operations inst
 
 test("launcher uses the compressed Hermit brand icon while notifications keep a monochrome glyph", () => {
   const foreground = fs.readFileSync("app/src/main/res/drawable/ic_launcher_foreground.xml", "utf8");
-  const notifications = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/notification/NotificationDispatcher.kt", "utf8");
+  const notifications = fs.readFileSync("app/src/main/java/life/airen/hermit/notification/NotificationDispatcher.kt", "utf8");
   const icon = fs.statSync("app/src/main/res/drawable-nodpi/hermit_icon.webp");
   const colors = fs.readFileSync("app/src/main/res/values/colors.xml", "utf8");
   assert.match(foreground, /@drawable\/hermit_icon/);
@@ -335,15 +335,15 @@ test("launcher uses the compressed Hermit brand icon while notifications keep a 
 });
 
 test("official HermitUI is portrait-only while installed happs retain manifest orientation", () => {
-  const activity = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
+  const activity = fs.readFileSync("app/src/main/java/life/airen/hermit/MainActivity.kt", "utf8");
   assert.match(activity, /applyDisplayPolicy\(packageManifest, forcePortrait = instance == null\)/);
   assert.match(activity, /forcePortrait -> ActivityInfo\.SCREEN_ORIENTATION_PORTRAIT/);
   assert.match(activity, /manifest\?\.displayOrientation == "landscape" -> ActivityInfo\.SCREEN_ORIENTATION_LANDSCAPE/);
 });
 
 test("online entry separates live pages from direct packages and install descriptors", () => {
-  const installer = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/install/RemoteSourceInstaller.kt", "utf8");
-  const repository = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/install/RepositorySource.kt", "utf8");
+  const installer = fs.readFileSync("app/src/main/java/life/airen/hermit/install/RemoteSourceInstaller.kt", "utf8");
+  const repository = fs.readFileSync("app/src/main/java/life/airen/hermit/install/RepositorySource.kt", "utf8");
   const bridge = fs.readFileSync("app/src/main/assets/bridge/hermit-v1.js", "utf8");
   assert.match(installer, /encodedPath\.endsWith\("\.zip", ignoreCase = true\)/);
   assert.match(installer, /isZipArchive\(candidate\)/);
@@ -362,9 +362,9 @@ test("online entry separates live pages from direct packages and install descrip
 });
 
 test("add flow describes a package before installing and only installs on confirmation", () => {
-  const activity = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
-  const coordinator = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/install/InstallCoordinator.kt", "utf8");
-  const installer = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/install/RemoteSourceInstaller.kt", "utf8");
+  const activity = fs.readFileSync("app/src/main/java/life/airen/hermit/MainActivity.kt", "utf8");
+  const coordinator = fs.readFileSync("app/src/main/java/life/airen/hermit/install/InstallCoordinator.kt", "utf8");
+  const installer = fs.readFileSync("app/src/main/java/life/airen/hermit/install/RemoteSourceInstaller.kt", "utf8");
   const capabilities = fs.readFileSync("api/capabilities.json", "utf8");
   const bridge = fs.readFileSync("app/src/main/assets/bridge/hermit-v1.js", "utf8");
   const shell = fs.readFileSync("app/src/main/assets/store/features/install.js", "utf8");
@@ -389,9 +389,9 @@ test("add flow describes a package before installing and only installs on confir
 });
 
 test("the happ settings sheet acts immediately and keeps development read only", () => {
-  const activity = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
-  const registry = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/registry/AppRegistry.kt", "utf8");
-  const installer = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/install/RemoteSourceInstaller.kt", "utf8");
+  const activity = fs.readFileSync("app/src/main/java/life/airen/hermit/MainActivity.kt", "utf8");
+  const registry = fs.readFileSync("app/src/main/java/life/airen/hermit/registry/AppRegistry.kt", "utf8");
+  const installer = fs.readFileSync("app/src/main/java/life/airen/hermit/install/RemoteSourceInstaller.kt", "utf8");
   const capabilities = fs.readFileSync("api/capabilities.json", "utf8");
   const bridge = fs.readFileSync("app/src/main/assets/bridge/hermit-v1.js", "utf8");
   const manage = fs.readFileSync("app/src/main/assets/store/features/manage.js", "utf8");
@@ -427,8 +427,8 @@ test("the happ settings sheet acts immediately and keeps development read only",
 });
 
 test("official shell keeps live fallback support and explicit local refresh", () => {
-  const activity = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
-  const manager = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/runtime/OfficialShellManager.kt", "utf8");
+  const activity = fs.readFileSync("app/src/main/java/life/airen/hermit/MainActivity.kt", "utf8");
+  const manager = fs.readFileSync("app/src/main/java/life/airen/hermit/runtime/OfficialShellManager.kt", "utf8");
   const bridge = fs.readFileSync("app/src/main/assets/bridge/hermit-v1.js", "utf8");
   const html = fs.readFileSync("app/src/main/assets/store/index.html", "utf8");
   const script = shellSources(".js");
@@ -455,15 +455,15 @@ test("official shell keeps live fallback support and explicit local refresh", ()
   assert.match(activity, /"reload-shell"/);
   assert.match(fs.readFileSync("app/src/main/assets/agent/tools.json", "utf8"), /"name": "hermit_reload_shell"/);
   assert.match(activity, /"current" -> hermitApp\.officialShell\.mode\(\)/);
-  const application = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/HermitApplication.kt", "utf8");
+  const application = fs.readFileSync("app/src/main/java/life/airen/hermit/HermitApplication.kt", "utf8");
   assert.match(application, /if \(replaced\) \{[\s\S]{0,160}officialShell\.resetToEmbedded\(\)[\s\S]{0,160}agentServer\.disable/);
   assert.doesNotMatch(application, /installState\.edit[\s\S]{0,160}officialShell\.setMode/);
   assert.doesNotMatch(html, /id="useOnlineShell"/);
 });
 
 test("shared WebView profile follows origin rules while Hermit data remains app scoped", () => {
-  const activity = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
-  const registry = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/registry/AppRegistry.kt", "utf8");
+  const activity = fs.readFileSync("app/src/main/java/life/airen/hermit/MainActivity.kt", "utf8");
+  const registry = fs.readFileSync("app/src/main/java/life/airen/hermit/registry/AppRegistry.kt", "utf8");
   assert.doesNotMatch(activity, /WebViewCompat\.setProfile/);
   assert.match(activity, /"shared-web-message"/);
   assert.match(activity, /"shared-legacy-bridge"/);
@@ -472,10 +472,10 @@ test("shared WebView profile follows origin rules while Hermit data remains app 
 });
 
 test("happ source and runtime mode remain independent across Native and HermitUI", () => {
-  const model = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/model/WebAppInstance.kt", "utf8");
-  const registry = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/registry/AppRegistry.kt", "utf8");
-  const remote = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/install/RemoteSourceInstaller.kt", "utf8");
-  const activity = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
+  const model = fs.readFileSync("app/src/main/java/life/airen/hermit/model/WebAppInstance.kt", "utf8");
+  const registry = fs.readFileSync("app/src/main/java/life/airen/hermit/registry/AppRegistry.kt", "utf8");
+  const remote = fs.readFileSync("app/src/main/java/life/airen/hermit/install/RemoteSourceInstaller.kt", "utf8");
+  const activity = fs.readFileSync("app/src/main/java/life/airen/hermit/MainActivity.kt", "utf8");
   const shell = shellSources(".js");
   const caps = JSON.parse(fs.readFileSync("api/capabilities.json", "utf8"));
   const backup = JSON.parse(fs.readFileSync("api/backup.schema.json", "utf8"));
@@ -507,9 +507,9 @@ test("happ source and runtime mode remain independent across Native and HermitUI
 
 test("notifications stay native, per-happ and do not execute background page code", () => {
   const caps = JSON.parse(fs.readFileSync("api/capabilities.json", "utf8"));
-  const activity = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
-  const worker = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/notification/OnlineNotificationWorker.kt", "utf8");
-  const scheduler = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/notification/NotificationScheduler.kt", "utf8");
+  const activity = fs.readFileSync("app/src/main/java/life/airen/hermit/MainActivity.kt", "utf8");
+  const worker = fs.readFileSync("app/src/main/java/life/airen/hermit/notification/OnlineNotificationWorker.kt", "utf8");
+  const scheduler = fs.readFileSync("app/src/main/java/life/airen/hermit/notification/NotificationScheduler.kt", "utf8");
   assert.deepEqual(caps.public.notifications, ["notify", "schedule", "cancel", "cancelAll", "getScheduled", "setEndpoint", "getStatus"]);
   assert.match(activity, /permissionBroker\.require\(runtime, "notifications"/);
   assert.match(scheduler, /setExactAndAllowWhileIdle/);
@@ -521,8 +521,8 @@ test("notifications stay native, per-happ and do not execute background page cod
 test("domestic runtime baseline has local QR scanning and no Google Play service dependency", () => {
   const build = fs.readFileSync("app/build.gradle.kts", "utf8");
   const manifest = fs.readFileSync("app/src/main/AndroidManifest.xml", "utf8");
-  const scanner = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/QrScannerActivity.kt", "utf8");
-  const speech = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/capability/SpeechController.kt", "utf8");
+  const scanner = fs.readFileSync("app/src/main/java/life/airen/hermit/QrScannerActivity.kt", "utf8");
+  const speech = fs.readFileSync("app/src/main/java/life/airen/hermit/capability/SpeechController.kt", "utf8");
   assert.doesNotMatch(build, /play-services|firebase|mlkit/i);
   assert.doesNotMatch(manifest, /com\.google\.mlkit|com\.google\.android\.gms/);
   assert.match(build, /androidx\.camera:camera-camera2:1\.5\.3/);
@@ -534,8 +534,8 @@ test("domestic runtime baseline has local QR scanning and no Google Play service
 
 test("basic microphone and speaker APIs are capability-gated and lifecycle-bound", () => {
   const caps = JSON.parse(fs.readFileSync("api/capabilities.json", "utf8"));
-  const main = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
-  const audio = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/capability/AudioController.kt", "utf8");
+  const main = fs.readFileSync("app/src/main/java/life/airen/hermit/MainActivity.kt", "utf8");
+  const audio = fs.readFileSync("app/src/main/java/life/airen/hermit/capability/AudioController.kt", "utf8");
   const types = fs.readFileSync("sdk/hermit-api.d.ts", "utf8");
   assert.deepEqual(caps.public.audio, ["startRecording", "stopRecording", "cancelRecording", "play", "stopPlayback"]);
   assert.match(main, /permissionBroker\.require\(session, "microphone\.record"/);
@@ -551,8 +551,8 @@ test("basic microphone and speaker APIs are capability-gated and lifecycle-bound
 
 test("native HTTP supports session-bound incremental reads and logical file uploads", () => {
   const caps = JSON.parse(fs.readFileSync("api/capabilities.json", "utf8"));
-  const main = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
-  const network = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/capability/NativeHttpClient.kt", "utf8");
+  const main = fs.readFileSync("app/src/main/java/life/airen/hermit/MainActivity.kt", "utf8");
+  const network = fs.readFileSync("app/src/main/java/life/airen/hermit/capability/NativeHttpClient.kt", "utf8");
   const bridge = fs.readFileSync("app/src/main/assets/bridge/hermit-v1.js", "utf8");
   const types = fs.readFileSync("sdk/hermit-api.d.ts", "utf8");
   assert.deepEqual(caps.public.network, ["status", "watch", "clearWatch", "request", "openStream", "readStream", "closeStream", "openSocket", "readSocket", "sendSocket", "closeSocket"]);
@@ -572,10 +572,10 @@ test("native HTTP supports session-bound incremental reads and logical file uplo
 
 test("a page can push more bytes than one bridge message into the file store", () => {
   const caps = JSON.parse(fs.readFileSync("api/capabilities.json", "utf8"));
-  const main = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
-  const store = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/data/FileStore.kt", "utf8");
-  const web = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/bridge/BridgeController.kt", "utf8");
-  const legacy = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/bridge/LegacyBridgeController.kt", "utf8");
+  const main = fs.readFileSync("app/src/main/java/life/airen/hermit/MainActivity.kt", "utf8");
+  const store = fs.readFileSync("app/src/main/java/life/airen/hermit/data/FileStore.kt", "utf8");
+  const web = fs.readFileSync("app/src/main/java/life/airen/hermit/bridge/BridgeController.kt", "utf8");
+  const legacy = fs.readFileSync("app/src/main/java/life/airen/hermit/bridge/LegacyBridgeController.kt", "utf8");
   const protocol = fs.readFileSync("api/protocol-v1.md", "utf8");
   const types = fs.readFileSync("sdk/hermit-api.d.ts", "utf8");
   assert.deepEqual(caps.public.files, ["import", "writeText", "beginWrite", "appendBytes", "finishWrite", "abortWrite", "readText", "list", "export", "delete", "share"]);
@@ -608,10 +608,10 @@ test("a page can push more bytes than one bridge message into the file store", (
 test("system capability adapters are discoverable, permission-gated and foreground-bound", () => {
   const caps = JSON.parse(fs.readFileSync("api/capabilities.json", "utf8"));
   const manifest = fs.readFileSync("app/src/main/AndroidManifest.xml", "utf8");
-  const main = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/MainActivity.kt", "utf8");
+  const main = fs.readFileSync("app/src/main/java/life/airen/hermit/MainActivity.kt", "utf8");
   const bridge = fs.readFileSync("app/src/main/assets/bridge/hermit-v1.js", "utf8");
   const types = fs.readFileSync("sdk/hermit-api.d.ts", "utf8");
-  assert.equal(caps.apiMinor, 13);
+  assert.equal(caps.apiMinor, 14);
   assert.deepEqual(caps.public.appearance, ["reportTheme"]);
   assert.deepEqual(caps.public.tts, ["availability", "preferences", "voices", "languageAvailability", "speak", "stop", "export"]);
   assert.deepEqual(caps.public.speech, ["availability", "preferences", "languages", "start", "recognizeOnce", "stop", "cancel"]);
@@ -638,8 +638,8 @@ test("system capability adapters are discoverable, permission-gated and foregrou
   assert.match(types, /authorization\?: Record/);
   assert.match(main, /sensors\.cancelAll\(\)/);
   assert.match(main, /bluetooth\.cancelAll\(\)/);
-  const speech = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/capability/SpeechController.kt", "utf8");
-  const tts = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/capability/TtsController.kt", "utf8");
+  const speech = fs.readFileSync("app/src/main/java/life/airen/hermit/capability/SpeechController.kt", "utf8");
+  const tts = fs.readFileSync("app/src/main/java/life/airen/hermit/capability/TtsController.kt", "utf8");
   assert.match(speech, /SpeechRecognizer\.createSpeechRecognizer\(appContext, selection\.component\)/);
   assert.match(speech, /speech\.recognizeOnce/);
   assert.match(speech, /RecognizerIntent\.ACTION_GET_LANGUAGE_DETAILS/);
@@ -650,14 +650,14 @@ test("system capability adapters are discoverable, permission-gated and foregrou
   assert.match(tts, /availableLanguages/);
   assert.doesNotMatch(tts, /tts\.providerFallback/);
   assert.doesNotMatch(types, /providerManagedByUser|directServiceAvailable|recognitionActivityAvailable|\bengines\(\):/);
-  assert.match(fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/capability/SensorController.kt", "utf8"), /MAX_RATE_HZ = 60\.0/);
-  assert.match(fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/capability/WifiController.kt", "utf8"), /directSavedNetworkChangesAllowed", false/);
-  assert.match(fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/capability/InfraredController.kt", "utf8"), /MAX_TOTAL_US = 2_000_000L/);
+  assert.match(fs.readFileSync("app/src/main/java/life/airen/hermit/capability/SensorController.kt", "utf8"), /MAX_RATE_HZ = 60\.0/);
+  assert.match(fs.readFileSync("app/src/main/java/life/airen/hermit/capability/WifiController.kt", "utf8"), /directSavedNetworkChangesAllowed", false/);
+  assert.match(fs.readFileSync("app/src/main/java/life/airen/hermit/capability/InfraredController.kt", "utf8"), /MAX_TOTAL_US = 2_000_000L/);
 });
 
 test("the installed plugin identity is hermit-dev-plugin and the legacy name stays installable", () => {
   const root = "app/src/main/assets/agent/";
-  const server = fs.readFileSync("app/src/main/java/io/github/zhyuzh3d/hermit/deploy/AgentDevelopmentServer.kt", "utf8");
+  const server = fs.readFileSync("app/src/main/java/life/airen/hermit/deploy/AgentDevelopmentServer.kt", "utf8");
   const discovery = server.slice(server.indexOf("private fun bootstrap()"), server.indexOf("private fun bootstrapHtml()"));
   const helper = fs.readFileSync(root + "hermit-agent.py", "utf8");
   const guide = fs.readFileSync(root + "hermit-dev-plugin/SKILL.md", "utf8");
@@ -677,4 +677,110 @@ test("the installed plugin identity is hermit-dev-plugin and the legacy name sta
   assert.match(guide, /^name: hermit-dev-plugin$/m);
   assert.ok(fs.existsSync(root + "hermit-dev-plugin/SKILL.md"));
   assert.ok(!fs.existsSync(root + "hermit-device/SKILL.md"));
+});
+
+test("screen capture and recording are consent-bound, service-backed and quota-aware", () => {
+  const caps = JSON.parse(fs.readFileSync("api/capabilities.json", "utf8"));
+  const manifest = fs.readFileSync("app/src/main/AndroidManifest.xml", "utf8");
+  const main = fs.readFileSync("app/src/main/java/life/airen/hermit/MainActivity.kt", "utf8");
+  const app = fs.readFileSync("app/src/main/java/life/airen/hermit/HermitApplication.kt", "utf8");
+  const controller = fs.readFileSync("app/src/main/java/life/airen/hermit/capability/ScreenCaptureController.kt", "utf8");
+  const service = fs.readFileSync("app/src/main/java/life/airen/hermit/capability/ScreenCaptureService.kt", "utf8");
+  const audioCapture = fs.readFileSync("app/src/main/java/life/airen/hermit/capability/ScreenAudioCapture.kt", "utf8");
+  const plan = fs.readFileSync("app/src/main/java/life/airen/hermit/capability/ScreenCapturePlan.kt", "utf8");
+  const bridge = fs.readFileSync("app/src/main/assets/bridge/hermit-v1.js", "utf8");
+  const types = fs.readFileSync("sdk/hermit-api.d.ts", "utf8");
+
+  assert.deepEqual(caps.public.screen, ["availability", "capture", "startRecording", "stopRecording", "cancelRecording"]);
+  for (const method of ["availability", "capture", "startRecording", "stopRecording", "cancelRecording"]) {
+    assert.match(main, new RegExp(`"screen\\.${method}" ->`), `screen.${method} must be dispatched`);
+  }
+  // Both capabilities are gated twice: by Hermit's own per-happ grant and by the system
+  // projection dialog, which is asked again for every single session.
+  assert.match(main, /permissionBroker\.require\(session, "screen\.capture"/);
+  assert.match(main, /permissionBroker\.require\(session, "screen\.record"/);
+  assert.match(main, /permissionBroker\.require\(session, "microphone\.record",\s*"录屏时同时收录系统声音与麦克风", PermissionBroker\.MICROPHONE_PERMISSIONS\)/);
+  assert.match(main, /"screen\.capture", "screen\.record"/);
+  assert.match(main, /"screen\.record" -> "录制整个设备屏幕的画面与声音,包含其他应用"/);
+  assert.match(main, /private suspend fun requestScreenCaptureConsent\(\): Intent\?/);
+  assert.match(main, /manager\.createScreenCaptureIntent\(MediaProjectionConfig\.createConfigForDefaultDisplay\(\)\)/);
+  // One consent buys exactly one virtual display, so a second session is refused here
+  // rather than being discovered by the platform.
+  assert.match(controller, /if \(activeKind != null\) throw HermitException\(ErrorCodes\.CONFLICT/);
+
+  // Android 14 refuses to hand out a projection unless the app already runs a foreground
+  // service of the matching type, and the service cannot start without the declaration.
+  assert.match(manifest, /android\.permission\.FOREGROUND_SERVICE_MEDIA_PROJECTION/);
+  assert.match(manifest, /android:name="\.capability\.ScreenCaptureService"[\s\S]{0,120}foregroundServiceType="mediaProjection"/);
+  assert.match(service, /ServiceInfo\.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION/);
+  assert.match(controller, /context\.startForegroundService\(intent\)/);
+  assert.match(controller, /withTimeoutOrNull\(FOREGROUND_READY_TIMEOUT_MS\) \{ ready\.await\(\) \}/);
+  // The callback has to exist before the first virtual display is created, and be gone
+  // before the projection is stopped on purpose, or a clean teardown reads as a revocation.
+  assert.match(controller, /projection\.registerCallback\(callback, Handler\(Looper\.getMainLooper\(\)\)\)/);
+  assert.match(controller, /live\.projection\.unregisterCallback\(live\.callback\)/);
+
+  // A recording may be as large as one file store object, and that object's limit lives in a
+  // different file. The two are compared here rather than trusted to stay in step by hand.
+  const store = fs.readFileSync("app/src/main/java/life/airen/hermit/data/FileStore.kt", "utf8");
+  const storeFileLimit = Number(store.match(/MAX_FILE_BYTES = (\d+)L \* 1024 \* 1024/)[1]);
+  const recordingLimit = Number(plan.match(/MAX_MAX_BYTES = (\d+)L \* 1024 \* 1024/)[1]);
+  assert.equal(recordingLimit, storeFileLimit, "the recording ceiling must equal the file store's single-object limit");
+  assert.equal(storeFileLimit, 256, "the store keeps a single logical file at 256 MiB");
+  assert.match(plan, /BYTE_BUDGET_DENOMINATOR = 1\.08/);
+  assert.match(controller, /recorder\.setMaxFileSize\(maxVideoBytes\)/);
+  assert.match(controller, /recorder\.setMaxDuration\(request\.maxDurationMs\.toInt\(\)\)/);
+  assert.match(controller, /MediaRecorder\.MEDIA_RECORDER_INFO_MAX_DURATION_REACHED/);
+  assert.match(controller, /MediaRecorder\.MEDIA_RECORDER_INFO_MAX_FILESIZE_REACHED/);
+
+  // Segmentation is the only way a capture longer than one file can exist, and it is built on
+  // the one platform mechanism that rolls the output without stopping the encoder. The queue
+  // call is only legal in the window the 90% notification opens, so both halves have to be here.
+  assert.match(plan, /val segment: Boolean/);
+  assert.match(plan, /fun segmentName\(base: String, index: Int\): String/);
+  assert.match(controller, /MediaRecorder\.MEDIA_RECORDER_INFO_MAX_FILESIZE_APPROACHING -> queueNextSegment\(id\)/);
+  assert.match(controller, /MediaRecorder\.MEDIA_RECORDER_INFO_NEXT_OUTPUT_FILE_STARTED -> rollSegment\(id\)/);
+  assert.match(controller, /recorder\.setNextOutputFile\(next\)/);
+  assert.match(controller, /put\("segmenting", true\)/);
+  assert.match(controller, /EVENT_SEGMENT = "screen\.recording\.segment"/);
+  assert.match(controller, /put\("segments", JSONArray\(all\)\)/);
+  assert.match(audioCapture, /fun positionUs\(\): Long = framesProduced \* 1_000_000L \/ sampleRate/);
+  // One continuous audio stream serves every segment, so the mux has to take a window of it
+  // rather than the whole file.
+  assert.match(controller, /ScreenMediaMux\.combine\(video, active\.audioFile, active\.muxFile, fromUs, toUs\)/);
+  assert.match(controller, /put\("message", "音频轨没有写成功,已交付无声录制"\)/);
+
+  // The outcome of a recording that ended on its own limit is cached for a late
+  // stopRecording, and it names a file, so it is only handed back to the app that owns it.
+  assert.match(controller, /recent\.appId == appId && \(recordingId\.isNullOrBlank\(\) \|\| recent\.id == recordingId\)/);
+
+  // The picture and the sound are written by two different components, so the delivered
+  // file is a mux, and losing the audio track never loses the recording.
+  assert.match(controller, /put\("message", "音频轨没有写成功,已交付无声录制"\)/);
+  assert.match(audioCapture, /addMatchingUsage\(AudioAttributes\.USAGE_MEDIA\)/);
+  assert.match(audioCapture, /AudioRecord\.READ_NON_BLOCKING/);
+
+  // The recording belongs to the application so it survives the page going to the
+  // background, which is the only way "record another app" can mean anything.
+  assert.match(app, /val screenCapture by screenCaptureDelegate/);
+  assert.match(app, /if \(screenCaptureDelegate\.isInitialized\(\)\) screenCapture\.shutdown\(\)/);
+  assert.match(main, /hermitApp\.screenCapture\.onForegroundAppChanged\(appId\)/);
+  assert.match(main, /hermitApp\.screenCapture\.shutdown\(\)/);
+  assert.doesNotMatch(
+    main.slice(main.indexOf("override fun onStop()"), main.indexOf("override fun onResume()")),
+    /screenCapture/,
+    "leaving the activity must not stop a recording",
+  );
+
+  // Waiting on the consent dialog and on the final mux takes far longer than the default
+  // client timeout, so these methods share the long one.
+  assert.ok(
+    bridge.includes("screen\\.(?:capture|startRecording|stopRecording)"),
+    "the bridge must extend the timeout of the screen methods that wait on the user or on a mux",
+  );
+  assert.match(bridge, /screen: namespace\("screen"\)/);
+  assert.match(types, /screen: \{/);
+  assert.match(types, /"screen\.capture" \| "screen\.record"/);
+  assert.match(types, /interface HermitScreenAvailability/);
+  assert.match(types, /interface HermitScreenRecording/);
 });

@@ -15,7 +15,7 @@ if [ ! -f "$APK" ]; then APK=$ROOT/app/build/outputs/apk/release/app-release.apk
 test -f "$APK"
 "$SDK_DIR/build-tools/37.0.0/apksigner" verify --verbose --print-certs "$APK"
 BADGING=$("$SDK_DIR/build-tools/37.0.0/aapt" dump badging "$APK")
-printf '%s\n' "$BADGING" | grep "package: name='io.github.zhyuzh3d.hermit'"
+printf '%s\n' "$BADGING" | grep "package: name='life.airen.hermit'"
 printf '%s\n' "$BADGING" | grep "versionName='$EXPECTED_VERSION'"
 printf '%s\n' "$BADGING" | grep "sdkVersion:'29'"
 printf '%s\n' "$BADGING" | grep "targetSdkVersion:'37'"

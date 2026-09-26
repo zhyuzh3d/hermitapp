@@ -1,6 +1,6 @@
 {
   "apiMajor": 1,
-  "apiMinor": 13,
+  "apiMinor": 14,
   "roles": ["store", "web_app"],
   "public": {
     "runtime": ["info", "capabilities"],
@@ -15,6 +15,7 @@
     "location": ["availability", "getCurrent", "watch", "clearWatch"],
     "sensors": ["availability", "watch", "clearWatch"],
     "camera": ["capturePhoto", "torchStatus", "setTorch"],
+    "screen": ["availability", "capture", "startRecording", "stopRecording", "cancelRecording"],
     "share": ["text", "file"],
     "clipboard": ["write", "read"],
     "haptics": ["vibrate", "impact"],

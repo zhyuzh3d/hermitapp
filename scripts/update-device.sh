@@ -39,14 +39,14 @@ fi
 
 $APKSIGNER verify "$APK"
 BADGING=$($AAPT dump badging "$APK")
-printf '%s\n' "$BADGING" | grep -q "package: name='io.github.zhyuzh3d.hermit'"
+printf '%s\n' "$BADGING" | grep -q "package: name='life.airen.hermit'"
 printf '%s\n' "$BADGING" | grep -q "versionName='$VERSION_NAME'"
 printf '%s\n' "$BADGING" | grep -q "versionCode='$VERSION_CODE'"
 $ADB install -r "$APK"
-$ADB shell am force-stop io.github.zhyuzh3d.hermit
-START_RESULT=$($ADB shell am start -W -n io.github.zhyuzh3d.hermit/.MainActivity)
+$ADB shell am force-stop life.airen.hermit
+START_RESULT=$($ADB shell am start -W -n life.airen.hermit/.MainActivity)
 printf '%s\n' "$START_RESULT"
 printf '%s\n' "$START_RESULT" | grep -q 'Status: ok' || { echo "HermitApp did not start successfully" >&2; exit 1; }
-test -n "$($ADB shell pidof io.github.zhyuzh3d.hermit | tr -d '\r')" || { echo "HermitApp process is not running" >&2; exit 1; }
-$ADB shell dumpsys package io.github.zhyuzh3d.hermit | grep -m1 "versionCode=$VERSION_CODE"
+test -n "$($ADB shell pidof life.airen.hermit | tr -d '\r')" || { echo "HermitApp process is not running" >&2; exit 1; }
+$ADB shell dumpsys package life.airen.hermit | grep -m1 "versionCode=$VERSION_CODE"
 echo "Updated device with Hermit $VERSION_NAME ($VERSION_CODE)."

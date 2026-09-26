@@ -63,5 +63,5 @@
 - 构建或部署失败只重试失败阶段；源码未变化时复用 Gradle 增量结果和已生成 APK。正式构建前冻结本轮代码与快照，避免安装后再因小改重新构建。版本号只在正式交付节点确定一次，禁止用连续试编译消耗版本号。
 - 除非用户明确要求全面检查，不执行全项目 lint、完整 instrumentation、设备矩阵、截图分析、视觉验收、反复 release 校验或长篇报告。已确认缺陷按上级规则修复；仅有风险或猜测时报告并询问，不擅自扩修。
 - 用户要求真机更新时，生成必要 APK、使用覆盖安装，并确认版本和进程可启动；安装包生成不等于设备交付，`adb install` 成功也不等于功能或视觉验收。
-- 正式包名固定为 `io.github.zhyuzh3d.hermit`。发布签名、口令、token、`local.properties` 和私有路径配置不得进入 Git、日志或文档。发布产物使用 `hermit-v<version>-release.apk`，版本化产物发布后不得覆盖。
+- 正式包名固定为 `life.airen.hermit`。发布签名、口令、token、`local.properties` 和私有路径配置不得进入 Git、日志或文档。发布产物使用 `hermit-v<version>-release.apk`，版本化产物发布后不得覆盖。
 - HermitUI 上线属于 HermitWeb 发布。发布前确认 Mutagen Alpha 精确指向 `hermitweb/public/`、同步模式为本机到服务器的单向副本且状态正常；上线后核对 `/shell/manifest.json` 的版本、包路径和 SHA-256，并确认公开 Shell 资源可访问。APK 内置 Shell 不得高于尚未发布且不可用的线上版本。

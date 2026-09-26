@@ -14,11 +14,13 @@
   let sequence = 0;
   const MAX_PENDING = 16;
 
-  // Package installation and anything that waits on a system picker, the camera
-  // or the QR scanner stay open until the user or the device finishes, or until a
-  // whole backup is written. The default minute would abandon them while the user
-  // is still choosing a folder, so they share the long timeout instead.
-  const LONG_METHODS = /^(?:app\.backup|host\.apps\.(?:installOnline|inspectUrl|inspectZip|confirmInspect|importZip|installPackageUrl|installGitHub|updateFromSource|reinstall|pickIcon|pickDirectory|importDirectory|shareStart|shareSave|exportDev|promoteDev|scanQr)|host\.backup\.(?:export|exportAll|exportSettings|restore|restoreData|autoBackup\.pickDirectory|autoBackup\.save)|files\.(?:import|pickImage|pickInline|export)|camera\.capture)$/;
+  // Package installation and anything that waits on a system picker, the camera, the QR
+  // scanner or the projection consent dialog stays open until the user or the device
+  // finishes, or until a whole backup is written. A recording also spends its time here:
+  // stopping it merges the audio track before the file can be answered with. The default
+  // minute would abandon them while the user is still choosing a folder, so they share the
+  // long timeout instead.
+  const LONG_METHODS = /^(?:app\.backup|host\.apps\.(?:installOnline|inspectUrl|inspectZip|confirmInspect|importZip|installPackageUrl|installGitHub|updateFromSource|reinstall|pickIcon|pickDirectory|importDirectory|shareStart|shareSave|exportDev|promoteDev|scanQr)|host\.backup\.(?:export|exportAll|exportSettings|restore|restoreData|autoBackup\.pickDirectory|autoBackup\.save)|files\.(?:import|pickImage|pickInline|export)|camera\.capture|screen\.(?:capture|startRecording|stopRecording))$/;
 
   function requestTimeout(method, params) {
     if (LONG_METHODS.test(method)) return 600000;
@@ -139,6 +141,7 @@
     location: namespace("location"),
     sensors: namespace("sensors"),
     camera: namespace("camera"),
+    screen: namespace("screen"),
     share: namespace("share"),
     clipboard: namespace("clipboard"),
     haptics: namespace("haptics"),

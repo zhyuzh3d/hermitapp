@@ -239,6 +239,47 @@ try {
 
 原始麦克风录音不依赖系统语音识别：调用 `hermit.audio.startRecording()`，完成后用 `hermit.audio.stopRecording()` 得到持久化的 `logicalFileId`；取消或页面退到后台会立即释放麦克风并删除临时文件。录音默认最多五分钟，可在 1 秒至 30 分钟之间调整。`hermit.audio.play()` 可以播放 `hermit.files` 中的音频，普通页面自带或网络音频也可使用标准 `<audio>` / Web Audio，播放遵守用户手势策略。TTS 和语音识别是另外两项可选系统服务：页面用 `tts.availability()`、`tts.voices()`、`speech.availability()` 与 `speech.languages()` 查询统一能力。`tts.voices()` 的语言和声音来自当前 TTS 引擎，`speech.languages()` 的候选来自当前识别服务；返回空目录时页面应跟随系统默认，不能自行补造候选。页面可调用 `tts.speak()`、连续事件式 `speech.start()` 或带系统界面的一次性 `speech.recognizeOnce()`。用户在 HermitUI 中选择系统引擎、声音、识别服务、语言和离线偏好；页面不会收到服务包名，也不需要知道背后是讯飞、小米、华为或其他 Android 兼容实现。手机没有相应服务时 availability 返回稳定的不可用状态，调用返回可处理的 `E_UNSUPPORTED`，不会自动连接未获用户选择的第三方云服务。
 
+截屏与录屏由 `screen` 命名空间提供,两者都覆盖整个设备屏幕,因此画面里会包含其他应用。它们和麦克风,摄像头一样属于「页面不直接持有设备」的能力：每次调用都会先弹一次系统投屏同意框,用户拒绝时返回 `{ cancelled: true }`,不建立任何会话也不产生文件。逐 happ 的 grant 可以记忆,系统同意框绝不记忆。
+
+```js
+const screen = await hermit.screen.availability();
+if (screen.supported) {
+  const still = await hermit.screen.capture({ maxEdge: 1600, format: 'jpeg' });
+  if (!still.cancelled) console.log(still.logicalFileId, still.width, still.height);
+}
+```
+
+`screen.capture()` 产出一张 `HermitFile`（默认 JPEG,可要求 PNG）,只回逻辑文件标识,不回内联 Base64。`screen.startRecording()` 默认同时收录系统声音与麦克风,产出「一条 H.264 视频轨 + 一条混音后的 AAC 音频轨」的 MP4 —— 不是单音轨,混音在原生侧完成,系统声音与麦克风是同一路音频的两个来源。录制期间切到其他应用不会中断,通知栏常驻一条「停止录制」。结束时用 `screen.stopRecording()` 取回文件,或用 `screen.cancelRecording()` 丢弃。达到时长或字节上限,用户从系统状态栏停止投屏,宿主切换 happ 与任务销毁时,录制都按同一路径收尾并把已采集内容写入文件库,页面还活着时用 `screen.recording.ended` 告知（`reason` 取 `duration`,`bytes`,`projection-revoked` 或 `host-stop`）,不可恢复时用 `screen.recording.error` 告知并作废该 `recordingId`。
+
+`startRecording()` 的参数与实测语义:
+
+| 参数 | 默认 | 说明 |
+|---|---|---|
+| `audio` | `both` | `none` / `system` / `microphone` / `both`。设备给不出的来源返回 `E_UNSUPPORTED`,不静默降级;实际交付了哪条音轨以结果里的 `audio` 为准 |
+| `maxDurationMs` | 180000 | 整场录制的时长上限,1 秒至 30 分钟 |
+| `maxBytes` | 48 MiB | **单个交付文件**的大小上限,8 MiB 至 256 MiB,不是整场录制的总量 |
+| `segment` | `false` | 打开后到达 `maxBytes` 就滚动到下一个文件继续录,而不是结束录制 |
+| `scale` | 0.5 | 只能取 `1.0` / `0.75` / `0.5`。请求的尺寸被编码器拒绝时按 0.75 递降再回落到固定尺寸,永不上采样 |
+| `frameRate` | 30 | 15 至 60。**这是目标不是硬上限**:成品是可变帧率（VFR）流,帧只在画面变化时写入,所以静态屏幕的平均帧率会远低于它。时间轴由音轨这条连续时钟锚定,静止期播放器一直停在上一帧,不丢时间。要省字节应降 `scale` 或 `videoBitRate` |
+| `videoBitRate` | 2000000 | 500 kbps 至 8 Mbps |
+| `audioBitRate` | 128000 | 64 kbps 至 192 kbps |
+| `name` | `screen-recording.mp4` | 分段录制时每段在扩展名前加 `-p1`,`-p2`… |
+
+`frameRate` 的实测形态（同一台设备两次录制,同为 30 的目标与 0.5 的缩放）:持续滑动那次 321 帧 / 10.726 s（29.93 fps）,基本静止那次 56 帧 / 6.375 s（8.78 fps）;视频帧间隔从 10.7 ms 一直跨到 1016.7 ms,而音轨两侧都是严格的 21.33 ms 一帧（AAC 1024 采样 / 48 kHz）,一个空档也没有。所以「画面不动」省掉的是新的画面帧,不是时间。需要恒定帧率的成品时,由 happ 在再加工时显式指定帧率。
+
+需要超过单个文件大小的录制时用**分段录制**。文件库的单文件硬顶是 256 MiB,而一个应用的逻辑文件总量同样只有 256 MiB,所以一个 256 MiB 的文件会占满该应用的全部分额。`segment: true` 让长录制以「每段都不超过 `maxBytes`」的方式继续:
+
+- 切段是 `MediaRecorder` **自己滚动输出文件**,不重启编码器,所以段与段之间不丢帧、不中断。切点由字节触发而非时钟触发,段长约等于 `maxBytes` ÷ 实际码率。
+- 音频不随段重启:整场只有一条连续音频流,每段在合流时取自己时间窗内的采样,段边界不会出现声音空洞。
+- 每一段都是文件库里独立的 `HermitFile`,每段落定触发一次 `screen.recording.segment`（含 `recordingId`,`index`,`durationMs` 与文件字段）。
+- `stopRecording()` 的返回值仍指向**最后一段**,并额外带 `segments` 数组列出本场全部段;`screen.recording.ended` 也带同一份数组,页面中途重载不会丢掉前面几段。
+- 某段落不进文件库时（例如应用配额已满）该段 `logicalFileId` 为 `null` 并带 `message`,整场以 `reason: "bytes"` 收尾 —— 继续录只会产出谁也留不下的段。
+- 峰值磁盘开销约为单段的 2.2 倍（视频中间件 + 成品）。
+
+有四条平台事实需要在页面设计时就考虑。系统声音只覆盖媒体,游戏和未知三类播放用途,被采集应用可以显式拒绝,通话,闹钟,通知和 DRM 内容永远采不到,`availability().systemAudioUsages` 如实回报这个范围。`availability().systemAudio` 报告的是平台合同（API 29 起播放采集 API 始终存在）而非逐设备探测结果 —— Android 没有公开的探测接口,设备实际交付了哪条音轨要以录制结果里的 `audio` 字段为准。文件库单文件 256 MiB 是硬顶且超限导入会整段作废,所以 `maxBytes` 被钳在 256 MiB 以内（`availability().maxBytes` 报告的就是它）;默认 48 MiB 与 2 Mbps 下单次约三分钟,更长就打开 `segment`,`availability().segmenting` 报告本机是否支持。一次用户同意只允许一个投屏画面,因此录制进行中不能再截屏（返回 `E_CONFLICT`）,截屏与录屏各自都需要一次新的同意。
+
+录屏要采麦克风而 `audio.startRecording()` 正在进行时返回 `E_CONFLICT`,页面应先停止录音再开录屏。页面重新加载后仍可调用不带参数的 `screen.stopRecording()` 结束当前录制,不必保存 `recordingId`。
+
 传感器调用先用 `sensors.availability()` 读取逐项硬件清单，再订阅实际存在的类型。`orientation` 由旋转向量计算方位角、俯仰角和翻滚角，可作为指南针；陀螺仪不存在时 `gyroscope.available=false`。订阅最高 60 Hz、只在当前前台页面会话存活，切换页面或退到后台自动释放。计步器额外需要 Android 活动识别权限。
 
 ```js
